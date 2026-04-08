@@ -210,6 +210,35 @@ share most of the weights).
 HF_HOME=/data/knikolaou/huggingface .venv/bin/python examples/pythia_sweep.py
 ```
 
+After that runs once, you can also iterate on derived analyses
+without re-running compute via the analysis script:
+
+```bash
+.venv/bin/python examples/analyze_results.py
+```
+
+This second script reads `results.parquet` and produces
+`cos_similarity.png` (the normalized cross-batch gradient correlation
+`cos(g_A, g_B) = δL(A,B) / sqrt(δL(A,A) · δL(B,B))`) plus a printed
+summary table. The cosine view exists because the raw cross
+`delta_loss` plot is visually misleading: it shows a step1 → step512
+decline followed by a "rebound" at step1000, but the rebound is
+amplified by gradient magnitudes growing simultaneously. In normalized
+correlation terms the rebound is real but ~10× smaller than the
+absolute number suggests, and the dominant feature is the early-phase
+decline (`+0.31 → +0.012`, ~26×) — i.e. **most of the prose-vs-code
+gradient decorrelation is over by step512**, well before the absolute
+cross delta_loss has even started looking interesting. The post-step1000
+trajectory drifts into the small-negative regime and stays there.
+
+The analysis script is intentionally separate from `pythia_sweep.py`
+for two reasons. First, it makes the workflow split explicit: compute
+is expensive (~50 s cold), analysis is cheap (sub-second), and you
+want to iterate on the analysis without paying the compute cost.
+Second, it makes the parquet schema the contract — the analysis
+script doesn't import vatis at all, only `pyarrow`, which is the
+right pattern for any downstream consumer.
+
 Outputs:
 
 - `examples/results.parquet` — the canonical long-format result table
@@ -226,3 +255,9 @@ Outputs:
   early-phase structure (step1: +3.25 → step64: +0.95 → step1000:
   +2.62 → step4000: −0.12 → step143000: −18) and only crosses zero
   permanently around step4000.
+- `examples/cos_similarity.png` (from `analyze_results.py`) — the
+  normalized cross-batch correlation. Same shape as the cross
+  `delta_loss` line but with gradient magnitudes divided out, so the
+  early-phase decorrelation is visible without the magnitude
+  confound. Goes from +0.31 at step1 → +0.012 at step512 → +0.043 at
+  step1000 (small rebound) → small-negative drift afterward.
