@@ -37,6 +37,7 @@ from vatis.core.chi_net.base import ChiNetResult
 from vatis.core.normalization import (
     DEFAULT_IGNORE_INDEX,
     normalization_factor,
+    valid_token_mask,
 )
 from vatis.core.observables import (
     chi_loss_cross_entropy_unnormalized,
@@ -325,15 +326,23 @@ class Analyzer:
         for _start, _stop, micro in iter_micro_batches(local_batch, self.micro_batch_size):
             with torch.no_grad():
                 logits = bundle.forward_fn(bundle.model, micro)
+            targets = _extract_targets(micro)
             vmask = bundle.valid_mask_fn(micro, logits)
+            # Numerator and denominator must agree on which positions count.
+            # We compute the intersection of (labels != ignore_index) and the
+            # bundle's valid_mask_fn once and use it for both. Without this,
+            # a user-supplied valid_mask_fn that disagrees with labels=-100
+            # (e.g. all-True for an MLP with -100 labels) would leave the
+            # numerator and denominator counting different positions and
+            # chi_loss would be silently miscomputed.
+            effective_mask = valid_token_mask(
+                targets, ignore_index=self.ignore_index, attention_mask=vmask
+            )
             raw = chi_loss_cross_entropy_unnormalized(
-                logits, _extract_targets(micro), ignore_index=self.ignore_index
+                logits, targets, ignore_index=self.ignore_index, attention_mask=vmask
             )
             chi_loss_raw_local = chi_loss_raw_local + raw.to(dtype=torch.float64)
-            if vmask is None:
-                n_valid_local += int(torch.tensor(logits.shape[:-1]).prod().item())
-            else:
-                n_valid_local += int(vmask.sum().item())
+            n_valid_local += int(effective_mask.sum().item())
             del logits
 
         # ----- delta_loss self (per-rank partial gradient) -----

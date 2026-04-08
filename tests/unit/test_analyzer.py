@@ -7,6 +7,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import pytest
 import torch
+import torch.nn.functional as F
 
 from tests.fixtures.tiny_transformer import (
     TinyMLP,
@@ -166,6 +167,88 @@ def test_analyzer_works_for_mlp() -> None:
     # chi_pos = delta_loss / (chi_loss * chi_net)
     expected_cp = dl / (cl * cn) if cl * cn > 0 else 0.0
     assert abs(cp - expected_cp) < 1e-6
+
+
+def test_analyzer_chi_loss_uses_intersection_of_vmask_and_labels() -> None:
+    """Regression test for the valid_mask_fn / chi_loss disagreement bug.
+
+    When the bundle's ``valid_mask_fn`` disagrees with ``labels != -100``
+    the chi_loss numerator and denominator must agree on the *intersection*
+    of the two masks. Before the fix, the numerator used ``labels != -100``
+    (via ``chi_loss_cross_entropy_unnormalized``'s internal mask) while the
+    denominator used ``vmask.sum()``, producing wrong chi_loss whenever the
+    two masks differed.
+
+    Reproducer: an MLP bundle with all-True ``valid_mask_fn`` (the standard
+    ``mlp_valid_mask`` from the toy fixtures) plus a batch where 3 of 8
+    labels are ``-100``. The two masks disagree by construction:
+    vmask claims 8 valid, labels say 5 valid. The fix takes the intersection
+    (5) for both numerator and denominator.
+    """
+    torch.manual_seed(0)
+    model = TinyMLP(in_dim=8, hidden=16, n_classes=4).eval()
+    for p in model.parameters():
+        p.requires_grad_(True)
+    x, y = make_tiny_mlp_batch(batch_size=8, in_dim=8, n_classes=4, seed=0)
+    # Mark 3 of 8 samples as ignored.
+    y_padded = y.clone()
+    for i in (1, 3, 5):
+        y_padded[i] = -100
+    n_valid_truth = int((y_padded != -100).sum().item())
+    assert n_valid_truth == 5  # sanity
+
+    # mlp_loss does not pass ignore_index; we need a loss_fn that does so the
+    # delta_loss path can run on the padded batch without crashing on -100.
+    def loss_with_ignore(
+        logits: torch.Tensor, batch: tuple[torch.Tensor, torch.Tensor]
+    ) -> torch.Tensor:
+        return F.cross_entropy(logits, batch[1], reduction="mean", ignore_index=-100)
+
+    bundle = ModelBundle(
+        model=model,
+        params=list(model.parameters()),
+        forward_fn=lambda m, b: m(b[0]),
+        loss_fn=loss_with_ignore,
+        # mlp_valid_mask returns all-True; this is the disagreement source.
+        valid_mask_fn=mlp_valid_mask,
+        identifier="mlp@step0",
+    )
+
+    results = analyze(
+        model=bundle,
+        revisions=["step0"],
+        eval_batches={"clf": (x, y_padded)},
+        n_hutchinson=4,
+        micro_batch_size=8,
+        sink=None,
+    )
+    rows = results[0].rows
+    cl = next(r.value for r in rows if r.observable == "chi_loss")
+    n_valid_reported = next(r.n_valid_a for r in rows if r.observable == "chi_loss")
+
+    # vatis must use the intersection: 5 valid positions, not 8.
+    assert n_valid_reported == n_valid_truth, (
+        f"n_valid should be the intersection (5), got {n_valid_reported}"
+    )
+
+    # Manual chi_loss matching the user's valid_mask_fn intersected with
+    # labels != -100: sum of (softmax-onehot)^2 over the 5 valid positions,
+    # divided by 5^2.
+    with torch.no_grad():
+        logits = model(x)
+    probs = F.softmax(logits.to(dtype=torch.float32), dim=-1)
+    safe_y = y_padded.clone()
+    safe_y[safe_y == -100] = 0  # avoid one_hot crash; masked out below
+    onehot = F.one_hot(safe_y, num_classes=4).to(dtype=torch.float32)
+    diff = probs - onehot
+    mask_f = (y_padded != -100).to(dtype=torch.float32).unsqueeze(-1)
+    masked_sq_sum = float(((diff * mask_f) ** 2).sum())
+    expected_chi_loss = masked_sq_sum / (n_valid_truth**2)
+
+    assert cl == pytest.approx(expected_chi_loss, rel=1e-5, abs=1e-7), (
+        f"chi_loss = {cl}, expected {expected_chi_loss} "
+        f"(numerator sum = {masked_sq_sum}, n_valid = {n_valid_truth})"
+    )
 
 
 def test_analyzer_invalid_observable_raises() -> None:
