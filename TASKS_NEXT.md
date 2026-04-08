@@ -1,337 +1,418 @@
-# vatis — v1.1 hardening pass
+# vatis — v1.2 work order
 
 ## Context
 
 Read `SESSION_SUMMARY.md` first — it is the authoritative state of the
-repo as of the end of the build session. This file (`TASKS_NEXT.md`) is
-the work order for the next session.
+repo at the start of this phase. Then read `CLAUDE.md` (especially the
+"Agent quick start" and "Known issues" sections). This file
+(`TASKS_NEXT.md`) is the work order for the v1.2 phase.
 
-The v1 build is complete and 56 tests pass. This pass is about *trust*
-and *demonstrability*, not new features. Do not re-litigate v1 scope.
-Do not add features that aren't in the task list below. If you think
-something else needs doing, write it to a `FOLLOWUPS.md` file and keep
-moving.
+The v1 build is complete and the v1.1 hardening pass is complete. 67
+tests pass. The deployment example runs end-to-end on real Pythia
+checkpoints in ~20 s (warm cache) and produces meaningful trajectories.
+
+**This phase is about closing the correctness gap, getting CI in
+place, and then implementing the OpacusEstimator (the v1 spec's
+"v1.1 deferred" feature work).** Three tiers, in priority order. Do
+**not** skip Tier 1 to get to Tier 2; Tier 1 contains a real
+correctness bug.
 
 ## Hard constraints
 
-- **Venv only.** Use `.venv/bin/python`, `.venv/bin/pytest`, `uv add` for
-  new deps. Never `pip install` globally. Verify with `which python`
-  before installs.
-- **Single GPU.** Whatever GPU is visible to the session is all you get.
-  Do not assume multi-GPU. Do not write code paths you can't actually run.
-- **HuggingFace cache goes to `/data/knikolaou/huggingface`.** Models and
-  datasets are large. Set `HF_HOME=/data/knikolaou/huggingface` (and
-  `TRANSFORMERS_CACHE`, `HF_DATASETS_CACHE` to the same root) at the top
-  of every script and example, and export it in your shell before running
-  anything that calls `from_pretrained` or `load_dataset`. **Do not** let
-  HF default to `~/.cache/huggingface` — the home filesystem will fill up.
-  If `/data/knikolaou/huggingface` does not exist, create it once with
-  `mkdir -p` and proceed.
+- **Venv only.** Use `.venv/bin/python`, `.venv/bin/pytest`, `uv add`
+  for new deps. Never `pip install` globally. Verify with `which
+  python` before installs.
+- **Single GPU.** Whatever GPU is visible to the session is all you
+  get. Do not assume multi-GPU. Do not write code paths you can't
+  actually run. (One Tier 1 task is "test the DDP path on real GPUs"
+  — that one is gated on GPU availability and may have to be skipped
+  with a `BLOCKED.md` note if the session runs single-GPU.)
+- **HuggingFace cache goes to `/data/knikolaou/huggingface`.** Models
+  and datasets are large. Set `HF_HOME=/data/knikolaou/huggingface`
+  (and `TRANSFORMERS_CACHE`, `HF_DATASETS_CACHE` to the same root) at
+  the top of every script and example, and export it in your shell
+  before running anything that calls `from_pretrained` or
+  `load_dataset`. **Do not** let HF default to `~/.cache/huggingface`
+  — the home filesystem will fill up.
 - **No edits to `settings.local.json`.** The allow list is the user's
   contract. If something is blocked, log it to `BLOCKED.md` and skip.
 - **Filesystem boundary.** Everything stays inside
-  `/tikhome/knikolaou/PycharmProjects/vatis/`, with the single explicit
-  exception of `/data/knikolaou/huggingface` for the HF cache. Do not
-  write anywhere else, even via Python `open()`.
-- **All tests must stay green at the end of every task.** Run the full
-  suite (`.venv/bin/python -m pytest tests`) before each commit. If a
-  task breaks tests, fix it before committing or revert.
+  `/tikhome/knikolaou/PycharmProjects/vatis/`, with the single
+  explicit exception of `/data/knikolaou/huggingface` for the HF
+  cache. Do not write anywhere else, even via Python `open()`.
+- **All tests must stay green at the end of every task.** Run the
+  full suite (`.venv/bin/python -m pytest tests`) before each commit.
+  If a task breaks tests, fix it before committing or revert.
+- **The perspic cross-validation suite is the safety net.** It must
+  stay passing. **If a change you make requires loosening a
+  cross-validation tolerance, that is a red flag — investigate the
+  underlying disagreement before loosening.** Do not loosen tolerances
+  to make a test pass.
+
+## Discussion-mode rule (new in v1.2)
+
+The v1.1 phase was prescriptive ("do task N, commit, move on") and
+that worked because each task was well-defined. v1.2 has tasks where
+the design isn't fully nailed down (custom-loss plumbing, OpacusEstimator
+internals, the parquet append story). For those tasks, **pause and
+write a discussion message before implementing**. Do not autonomously
+make architectural decisions on under-specified tasks. The user would
+rather have a 30-second pause to confirm than a 2-hour rewrite.
+
+Specific triggers for "stop and discuss":
+- The task says "decide between option A and option B."
+- The CLAUDE.md spec doesn't fully specify the API for the thing you're
+  building.
+- You're about to refactor a file outside the immediate task scope.
+- You're about to add a new top-level module or directory.
+- You discover an issue while implementing that wasn't in the task
+  description.
+
+For tightly-specified tasks (e.g. "fix the `valid_mask_fn` consistency
+bug — the change is one line plus a regression test"), implement
+directly.
+
+## Mid-task acceptance checks
+
+For any task that produces a user-visible artifact (a plot, a parquet,
+a printed table), **show it to the user before declaring the task
+done**. The v1.1 task 1 example would have benefited from a "look at
+this plot, is it what you wanted" check before commit; instead it
+needed three follow-up commits to get right. Future tasks should bake
+in the show-and-confirm step explicitly.
 
 ## Git workflow (prescriptive — follow exactly)
 
-- **Task 0, before anything else:** if the repo is not yet a git repo,
-  `git init`. Then `git add -A && git commit -m "snapshot: end of build
-  session"` to baseline the entire current tree. This baseline is what
-  makes every subsequent task individually revertable. Do this *first*,
-  before reading any other file or running any test.
+Same as v1.1:
+
 - **After each numbered task below:** stage only the files that task
-  touched (`git add <specific paths>`, never `git add -A` after the
-  baseline). Commit with message `task N: <one-line summary>`. One commit
-  per task. No squashing, no amending, no rebasing.
+  touched (`git add <specific paths>`, never `git add -A`). Commit
+  with message `task N: <one-line summary>`. One commit per task. No
+  squashing, no amending, no rebasing.
 - **Generated artifacts** (parquet files, plots, BENCHMARK.md numbers)
   belong in the same commit as the code that produced them.
 - **Never** run `git reset --hard`, `git rebase`, `git push`,
   `git checkout <branch>`, `git branch -D`, `git clean -f`, or
-  `--no-verify`. If you think you need any of these, stop and write to
-  `BLOCKED.md` instead.
+  `--no-verify`. If you think you need any of these, stop and write
+  to `BLOCKED.md` instead.
 - **If a task fails partway:** commit what works as
   `task N (partial): <summary>`, note the gap in `SESSION_SUMMARY.md`,
   and move on to the next independent task. Do not block the whole
   session on one failure.
 - **Sanity-check after every commit:** `git status` should be clean,
-  `git log --oneline` should show your commit at the top. If not, stop
-  and diagnose before continuing.
+  `git log --oneline` should show your commit at the top.
 
-## Independence map
+## Recommended order
 
-Tasks 1–7 are independent of each other. If any of them blocks, skip it
-and move on. Task 8 (CLAUDE.md proposal) must run last because it
-references the work done in 1–7.
+`Tier 1 → Tier 2 → Tier 3`. Within each tier the tasks are roughly
+independent; do them in the order listed unless one blocks.
 
-Recommended order: 0 → 5 → 6 → 7 → 2 → 3 → 4 → 1 → 8. Rationale: cheap
-footguns first (5–7), then math hardening (2–4), then the expensive
-example (1), then the writeup (8). Reorder freely if you hit a block.
+## Tier 1 — correctness and infrastructure (do first, do not skip)
 
-## Tasks
+### Task 1 — Fix `valid_mask_fn` ↔ `chi_loss` token-counting disagreement
 
-### Task 0 — Baseline commit
+**The bug.** The analyzer's `chi_loss` accumulator uses
+`_extract_targets(micro)` and `chi_loss_cross_entropy_unnormalized`,
+which check `valid_token_mask(targets, ignore_index=...)` internally
+— i.e. they honor `labels=-100` but **not** the bundle's
+`valid_mask_fn`. The `n_valid` count for normalization, on the other
+hand, comes from `bundle.valid_mask_fn(micro, logits).sum()`. If a
+user supplies a `valid_mask_fn` that disagrees with the
+labels-vs-ignore_index convention (e.g. all-True for an MLP with
+`-100` labels), `chi_loss` and the `n_valid` count will use different
+masks and the normalization will be silently wrong.
 
-`git init` if needed, then baseline-commit the entire current tree.
-Verify with `git log --oneline` that exactly one commit exists. No code
-changes in this task.
+**The fix.** Make the analyzer pass the `valid_mask_fn`'s output as
+the `attention_mask` argument to
+`chi_loss_cross_entropy_unnormalized`, so the two paths agree by
+construction. Specifically:
 
-### Task 1 — Deployment example with benchmark character
+1. In `vatis/core/observables.py::chi_loss_cross_entropy_unnormalized`,
+   the `attention_mask` parameter already exists — verify it's wired
+   into `valid_token_mask` correctly.
+2. In `vatis/analyzer.py::_compute_self_pair`, where the chi_loss
+   accumulator loop runs, compute `vmask = bundle.valid_mask_fn(...)`
+   once and pass it as the explicit `attention_mask` to
+   `chi_loss_cross_entropy_unnormalized` (in addition to the
+   labels-derived mask that's already in there).
+3. Add a regression test to `tests/unit/test_analyzer.py` that builds
+   a bundle whose `valid_mask_fn` disagrees with `labels != -100`
+   (e.g. an MLP bundle with all-True valid mask but a few `-100`
+   labels) and asserts that vatis's chi_loss matches a manual
+   computation that respects the user's `valid_mask_fn` choice.
+4. Also re-run `tests/cross_validation/test_vs_perspic.py` to make
+   sure the existing tests still pass — the heavy-padding test
+   already exercises this path with a custom `valid_mask_fn`, but it
+   was sidestepping the bug rather than testing the fixed path.
 
-**Goal:** produce a runnable example on the single available GPU that a
-human (or future agent) can look at and say "yes, χ_pos behaves the way
-the theory predicts on a real checkpoint sweep." This example also
-serves as the project's reference benchmark.
+**Cost estimate:** ~5–15 lines of code, ~30 lines of test, ~30 min.
 
-**Hard runtime budget:** the final example must complete end-to-end in
-**under 15 minutes** on the single available GPU, *including model
-loading from the HF cache* (assume cache is cold the first time, warm
-after). The benchmark exploration phase has its own separate budget
-(see below).
+**Acceptance:** the new regression test passes; all existing tests
+still pass; a quick test with an MLP + `-100` labels + all-True
+valid_mask_fn produces the same chi_loss as the same MLP with the
+3 valid samples extracted.
 
-**Procedure — do this in order, do not skip steps:**
+Commit: `task 1: fix valid_mask_fn / chi_loss token-counting consistency`.
 
-1. **One-shot probe.** Pick a small published causal LM that can plausibly
-   show a non-trivial χ_pos trajectory across revisions. `pythia-14m` is
-   the safe default; `pythia-70m` or `pythia-160m` are acceptable if the
-   probe shows headroom. Ensure `HF_HOME=/data/knikolaou/huggingface` is
-   set. Load one revision, run a single `analyze()` call with `B=8`,
-   `n_hutchinson=16`, both `chi_net_method` values. Record:
-   - wallclock for model load
-   - wallclock per `analyze()` call (per method)
-   - peak GPU memory (`torch.cuda.max_memory_allocated()`)
-   - the observable values themselves (sanity check they're finite and
-     non-zero)
+### Task 2 — Add CI
 
-   Write these numbers to `examples/BENCHMARK.md` under a section called
-   "One-shot probe". **If the per-call wallclock alone exceeds 2 minutes,
-   drop to a smaller model.** Do not try to rescue the budget by shrinking
-   the sweep — the example needs a non-trivial trajectory.
+There is no CI yet. Add `.github/workflows/ci.yml` that runs:
 
-2. **Compute the budget arithmetic explicitly.** In `BENCHMARK.md`, write
-   out:
-   ```
-   budget = 15 min - model_load - 30% headroom
-   per_call = max(hutch_wallclock, cv_wallclock)
-   max_calls = budget / per_call
-   max_calls = revisions × eval_batches × methods
-   ```
-   Show the actual numbers. Pick `revisions`, `eval_batches`, `methods`
-   from this arithmetic. **Show your work** — if a future maintainer
-   wants to scale this up they need to see how you sized it.
+- `ruff check vatis/ tests/`
+- `ruff format vatis/ tests/ --check`
+- `mypy vatis/`
+- `pytest tests -m "not integration and not cross_validation"`
 
-3. **Benchmark sweep.** Before writing the example, run a benchmark
-   sweep covering at least:
-   - both `chi_net_method` values (`hutchinson`, `per_sequence_cv`)
-   - at least 3 `n_hutchinson` values spanning ~8× (e.g. 8, 32, 128) to
-     show the variance vs cost tradeoff
-   - at least 2 batch sizes
+Single matrix entry: `python-3.11`. Use `uv` to install dependencies
+(matches the local development workflow). The cross-validation tier
+is skipped because perspic isn't easily installable in CI; the
+integration tier is skipped because it needs HF cache and a real GPU.
 
-   Extend further if time allows. **Hard ceiling: 20 minutes total
-   wallclock** for the benchmark phase (separate from the 15-minute
-   example budget). Record results as a table in `BENCHMARK.md` with
-   columns: method, n_hutchinson, batch_size, wallclock_s, peak_mem_mb,
-   chi_loss, chi_net, chi_pos, delta_loss. The goal is that a future
-   user can read this table and pick sensible parameters for their own
-   setup without re-running anything.
+The workflow file should:
+- Trigger on `push` to any branch and `pull_request` to `master`.
+- Use `actions/checkout@v4` and `astral-sh/setup-uv@v3` (or current
+  pinned versions — check the official docs).
+- Install vatis in dev mode with `uv sync --extra dev`.
+- Run each of the 4 commands above as a separate step so failures are
+  attributable.
 
-4. **Write `examples/pythia_sweep.py`.** Single file, runnable as
-   `.venv/bin/python examples/pythia_sweep.py`. It should:
-   - Set `HF_HOME` at the top.
-   - Load the chosen model across the chosen revisions.
-   - Run `analyze()` with the parameters picked in step 2.
-   - Write `examples/results.parquet`.
-   - Produce 3 plots (`examples/chi_loss.png`, `examples/chi_net.png`,
-     `examples/chi_pos.png`) showing each observable vs training step,
-     one line per eval batch. Use matplotlib; add it via `uv add
-     matplotlib` if not already present.
-   - Print a one-paragraph summary at the end (wallclock, what was run,
-     where outputs went).
+**Discussion-mode trigger:** if you find that the CI environment is
+significantly different from what the local workflow expects (e.g. a
+torch wheel that doesn't match the local pin), pause and write a
+discussion message. Do not silently widen the version pin to make CI
+pass.
 
-5. **Commit everything in one commit:** `examples/pythia_sweep.py`,
-   `examples/BENCHMARK.md`, `examples/results.parquet`, the three PNGs.
-   Commit message: `task 1: deployment example + benchmark on
-   <model-name>`.
+Commit: `task 2: add GitHub Actions CI for ruff, mypy, and unit tests`.
 
-**If the probe step (1) blocks on download or OOM:** drop to a smaller
-model first. If even `pythia-14m` doesn't work, write the obstacle to
-`BLOCKED.md` and skip this task — don't fake it with a synthetic model,
-the whole point is real weights.
+### Task 3 — Multi-GPU DDP smoke test on real GPUs
 
-### Task 2 — Exact-NTK ground-truth tests
+The DDP path is tested on a 2-rank CPU loopback only
+(`tests/integration/test_ddp_loopback.py`). It has never run on
+actual GPUs. **This is gated on GPU availability** — if the session
+runs on a single-GPU box, log to `BLOCKED.md` and skip.
 
-The unit suite already has `_exact_chi_net` in `tests/unit/test_chi_net.py`
-that iterates over output dims to compute `Tr(M_b)` exactly on the toy
-transformer. Extend the same primitive to validate `chi_pos` and
-`delta_loss(A, B)`.
+If multiple GPUs are available:
 
-- Add `test_chi_pos_matches_exact_ntk` in `tests/unit/test_observables.py`
-  (or `test_chi_net.py`, wherever the exact NTK helper lives). Build the
-  full per-sample Jacobian `J_b ∈ R^{(S·V)×P}` on the toy fixture, form
-  `Θ = J Jᵀ`, compute the loss-direction Rayleigh quotient
-  `(uᵀ Θ u) / (uᵀ u × Tr Θ)` where `u = ∇_f L`, and assert vatis's
-  `chi_pos` matches to relative tolerance `1e-5`. Use the smallest toy
-  fixture that makes this tractable (`S * V * B` should stay under
-  ~2048 — shrink the fixture if needed).
-- Add `test_delta_loss_cross_matches_exact_ntk_jacobian_product` that
-  computes `δL(A, B)` two ways: (a) the gradient dot product vatis
-  uses, (b) `uᴬᵀ Jᴬ Jᴮᵀ uᴮ` from the explicit Jacobians. Assert
-  agreement to relative tolerance `1e-5`.
-- Both tests live under `tests/unit/` so they run in CI.
+1. Add `tests/integration/test_ddp_real_gpus.py` that uses `torchrun`
+   to launch a 2-process DDP run on two CUDA devices, runs vatis on
+   `pythia-14m@step3000` with `B=4`, asserts the result matches a
+   single-GPU run on the same model + batch + seed (within
+   Hutchinson noise).
+2. Mark it `@pytest.mark.integration` and `@pytest.mark.requires_multi_gpu`
+   (define the marker in `pyproject.toml`'s `markers` list).
+3. Document in the test docstring how to run it (`CUDA_VISIBLE_DEVICES=0,1
+   .venv/bin/python -m pytest tests/integration/test_ddp_real_gpus.py
+   -m integration`).
 
-Commit: `task 2: exact-NTK ground-truth tests for chi_pos and
-delta_loss`.
-
-### Task 3 — Tight-tolerance perspic cross-check
-
-The current cross-validation uses `~2%` tolerance, which hides any
-constant-factor bias smaller than the Hutchinson noise floor. Add **one**
-new test in `tests/cross_validation/test_vs_perspic.py`:
-
-- Toy model only (don't blow up CI time).
-- `n_hutchinson=16384`.
-- Tolerance: relative `0.3%`, absolute `1e-6`.
-- Both vatis methods (`hutchinson`, `per_sequence_cv`), one perspic
-  backend is enough (functorch — it's the cleaner reference).
-- Single fixed seed, single fixed batch.
-
-If this test fails at the tight tolerance, that is a real bug — do not
-loosen the tolerance to make it pass. Investigate, fix in vatis (perspic
-is the reference), and *then* commit.
-
-Commit: `task 3: tight-tolerance perspic cross-check at n=16384`.
-
-### Task 4 — Heavy-padding cross-validation test
-
-Most normalization bugs hide in padding-heavy regimes. Add a test (in
-`tests/cross_validation/test_vs_perspic.py` or
-`tests/unit/test_observables.py`, your call) where:
-
-- The eval batch has >50% of tokens masked (mix of `attention_mask=0`
-  and `labels=-100`, both should be exercised).
-- All four observables (`chi_loss`, `chi_net`, `delta_loss`, `chi_pos`)
-  agree with perspic to the same tolerances as the existing
-  cross-validation tests.
-- Bonus: also assert agreement with the exact-NTK ground truth from
-  task 2 if feasible on the toy fixture.
-
-Commit: `task 4: heavy-padding cross-validation test`.
-
-### Task 5 — Fix `_compute_cross_pair` ordering footgun
-
-`SESSION_SUMMARY.md` item 4 under "What is blocked or risky": the
-analyzer's cross-pair path reads `chi_loss_a / chi_loss_b` from an
-attribute cache populated only during the self-pair loop, and falls back
-to zeros if called out of order. The public `Analyzer.run` always calls
-self pairs first so this is safe in practice — but it's a latent
-footgun.
-
-Fix it the cheap way: add an assertion at the top of `_compute_cross_pair`
-that the relevant self-pair entries exist in the cache, with a clear
-error message pointing the caller at the contract. Add a unit test that
-calling `_compute_cross_pair` before the self pair raises. Do not
-restructure the analyzer.
-
-Commit: `task 5: assert self-pair precedence in _compute_cross_pair`.
-
-### Task 6 — Custom `loss_fn`: wire or delete
-
-`chi_loss_from_autograd` exists in `core/observables.py` and has unit
-tests, but the analyzer always uses the closed-form CE path. There's
-a TODO at the call site. Pick one:
-
-- **Wire it through.** Plumb a user-provided `loss_fn` through the
-  analyzer's self-pair path so non-CE losses actually work. Add an
-  end-to-end test using a non-CE loss (e.g. label-smoothed CE or MSE on
-  logits) that exercises the analyzer with the autograd path. Remove
-  the TODO.
-- **Delete it.** Remove `chi_loss_from_autograd` and its unit tests,
-  remove the TODO, and add a one-line note in `SESSION_SUMMARY.md` that
-  custom losses are out of scope until v1.2.
-
-Pick whichever is smaller. Do not leave the dead code in place with the
-TODO — that's the worst of both worlds.
-
-Commit: `task 6: wire custom loss_fn through analyzer` *or*
-`task 6: remove unused chi_loss_from_autograd and TODO`.
-
-### Task 7 — Per-seq-CV memory pre-check
-
-`SESSION_SUMMARY.md` item 2 under "What is blocked or risky":
-`per_sequence_cv` stores `B` flat parameter-space gradient vectors,
-~512 GB for an 8B model with `B=32`. Currently the analyzer accepts the
-configuration and OOMs at the end of a 30-minute checkpoint load.
-
-Add a startup check in the analyzer (or in
-`PerSequenceControlVariateEstimator.__init__`):
+If only one GPU is available, write a `BLOCKED.md` entry like:
 
 ```
-estimated_bytes = B * n_params * 4   # fp32 per-sample grad vectors
-if estimated_bytes > 0.5 * available_memory:
-    raise ValueError(
-        f"per_sequence_cv would need ~{estimated_bytes/1e9:.1f} GB for "
-        f"B={B}, n_params={n_params}. Use chi_net_method='hutchinson' "
-        f"for large models. See CLAUDE.md auto-selection rule."
-    )
+## Task 3 (Tier 1) — Multi-GPU DDP smoke test
+
+Blocked: only one GPU available in this session
+(`CUDA_VISIBLE_DEVICES=0`, single 24 GB RTX 3090 Ti per `nvidia-smi`).
+
+The DDP path needs at least 2 GPUs to exercise. The CPU loopback test
+(`tests/integration/test_ddp_loopback.py`) is the closest thing we
+have, and it does pass.
+
+What the user needs to do to unblock: run this session on a
+multi-GPU box, or skip the task. The blocker doesn't affect any
+other Tier 1 or Tier 2 task.
 ```
 
-`available_memory` should be GPU memory if CUDA is available, host RAM
-otherwise. Pick a sensible API (`torch.cuda.mem_get_info` works). Add a
-unit test that the check fires for a deliberately oversized config and
-does not fire for a sensible one.
+Commit (only if not blocked): `task 3: real-GPU DDP smoke test on pythia-14m`.
 
-Commit: `task 7: per-seq-CV memory pre-check at estimator init`.
+### Task 4 — Decide and document the `ParquetSink` re-open story
 
-### Task 8 — CLAUDE.md proposal (run last)
+**Discussion-mode trigger.** This task has two valid resolutions and
+the user should pick. Write a discussion message before implementing,
+laying out:
 
-**Do not edit `CLAUDE.md` directly.** Write proposed changes to
-`CLAUDE.md.proposed` at the project root. Allowed sections to propose
-changes to:
+- **Option A: fix.** Make `ParquetSink(path)` open in append mode if
+  the file already exists and the schema matches. This is a real
+  feature add — it changes the semantics of the constructor and
+  needs a test for the schema-mismatch failure mode. ~50 lines of
+  code + ~30 lines of test.
+- **Option B: document and assert.** Leave the truncation behavior
+  as-is, but raise a clear `RuntimeError` in `ParquetSink.__init__`
+  if the file already exists, telling the user to either delete the
+  file first or use a single `analyze()` call with multiple
+  `revisions`. The error message should point at the deployment
+  example as the canonical pattern. ~10 lines of code + ~10 lines
+  of test.
 
-- The architecture diagram (if tasks above added/moved files).
-- The dependency list (if you added matplotlib or anything else).
-- The test layout / counts.
-- The compute scaling table — replace the order-of-magnitude guesses
-  with the **real numbers from `examples/BENCHMARK.md`**, clearly noted
-  as measured on the specific GPU you ran on.
+Option B is cheaper and matches the existing example pattern. Option
+A is more robust but introduces a constructor flag (`mode="append"`
+or similar) that the example doesn't need.
 
-**Forbidden sections** — do not propose changes to these, even if you
-think they're wrong:
+**My recommendation if you have to pick without discussion:** Option
+B. Don't expand the API surface for a single-script convenience that
+the example already sidesteps.
 
-- "Scope (v1)" / "Out (v1)"
-- "Core idea (math)" and all subsections
-- "Working conventions" / "Permission model" / "Unattended-mode behavior"
-- The glossary
-- The implementation order
+After the user picks, implement, test, and document the choice in
+`CLAUDE.md` under "Result format".
 
-If you think one of the forbidden sections needs updating, write the
-suggestion to `FOLLOWUPS.md` instead. The user will decide.
+Commit: `task 4: parquet sink re-open behavior (option A|B)`.
 
-Commit: `task 8: propose CLAUDE.md updates from v1.1 work`.
+## Tier 2 — feature work (do after Tier 1 is green)
+
+### Task 5 — `OpacusEstimator` full implementation
+
+This is the original "v1.1 deferred" work, now a v1.2 task. The stub
+in `vatis/core/chi_net/opacus.py` raises `NotImplementedError`; the
+goal is to replace it with a working estimator that mirrors
+`perspic/calculator/samplewise_opacus.py`.
+
+**Scope (per CLAUDE.md `## Method 3: OpacusEstimator`):**
+
+- Layer-compatibility check at startup: enumerate the model's
+  modules, check each against opacus's supported layer set, raise a
+  clear error if anything is unsupported.
+- Tied-embedding detection: opacus can't handle parameter tying
+  (Pythia tied embeddings break it). Detect via `param.data_ptr()`
+  comparison and raise a clear error pointing the user at
+  `chi_net_method="hutchinson"`.
+- In-place op neutralization: opacus can't handle in-place activations
+  (e.g. `inplace=True` ReLU). Either neutralize them (set
+  `inplace=False`) or detect and raise.
+- Per-sample gradient computation via opacus's `GradSampleModule` +
+  ghost clipping. Hutchinson over `(S, V)` only.
+- Cross-validation against perspic's `samplewise_opacus.py` backend
+  in `tests/cross_validation/test_vs_perspic.py`. The pattern from
+  the existing parametrized tests should drop in.
+
+**Discussion-mode trigger.** This is a substantial, design-heavy
+task. Before starting, write a discussion message that:
+
+1. Lists the perspic functions you plan to mirror (file + function
+   name) and confirms you've actually read them.
+2. Lays out the proposed API: what does the estimator's `compute()`
+   look like, what does the layer-compat check return, how does the
+   tied-embedding error message look.
+3. Lists the test plan: which cross-validation tests will be added,
+   which existing tests need updating, what the expected wallclock
+   on `pythia-14m` is.
+
+**Acceptance:**
+- All existing tests still pass.
+- New cross-validation tests against perspic's opacus backend pass at
+  the same tolerances as the existing functorch tests.
+- The estimator runs end-to-end on `pythia-14m` (which has *untied*
+  embeddings on this small variant — verified during v1.1) and
+  produces a chi_net value within Hutchinson noise of the
+  `hutchinson` and `per_seq_cv` results on the same batch.
+- The estimator raises a clear, actionable error on a tied-embedding
+  model (test on a manually-constructed toy model with shared
+  embedding/lm_head weights).
+
+Commit: `task 5: implement OpacusEstimator with layer-compat check`.
+
+### Task 6 — Custom (non-CE) `loss_fn` for chi_loss
+
+`vatis/core/observables.py::chi_loss_cross_entropy_unnormalized` is
+the only chi_loss path. The bundle's `loss_fn` is used for
+`delta_loss` but ignored by chi_loss. Add a path that uses the user's
+`loss_fn` to compute chi_loss via one extra `torch.autograd.grad(loss,
+logits)` call (one cheap backward through the loss head only).
+
+**Discussion-mode trigger.** Before implementing, decide:
+
+- Is this a separate flag on the bundle (`bundle.loss_kind="cross_entropy"`
+  vs `"custom"`)? Or auto-detected from the loss_fn?
+- Where does the autograd path live — back in `core/observables.py`
+  (resurrecting the v1.1-deleted `chi_loss_from_autograd`) or as a
+  new method on the bundle?
+- How does the micro-batch invariant work? The closed-form path
+  accumulates an unnormalized sum and divides by `N_total²` once;
+  the autograd path needs the same trick.
+
+Write a discussion message proposing an answer to each before
+coding.
+
+**Acceptance:**
+- A new end-to-end test using a non-CE loss (label-smoothed CE on
+  the toy MLP, or MSE on logits) that runs `analyze()` and produces
+  a finite, reproducible chi_loss / chi_net / chi_pos.
+- The closed-form CE path remains unchanged and bit-identical.
+- The "Loss handling" paragraph in `CLAUDE.md` is updated to remove
+  the v1.1 caveat.
+
+Commit: `task 6: custom non-CE loss_fn support for chi_loss`.
+
+## Tier 3 — polish (do if there's time)
+
+### Task 7 — Validate the deployment example on a bigger model
+
+The current example uses `pythia-14m` (~14M params). It would be
+useful to validate that vatis works on a 10×-larger model and to
+add a measured row to the compute scaling table for it.
+
+Suggested model: `pythia-160m`. ~10× more parameters, still loads in
+seconds, fits comfortably in 24 GB GPU memory at `B=8`. Per-call
+wallclock should be ~5–10× the 14m numbers (per CLAUDE.md compute
+scaling estimate). Total sweep wallclock: probably ~3–5 min.
+
+Discussion-mode trigger. Before running:
+
+- Verify `pythia-160m` has the same checkpoint family
+  (`step1, step8, ..., step143000`) as `pythia-14m`. Use `huggingface_hub`
+  to list refs.
+- Check whether `pythia-160m` has *tied* embeddings (the bigger Pythia
+  models do, AFAIK). If yes, this validates that the
+  `hutchinson` and `per_sequence_cv` paths work with tied
+  embeddings (they should — only opacus cares).
+
+How to do this without regenerating `examples/pythia_sweep.py`'s
+artifacts:
+
+1. Add a constant at the top of the script that picks the model name,
+   and a CLI argument to override it.
+2. Run the script with `--model EleutherAI/pythia-160m`, write the
+   output to `examples/results_160m.parquet` and a separate set of
+   plots.
+3. Add a section to `examples/BENCHMARK.md` with the measured 160m
+   numbers. **Do not delete the 14m numbers** — keep both as
+   reference points.
+
+**Acceptance:**
+- The example runs end-to-end on pythia-160m within 15 min.
+- The chi_net U-shape and chi_pos peak are checked on the bigger
+  model. (If they reproduce, that's interesting; if they don't,
+  even more so.)
+
+Commit: `task 7: deployment example also runs on pythia-160m`.
+
+### Task 8 — Update SESSION_SUMMARY.md and prep TASKS_NEXT.md for v1.3
+
+Same "session boundary" pattern as v1.1:
+
+- Update `SESSION_SUMMARY.md` with the v1.2 work. Bump test counts.
+  Add a "v1.2 phase" section. Update the "Known issues" list (remove
+  fixed items).
+- Write `TASKS_NEXT.md` for v1.3. Even if there's no agreed scope
+  yet, draft a triage of remaining `## Known issues` items and any
+  new items the v1.2 work surfaced.
+- Verify `git log --oneline` shows the expected commit history.
+- Verify `git status` is clean.
+
+Commit: `task 8: session-boundary update for end of v1.2 phase`.
 
 ## Done criteria
 
 When you finish (or run out of independent tasks):
 
-1. All tests still green: `.venv/bin/python -m pytest tests` shows the
-   new total, all passing.
-2. `git log --oneline` shows the baseline commit plus one commit per
-   completed task, in order.
-3. `git status` is clean.
-4. Update `SESSION_SUMMARY.md`:
-   - Bump test count to the new total.
-   - Add a "v1.1 hardening pass" section listing what got done, what got
-     skipped and why.
-   - Update the "What is blocked or risky" list — remove items that
-     were fixed (5, 6, 7), add anything new.
-5. If anything was skipped or blocked, `BLOCKED.md` exists at the project
-   root with: the exact obstacle, what you tried, what the user needs to
-   do to unblock it, which tasks are affected.
-6. If you found things worth doing that weren't in this file, they live
-   in `FOLLOWUPS.md`, not done, not committed as code.
+1. All tests still green: `.venv/bin/python -m pytest tests` shows
+   the new total, all passing.
+2. CI is set up and passing on the master branch (Tier 1 task 2).
+3. The `valid_mask_fn` ↔ `chi_loss` consistency bug is fixed and has
+   a regression test (Tier 1 task 1).
+4. `git log --oneline` shows one commit per task, in order.
+5. `git status` is clean.
+6. `SESSION_SUMMARY.md` is updated and `TASKS_NEXT.md` for v1.3 is
+   drafted.
+7. If anything was skipped or blocked, `BLOCKED.md` exists at the
+   project root with the exact obstacle.
 
-That's it. Stop when done. Do not start new work beyond this list.
+That's it. Stop when done. Do not start new work beyond this list
+without writing it to `TASKS_NEXT.md` for v1.3 first.

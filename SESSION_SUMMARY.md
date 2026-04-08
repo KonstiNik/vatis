@@ -1,7 +1,11 @@
 # vatis — session summary
 
 End-to-end build of `vatis` per `CLAUDE.md`, plus a v1.1 hardening pass per
-`TASKS_NEXT.md`. Two agent sessions, autonomous, **67 tests green**.
+the original `TASKS_NEXT.md`, plus three post-task follow-ups on the
+deployment example, plus a v1.1→v1.2 spec reconciliation that applied the
+`CLAUDE.md.proposed` updates and triaged `FOLLOWUPS.md` into a fresh
+`TASKS_NEXT.md` for v1.2. **67 tests green at the time of the
+reconciliation.** Read `TASKS_NEXT.md` next to see what's queued for v1.2.
 
 ## Read first
 
@@ -404,6 +408,57 @@ HF_HOME=/data/knikolaou/huggingface .venv/bin/python examples/pythia_sweep.py
 # Benchmark sweep (the table in examples/BENCHMARK.md)
 HF_HOME=/data/knikolaou/huggingface .venv/bin/python examples/_benchmark.py
 ```
+
+## v1.1 → v1.2 spec reconciliation
+
+After the v1.1 hardening pass + the three post-task follow-ups on the
+deployment example, the spec had drifted from the code: `CLAUDE.md`
+still described v1 as if it were about-to-be-built (the
+"Implementation order" was historical, the "Loss handling" paragraph
+referenced a deleted helper, the compute scaling table was
+order-of-magnitude estimates with no measured baseline, the
+architecture diagram had no `examples/` tree, the dependency list was
+missing matplotlib + the torch pin, and the test counts were stale).
+`CLAUDE.md.proposed` (written in v1.1 task 8) had sat dormant for the
+entire post-task follow-up arc and had also itself become stale
+(predated the analysis script + the early checkpoints).
+
+In a short reconciliation session, all of this got resolved:
+
+- **`CLAUDE.md` updated in place.** Applied the `CLAUDE.md.proposed`
+  edits with revisions for the post-task work, fixed the "Loss
+  handling" paragraph, marked "Implementation order" as historical
+  ("v1 build history"), added a "v1.1 hardening pass (historical)"
+  section summarizing the work, added an "Agent quick start"
+  navigation aid at the top, added a "Research workflow" section
+  describing the compute/analysis split + real-text eval pattern +
+  cross-pair observable, added a "Known issues" section that names
+  the latent bugs an incoming agent should be aware of, and updated
+  Scope (v1) and the OpacusEstimator description to reflect that
+  it's now v1.2 work, not v1.1.
+- **`CLAUDE.md.proposed` deleted.** No longer needed.
+- **`FOLLOWUPS.md` deleted.** Its contents were triaged into the new
+  `TASKS_NEXT.md` v1.2 work order:
+  - Stale Loss handling paragraph → fixed in CLAUDE.md as part of
+    this reconciliation.
+  - Stale Implementation order → marked historical in CLAUDE.md.
+  - `valid_mask_fn` ↔ `chi_loss` token-counting bug → Tier 1 task 1
+    in TASKS_NEXT.md.
+  - `ParquetSink` truncation footgun → Tier 1 task 4 in TASKS_NEXT.md.
+  - Stale 8B/A100 compute scaling estimates → added a measured
+    pythia-14m / 3090 Ti table alongside in CLAUDE.md.
+- **`TASKS_NEXT.md` written for v1.2.** Three tiers: Tier 1
+  (correctness + CI + DDP smoke test + parquet decision), Tier 2
+  (OpacusEstimator + custom non-CE losses), Tier 3 (validate on
+  pythia-160m + session-boundary update). Includes a new
+  "discussion-mode rule" requiring agents to pause and discuss
+  before implementing under-specified tasks, and a "mid-task
+  acceptance check" rule requiring user confirmation on visible
+  artifacts.
+
+The reconciliation is one commit. No code or test changes — just doc
++ task-file rewrites. After this, an agent can read CLAUDE.md +
+TASKS_NEXT.md and dive directly into v1.2 work.
 
 ## Permissions notes
 
