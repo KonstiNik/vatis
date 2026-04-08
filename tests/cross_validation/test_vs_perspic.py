@@ -235,3 +235,50 @@ def test_chi_pos_matches_perspic_chi_coup(perspic_engine: str, vatis_method: str
         f"perspic={p['chi_coup']:.6f} (rel err {rel:.3%}, method={vatis_method}, "
         f"engine={perspic_engine})"
     )
+
+
+@pytest.mark.parametrize("vatis_method", ["hutchinson", "per_sequence_cv"])
+def test_all_observables_tight_tolerance_at_n16384(vatis_method: str) -> None:
+    """Drive Hutchinson noise below 0.3% with n=16384 and confirm all four
+    observables match perspic to that bound.
+
+    The looser cross-validation tests use ``rel=0.02`` to absorb the
+    Hutchinson noise floor at ``n=2048``. That hides any constant-factor
+    bias smaller than ~2%. This test cranks ``n_hutchinson`` to 16384 — at
+    which point the noise floor is far below 0.3% on the toy MLP — and
+    asserts the tight bound. If this test fails, it is a real bug
+    (perspic is the reference); do not loosen the tolerance to make it
+    pass. The test uses functorch only (the cleaner perspic backend) and
+    a single fixed seed/batch to keep it deterministic and quick.
+    """
+    model, x, y = _build_shared_model_and_batch()
+    snapshot = _snapshot(model)
+    criterion = nn.CrossEntropyLoss(reduction="mean")
+
+    p = _perspic_run(model, criterion, x, y, engine="functorch")
+
+    _restore(model, snapshot)
+    v = _vatis_run(model, x, y, chi_net_method=vatis_method, n_hutchinson=16384, seed=0)
+
+    rel_tol = 3e-3
+    abs_tol = 1e-6
+
+    # chi_loss and delta_loss are deterministic — tight bound is for free.
+    assert v["chi_loss_normalized"] == pytest.approx(p["chi_loss"], rel=rel_tol, abs=abs_tol), (
+        f"chi_loss mismatch (method={vatis_method}): "
+        f"vatis={v['chi_loss_normalized']} vs perspic={p['chi_loss']}"
+    )
+    assert v["delta_loss"] == pytest.approx(p["grad_norm_squared"], rel=rel_tol, abs=abs_tol), (
+        f"delta_loss mismatch (method={vatis_method}): "
+        f"vatis={v['delta_loss']} vs perspic={p['grad_norm_squared']}"
+    )
+    # chi_net carries Hutchinson variance; n=16384 must drive it under
+    # the tight bound on the toy MLP.
+    assert v["chi_net_normalized"] == pytest.approx(p["chi_net"], rel=rel_tol, abs=abs_tol), (
+        f"chi_net mismatch (method={vatis_method}): "
+        f"vatis={v['chi_net_normalized']} vs perspic={p['chi_net']}"
+    )
+    # chi_pos inherits chi_net's noise floor.
+    assert v["chi_pos"] == pytest.approx(p["chi_coup"], rel=rel_tol, abs=abs_tol), (
+        f"chi_pos mismatch (method={vatis_method}): vatis={v['chi_pos']} vs perspic={p['chi_coup']}"
+    )
