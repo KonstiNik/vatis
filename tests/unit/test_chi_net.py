@@ -163,6 +163,77 @@ def test_opacus_estimator_raises_not_implemented() -> None:
         )
 
 
+def test_per_seq_cv_memory_check_fires_for_oversized_config() -> None:
+    """The startup memory check must reject configurations that would
+    cache more than the configured fraction of available memory in
+    per-sample gradient vectors.
+
+    We pick a deliberately huge n_params (1B) so the check fires regardless
+    of how much RAM/VRAM is on the host.
+    """
+    huge_n_params = 1_000_000_000  # 1B params -> 32 * 1B * 4 = 128 GB at B=32
+    with pytest.raises(ValueError, match="per_sequence_cv would need"):
+        PerSequenceControlVariateEstimator.check_memory_feasible(
+            b_total=32,
+            n_params=huge_n_params,
+            device=None,  # use host RAM
+        )
+
+
+def test_per_seq_cv_memory_check_passes_for_sensible_config() -> None:
+    """The check should not fire for normal toy-model configurations."""
+    # 4 * 1M * 4 = 16 MB — trivially fits in any host.
+    PerSequenceControlVariateEstimator.check_memory_feasible(
+        b_total=4,
+        n_params=1_000_000,
+        device=None,
+    )
+
+
+def test_per_seq_cv_memory_check_fires_in_compute() -> None:
+    """The estimator's compute() should also raise (not just the static
+    helper) — this is the path the analyzer hits.
+    """
+    model, batch = _build_small_lm()
+    # memory_fraction=0 forces the check to always fire (any positive
+    # estimated bytes exceeds 0% of available).
+    est = PerSequenceControlVariateEstimator(n_hutchinson=2, memory_fraction=1e-30)
+    with pytest.raises(ValueError, match="per_sequence_cv would need"):
+        est.compute(
+            model,
+            batch,
+            _fwd,
+            loss_fn=causal_lm_loss,
+            valid_mask_fn=causal_lm_valid_mask,
+            params=list(model.parameters()),
+            micro_batch_size=2,
+        )
+
+
+def test_per_seq_cv_memory_check_does_not_fire_in_compute_for_toy() -> None:
+    """The toy fixture must always pass the default memory check — otherwise
+    the existing convergence test would fail."""
+    model, batch = _build_small_lm()
+    est = PerSequenceControlVariateEstimator(n_hutchinson=2)
+    res = est.compute(
+        model,
+        batch,
+        _fwd,
+        loss_fn=causal_lm_loss,
+        valid_mask_fn=causal_lm_valid_mask,
+        params=list(model.parameters()),
+        micro_batch_size=2,
+    )
+    assert float(res.chi_net) > 0
+
+
+def test_per_seq_cv_memory_fraction_rejects_invalid() -> None:
+    with pytest.raises(ValueError, match="memory_fraction"):
+        PerSequenceControlVariateEstimator(memory_fraction=0.0)
+    with pytest.raises(ValueError, match="memory_fraction"):
+        PerSequenceControlVariateEstimator(memory_fraction=1.5)
+
+
 def test_per_seq_cv_lower_variance_than_hutchinson_at_same_n() -> None:
     """Per-sample CV should have lower variance per probe than plain Hutchinson.
 

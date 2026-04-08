@@ -80,7 +80,14 @@ from vatis.core.chi_net.base import (
     ValidMaskFn,
 )
 from vatis.core.probes import ProbeDistribution, make_probe, mask_probe
-from vatis.data.collate import iter_micro_batches
+from vatis.data.collate import batch_size, iter_micro_batches
+
+# Memory pre-check threshold: refuse configurations that would need more
+# than this fraction of free memory just for the per-sample grad cache.
+# 0.5 leaves room for the model, activations, optimizer state, and the
+# alignment matrix itself. Tighten or loosen by passing a different
+# ``memory_fraction`` to the estimator constructor.
+_DEFAULT_MEMORY_FRACTION = 0.5
 
 
 class PerSequenceControlVariateEstimator(ChiNetEstimator):
@@ -104,12 +111,79 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
         n_hutchinson: int = 32,
         distribution: ProbeDistribution = "rademacher",
         compute_alignment_matrix: bool = True,
+        memory_fraction: float = _DEFAULT_MEMORY_FRACTION,
     ) -> None:
         if n_hutchinson < 1:
             raise ValueError(f"n_hutchinson must be >= 1, got {n_hutchinson}")
+        if not 0.0 < memory_fraction <= 1.0:
+            raise ValueError(f"memory_fraction must be in (0, 1], got {memory_fraction}")
         self.n_hutchinson = n_hutchinson
         self.distribution: ProbeDistribution = distribution
         self.compute_alignment_matrix = compute_alignment_matrix
+        self.memory_fraction = memory_fraction
+
+    @staticmethod
+    def estimate_peak_grad_bytes(b_total: int, n_params: int) -> int:
+        """Return the peak fp32 memory used to cache per-sample grad vectors.
+
+        Each per-sample grad is a flat fp32 vector of length ``n_params``;
+        we hold ``b_total`` of them at once when ``compute_alignment_matrix``
+        is True (the default).
+        """
+        return int(b_total) * int(n_params) * 4
+
+    @staticmethod
+    def _available_memory_bytes(device: torch.device | None) -> int:
+        """Return the free memory budget for the per-sample grad cache.
+
+        Uses ``torch.cuda.mem_get_info`` for CUDA devices, ``psutil`` for
+        host RAM otherwise. Falls back to ``os.sysconf`` if psutil is not
+        importable.
+        """
+        if device is not None and device.type == "cuda":
+            free_bytes, _total = torch.cuda.mem_get_info(device)
+            return int(free_bytes)
+        try:
+            import psutil  # type: ignore[import-untyped]
+
+            return int(psutil.virtual_memory().available)
+        except ImportError:
+            import os
+
+            page_size = os.sysconf("SC_PAGE_SIZE")
+            avail_pages = os.sysconf("SC_AVPHYS_PAGES")
+            return int(page_size) * int(avail_pages)
+
+    @classmethod
+    def check_memory_feasible(
+        cls,
+        b_total: int,
+        n_params: int,
+        *,
+        device: torch.device | None = None,
+        memory_fraction: float = _DEFAULT_MEMORY_FRACTION,
+    ) -> None:
+        """Raise ``ValueError`` if the configuration would exceed the budget.
+
+        ``per_sequence_cv`` stores ``B`` flat fp32 parameter-space gradient
+        vectors at once (one per sample); the peak is ``B * n_params * 4``
+        bytes. We refuse if this would consume more than ``memory_fraction``
+        of the free memory on the model device. The check is intentionally
+        conservative — better to fall back to ``hutchinson`` than to OOM
+        partway through a checkpoint.
+        """
+        estimated_bytes = cls.estimate_peak_grad_bytes(b_total, n_params)
+        available_bytes = cls._available_memory_bytes(device)
+        if estimated_bytes > memory_fraction * available_bytes:
+            where = "GPU" if device is not None and device.type == "cuda" else "host"
+            raise ValueError(
+                f"per_sequence_cv would need ~{estimated_bytes / 1e9:.1f} GB "
+                f"for B={b_total}, n_params={n_params}, but only "
+                f"~{available_bytes / 1e9:.1f} GB free on {where} "
+                f"(threshold: {memory_fraction:.0%}). "
+                f"Use chi_net_method='hutchinson' for large models. "
+                f"See CLAUDE.md auto-selection rule."
+            )
 
     def compute(
         self,
@@ -124,6 +198,18 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
         generator: torch.Generator | None = None,
     ) -> ChiNetResult:
         device = next(model.parameters()).device
+        # Memory pre-check: per_sequence_cv stores ``B`` flat parameter-space
+        # gradient vectors at once. For large models this dominates memory.
+        # We fail fast here rather than partway through the chi_net loop.
+        b_total = batch_size(batch)
+        n_params = sum(p.numel() for p in params)
+        self.check_memory_feasible(
+            b_total,
+            n_params,
+            device=device,
+            memory_fraction=self.memory_fraction,
+        )
+
         chi_net_acc = torch.zeros((), dtype=torch.float64, device=device)
         n_valid_total = 0
         n_backwards = 0
