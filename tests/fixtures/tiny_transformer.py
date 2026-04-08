@@ -12,8 +12,6 @@ Provides:
     - :class:`TinyMLP` — even smaller MLP classifier ``(B, V)``, used for the
       cross-validation tests against perspic (perspic prefers per-sample
       classification setups).
-    - :class:`TinyTransformerLightning` — a Lightning shim wrapping the
-      transformer, for the perspic cross-validation tests.
     - :func:`make_tiny_lm_batch` and :func:`make_tiny_mlp_batch` —
       reproducible batches for testing.
 """
@@ -22,7 +20,6 @@ from __future__ import annotations
 
 import math
 
-import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -127,34 +124,6 @@ class TinyMLP(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
-
-
-class TinyMLPLightning(pl.LightningModule):
-    """Lightning wrapper around TinyMLP for perspic cross-validation."""
-
-    def __init__(
-        self,
-        *,
-        in_dim: int = 8,
-        hidden: int = 16,
-        n_classes: int = 4,
-        seed: int = 0,
-    ) -> None:
-        super().__init__()
-        torch.manual_seed(seed)
-        self.model = TinyMLP(in_dim=in_dim, hidden=hidden, n_classes=n_classes)
-        self.criterion = nn.CrossEntropyLoss(reduction="mean")
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.model(x)
-
-    def training_step(self, batch, batch_idx):  # type: ignore[no-untyped-def]
-        x, y = batch
-        logits = self(x)
-        return self.criterion(logits, y)
-
-    def configure_optimizers(self):  # type: ignore[no-untyped-def]
-        return torch.optim.SGD(self.parameters(), lr=1e-3)
 
 
 def make_tiny_lm_batch(
