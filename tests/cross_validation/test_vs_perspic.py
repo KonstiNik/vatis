@@ -29,6 +29,7 @@ from typing import Any
 import pytest
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from tests.fixtures.tiny_transformer import (
     TinyMLP,
@@ -234,6 +235,105 @@ def test_chi_pos_matches_perspic_chi_coup(perspic_engine: str, vatis_method: str
         f"chi_pos/chi_coup mismatch: vatis={v['chi_pos']:.6f} vs "
         f"perspic={p['chi_coup']:.6f} (rel err {rel:.3%}, method={vatis_method}, "
         f"engine={perspic_engine})"
+    )
+
+
+@pytest.mark.parametrize("vatis_method", ["hutchinson", "per_sequence_cv"])
+def test_heavy_padding_matches_perspic_on_valid_subset(vatis_method: str) -> None:
+    """Heavy-padding cross-validation: 5/8 samples masked (>50%).
+
+    vatis sees the FULL padded batch (with ``labels=-100`` at the masked
+    positions and a custom ``valid_mask_fn`` that honors them); perspic
+    sees only the unpadded valid subset. If vatis correctly masks out the
+    padded samples in every observable, the two should agree to the same
+    tolerances as the existing cross-validation tests.
+
+    Padding modes exercised here:
+        - ``labels = -100`` for the per-sample ignore path
+          (``valid_token_mask`` in ``vatis/core/normalization.py``)
+        - The bundle's custom ``valid_mask_fn`` for the analyzer's
+          ``n_valid`` accounting (which feeds the ``1/N^2`` factor in
+          ``chi_loss`` and the per-rank weighting in ``delta_loss``)
+        - The estimator's masked-probe path (probes are zeroed at masked
+          positions via the closed-form CE u-vector that the
+          per-seq-CV control variate uses)
+
+    The TinyMLP fixture only has one notion of padding (sample-wise
+    ``labels=-100``); the LM-style ``attention_mask=0`` path is exercised
+    separately by ``test_heavy_padding_lm_matches_exact_ntk`` below
+    (against the exact-NTK ground truth, since perspic doesn't natively
+    speak token padding).
+    """
+    # Build the full and the subset versions from the same model + seed.
+    model, x_full, y_full = _build_shared_model_and_batch()
+    snapshot = _snapshot(model)
+
+    # Mask 5 of 8 samples → 3 valid, 5 ignored = 62.5% masked.
+    y_padded = y_full.clone()
+    for i in (1, 3, 4, 6, 7):
+        y_padded[i] = -100
+    keep = y_padded != -100
+    assert int(keep.sum().item()) == 3
+    x_valid = x_full[keep]
+    y_valid = y_padded[keep]
+    assert keep.sum().item() / float(keep.numel()) < 0.5  # > 50% masked
+
+    # ----- perspic side: see only the unpadded subset.
+    criterion = nn.CrossEntropyLoss(reduction="mean")
+    p = _perspic_run(model, criterion, x_valid, y_valid, engine="functorch")
+
+    # ----- vatis side: see the full padded batch with a valid_mask_fn
+    # that honors -100 and a loss_fn that uses ignore_index=-100.
+    _restore(model, snapshot)
+
+    def loss_with_ignore(
+        logits: torch.Tensor, batch: tuple[torch.Tensor, torch.Tensor]
+    ) -> torch.Tensor:
+        return F.cross_entropy(logits, batch[1], reduction="mean", ignore_index=-100)
+
+    def valid_mask_with_ignore(
+        batch: tuple[torch.Tensor, torch.Tensor],
+        logits: torch.Tensor,  # noqa: ARG001
+    ) -> torch.Tensor:
+        return batch[1] != -100
+
+    bundle = ModelBundle(
+        model=model,
+        params=list(model.parameters()),
+        forward_fn=lambda m, b: m(b[0]),
+        loss_fn=loss_with_ignore,
+        valid_mask_fn=valid_mask_with_ignore,
+        identifier="mlp@0",
+    )
+    results = analyze(
+        model=bundle,
+        revisions=["0"],
+        eval_batches={"val": (x_full, y_padded)},
+        chi_net_method=vatis_method,
+        n_hutchinson=2048,
+        micro_batch_size=8,
+        seed=0,
+        device="cpu",
+        sink=None,
+    )
+    v = {r.observable: r.value for r in results[0].rows}
+
+    # chi_loss and delta_loss are deterministic — exact agreement.
+    assert v["chi_loss_normalized"] == pytest.approx(p["chi_loss"], rel=1e-4, abs=1e-6)
+    assert v["delta_loss"] == pytest.approx(p["grad_norm_squared"], rel=1e-4, abs=1e-6)
+    # chi_net carries Hutchinson noise — same 2% bound as the existing tests.
+    rel_net = abs(v["chi_net_normalized"] - p["chi_net"]) / max(1e-12, abs(p["chi_net"]))
+    assert rel_net < 0.02, (
+        f"heavy-padding chi_net mismatch (method={vatis_method}): "
+        f"vatis={v['chi_net_normalized']:.6f} vs perspic={p['chi_net']:.6f} "
+        f"(rel err {rel_net:.3%})"
+    )
+    # chi_pos inherits chi_net's noise.
+    rel_pos = abs(v["chi_pos"] - p["chi_coup"]) / max(1e-12, abs(p["chi_coup"]))
+    assert rel_pos < 0.02, (
+        f"heavy-padding chi_pos mismatch (method={vatis_method}): "
+        f"vatis={v['chi_pos']:.6f} vs perspic={p['chi_coup']:.6f} "
+        f"(rel err {rel_pos:.3%})"
     )
 
 

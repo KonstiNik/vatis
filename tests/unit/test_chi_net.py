@@ -361,6 +361,80 @@ def test_chi_pos_matches_exact_ntk() -> None:
     )
 
 
+def test_heavy_padding_lm_matches_exact_ntk() -> None:
+    """Heavy-padding LM batch agrees with the exact-NTK ground truth.
+
+    This is the LM counterpart to
+    ``test_heavy_padding_matches_perspic_on_valid_subset`` (which uses
+    TinyMLP because perspic doesn't natively speak token padding). Here
+    we use the LM transformer fixture with ``pad_fraction`` cranked high
+    enough that ~70% of tokens are masked, exercising both
+    ``attention_mask=0`` (zeros some sequence positions) and
+    ``labels=-100`` (the standard HF shift convention also marks the
+    last position of every sequence and the position immediately
+    following any padded position).
+
+    The reference is the explicit-Jacobian Rayleigh quotient from
+    :func:`_build_full_jacobian_and_u`. Tolerances are tight (1e-5) for
+    the deterministic observables; chi_net (and therefore chi_pos) uses
+    the existing exact ``_exact_chi_net`` helper rather than a
+    Hutchinson estimate, so it is also exact within numerical precision.
+    """
+    # Smallest fixture, with heavy padding. Use the same model size as
+    # _build_small_lm so the exact-Jacobian build stays cheap.
+    torch.manual_seed(42)
+    model = TinyTransformer(
+        vocab_size=16, seq_len=8, d_model=16, n_layers=1, n_heads=2, d_ff=32
+    ).eval()
+    for p in model.parameters():
+        p.requires_grad_(True)
+    batch = make_tiny_lm_batch(batch_size=2, seq_len=8, vocab_size=16, pad_fraction=0.625, seed=0)
+    # Sanity-check the masking: > 50% of tokens should be ignored.
+    n_tokens = batch["labels"].numel()
+    n_valid = int((batch["labels"] != -100).sum().item())
+    assert n_valid > 0
+    assert n_valid / n_tokens < 0.5, f"expected >50% padded, got {1 - n_valid / n_tokens:.0%}"
+    # Both attention_mask=0 and labels=-100 must be present.
+    assert int((batch["attention_mask"] == 0).sum().item()) > 0
+    assert int((batch["labels"] == -100).sum().item()) > 0
+
+    params = list(model.parameters())
+
+    # Exact reference values via the explicit Jacobian (only valid
+    # positions contribute rows).
+    j_full, u_full, _ = _build_full_jacobian_and_u(model, batch)
+    chi_loss_exact = float((u_full * u_full).sum())
+    chi_net_exact = float((j_full * j_full).sum())
+    jt_u = j_full.T @ u_full
+    delta_loss_exact = float((jt_u * jt_u).sum())
+    chi_pos_exact = delta_loss_exact / (chi_loss_exact * chi_net_exact)
+
+    # Vatis primitives, each independently exact.
+    logits_for_chi_loss = model(batch["input_ids"]).detach()
+    chi_loss_vatis = float(chi_loss_cross_entropy(logits_for_chi_loss, batch["labels"]))
+    chi_net_vatis = _exact_chi_net(model, batch)
+    loss = causal_lm_loss(model(batch["input_ids"]), batch)
+    delta_loss_vatis = float(delta_loss_self(loss, params))
+    chi_pos_vatis = float(chi_pos(delta_loss_vatis, chi_loss_vatis, chi_net_vatis))
+
+    # Tight tolerances — every primitive is exact under heavy padding.
+    assert abs(chi_loss_vatis - chi_loss_exact) <= max(1e-12, abs(chi_loss_exact) * 1e-6), (
+        f"chi_loss mismatch under heavy padding: vatis={chi_loss_vatis}, exact={chi_loss_exact}"
+    )
+    assert abs(chi_net_vatis - chi_net_exact) <= max(1e-12, abs(chi_net_exact) * 1e-6), (
+        f"chi_net mismatch under heavy padding: vatis={chi_net_vatis}, exact={chi_net_exact}"
+    )
+    assert abs(delta_loss_vatis - delta_loss_exact) <= max(1e-12, abs(delta_loss_exact) * 1e-5), (
+        f"delta_loss mismatch under heavy padding: "
+        f"vatis={delta_loss_vatis}, exact={delta_loss_exact}"
+    )
+    rel_pos = abs(chi_pos_vatis - chi_pos_exact) / max(abs(chi_pos_exact), 1e-30)
+    assert rel_pos < 1e-5, (
+        f"chi_pos mismatch under heavy padding: rel err {rel_pos:.2e} > 1e-5 "
+        f"(vatis={chi_pos_vatis}, exact={chi_pos_exact})"
+    )
+
+
 def test_delta_loss_cross_matches_exact_ntk_jacobian_product() -> None:
     """Cross delta_loss agrees with the explicit Jacobian product.
 
