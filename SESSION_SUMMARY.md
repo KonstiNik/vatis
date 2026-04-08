@@ -460,6 +460,82 @@ The reconciliation is one commit. No code or test changes — just doc
 + task-file rewrites. After this, an agent can read CLAUDE.md +
 TASKS_NEXT.md and dive directly into v1.2 work.
 
+## v1.2 phase progress
+
+The v1.2 work order in `TASKS_NEXT.md` lists eight tasks across three
+tiers. Tier 1 tasks 1 and 2 have landed; tasks 3–8 are still pending.
+Test count delta: 67 → **68** (+1 unit test from task 1's regression).
+
+| task | commit  | one-line summary |
+|---|---|---|
+| 1 | a4f549e | fix `valid_mask_fn` ↔ `chi_loss` token-counting consistency by intersecting both masks before counting |
+| 2 | bdc3316 | add `.github/workflows/ci.yml` for ruff / mypy / pytest unit tier |
+
+### Surprise during task 1 — the spec prose was incomplete
+
+The task description in `TASKS_NEXT.md` said the fix was a one-line
+change: pass the bundle's `vmask` as `attention_mask` to
+`chi_loss_cross_entropy_unnormalized`. Tracing through the bug case
+the task itself uses (TinyMLP, all-True `valid_mask_fn`, some
+`labels=-100`) showed that single change is **necessary but not
+sufficient**: the numerator's mask becomes `(labels != -100) & vmask`
+(the intersection), but the denominator stays as `vmask.sum()`. For
+the all-True superset case the intersection equals `labels != -100`,
+which is what the numerator was already using — so the literal one-line
+fix changes nothing in this example, and the example stays wrong.
+
+The two-change fix that actually landed in a4f549e:
+
+1. Pass `vmask` as `attention_mask` to `chi_loss_cross_entropy_unnormalized`
+   so the numerator uses the intersection.
+2. Compute the same intersected mask once via `valid_token_mask(targets,
+   ignore_index=..., attention_mask=vmask)` and use **its** `.sum()` for
+   `n_valid_local`, instead of `vmask.sum()`.
+
+Both numerator and denominator now count the same set of positions by
+construction. Worked example: `targets = [3, 2, -100, -100, -100, 1, 0, 2]`,
+`vmask = [T,T,T,T,T,T,T,T]` → intersection `[T,T,F,F,F,T,T,T]` → 5 valid;
+`chi_loss = (sum at positions 0,1,5,6,7) / 5²` instead of the buggy
+`/ 8²`.
+
+The spec prose in `TASKS_NEXT.md` Task 1 is annotated with a
+"**Done in commit a4f549e.**" pointer that calls out this gap, so
+agents reading the historical task block don't get confused.
+
+The lesson is the obvious one: cost estimates of "small (~5 lines)"
+can compress two-line fixes into one-line prescriptions. Trace through
+the example before assuming a literal prose reading is the whole fix.
+
+### Task 2 caveat — CI committed, not yet observed
+
+`.github/workflows/ci.yml` matches the spec exactly (single matrix
+entry `python-3.11`, `astral-sh/setup-uv@v3` with cache enabled,
+`uv sync --extra dev`, four separate steps for ruff check / ruff
+format check / mypy strict / pytest unit tier). All four commands
+pass on the local venv at the same configuration the workflow will
+run. **The workflow itself has not yet been observed running** — no
+push to GitHub has occurred since the commit landed. The Tier 1
+done-criterion "CI is set up and passing on the master branch" is
+half-met: set up locally and proven equivalent, but the green-checks
+will only show up on the next push.
+
+### Doc updates that landed alongside tasks 1 and 2
+
+- CLAUDE.md test counts: 49 → 50 unit, 67 → 68 total (in the task 1
+  commit, per the "edit the paragraph in the same commit" rule).
+- CLAUDE.md "Loss handling" gained one sentence on the
+  `valid_mask_fn` × `labels=-100` intersection rule.
+- CLAUDE.md "Known issues" lost the now-fixed `valid_mask_fn` entry
+  (task 1 commit) and the now-fixed "no CI yet" entry (task 2 commit).
+- CLAUDE.md "Tooling → CI" line updated from "Not yet set up" to
+  point at `.github/workflows/ci.yml` and describe what it runs.
+
+`SESSION_SUMMARY.md` itself is **not** rewritten in this phase; the
+formal session-boundary refresh is task 8's job (per `TASKS_NEXT.md`).
+The "v1.2 phase progress" section above is the lightweight in-flight
+note that bridges this session and the next without claiming the
+phase is over.
+
 ## Permissions notes
 
 The `.claude/settings.local.json` was extended during this session to grant

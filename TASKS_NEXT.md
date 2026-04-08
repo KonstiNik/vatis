@@ -111,6 +111,14 @@ independent; do them in the order listed unless one blocks.
 
 ### Task 1 — Fix `valid_mask_fn` ↔ `chi_loss` token-counting disagreement
 
+**Done in commit a4f549e.** The literal prose below describes a one-line
+fix (pass `vmask` as `attention_mask`); the as-implemented fix is two
+lines (also update `n_valid_local` to count the same intersected mask).
+The single-line version is necessary but not sufficient — it leaves the
+denominator using `vmask.sum()`, so the example this task itself uses
+(MLP, all-True vmask, some `labels=-100`) is still wrong after it. See
+`SESSION_SUMMARY.md` "v1.2 phase progress" for the gap analysis.
+
 **The bug.** The analyzer's `chi_loss` accumulator uses
 `_extract_targets(micro)` and `chi_loss_cross_entropy_unnormalized`,
 which check `valid_token_mask(targets, ignore_index=...)` internally
@@ -155,6 +163,10 @@ valid_mask_fn produces the same chi_loss as the same MLP with the
 Commit: `task 1: fix valid_mask_fn / chi_loss token-counting consistency`.
 
 ### Task 2 — Add CI
+
+**Done in commit bdc3316.** `.github/workflows/ci.yml` matches the
+spec below; the workflow has not been observed running yet because no
+push to GitHub has occurred since the commit landed.
 
 There is no CI yet. Add `.github/workflows/ci.yml` that runs:
 
