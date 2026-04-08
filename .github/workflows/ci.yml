@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: ruff check
+        run: uv run ruff check vatis/ tests/
+
+      - name: ruff format check
+        run: uv run ruff format vatis/ tests/ --check
+
+      - name: mypy strict
+        run: uv run mypy vatis/
+
+      - name: pytest (unit tier)
+        run: uv run pytest tests -m "not integration and not cross_validation"

@@ -374,7 +374,7 @@ Soft (extras):
     | `grad_norm_squared` | `delta_loss` |
 
     **Any disagreement larger than the Hutchinson noise floor is a bug in vatis** (perspic is the reference). If a change you make requires loosening one of these tolerances to pass, that's a red flag — investigate before loosening.
-- **CI:** Not yet set up. The intent is GitHub Actions, single matrix entry `python-3.11`, running `ruff check`, `ruff format --check`, `mypy`, `pytest -m "not integration and not cross_validation"`. Adding CI is on the v1.2 work order.
+- **CI:** GitHub Actions workflow at `.github/workflows/ci.yml`. Single matrix entry `python-3.11`, runs `ruff check`, `ruff format --check`, `mypy`, `pytest -m "not integration and not cross_validation"` against `uv sync --extra dev`. Triggers on push to any branch and PRs to `master`. Added in v1.2 task 2.
 
 ## Working conventions (for the agent building this)
 
@@ -436,7 +436,6 @@ Latent bugs and quirks that an agent walking into the repo should be aware of. T
 
 - **`ParquetSink` truncates on re-open within the same path** — calling `analyze()` twice with `sink="path.parquet"` overwrites the file each time. The deployment example sidesteps this via the single-`analyze()`-with-multiple-revisions pattern, but it's an obvious footgun for any user who loops manually. Either fix or document explicitly. Tier 1 in `TASKS_NEXT.md`.
 - **Multi-GPU DDP path is unverified on real GPUs** — only the 2-rank CPU loopback test exercises it. No real-GPU integration test exists. Tier 1 in `TASKS_NEXT.md`.
-- **No CI yet** — `.github/workflows/` does not exist. The test suite is only as good as the agent's discipline about running it. Tier 1 in `TASKS_NEXT.md`.
 - **Custom (non-CE) `loss_fn` is not really supported** — `delta_loss` will use whatever `loss_fn` you pass, but `chi_loss` always uses the closed-form CE shortcut. Mixing the two produces wrong observables. The autograd fallback was deleted in v1.1 task 6 to avoid silent wrong-answer modes. Real support is the v1.2 feature work. Tier 2 in `TASKS_NEXT.md`.
 - **`OpacusEstimator` is still a stub** — the original v1 spec called this v1.1 work; v1.1 was hardening instead. It's now Tier 2 in `TASKS_NEXT.md`.
 
