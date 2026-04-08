@@ -1,7 +1,10 @@
 """vatis deployment example: LNA observables across pythia-14m revisions.
 
-Single-GPU end-to-end example. Loads ``EleutherAI/pythia-14m`` at nine
-training checkpoints, evaluates two distinct fixed eval batches at each
+Single-GPU end-to-end example. Loads ``EleutherAI/pythia-14m`` at
+thirteen training checkpoints — four log-spaced ones from the early
+training phase (``step1, step8, step64, step512``) and nine roughly
+log-spaced ones spanning the rest of training (``step1000`` through
+``step143000``) — evaluates two distinct fixed eval batches at each
 checkpoint, computes both self-pair and cross-pair LNA observables,
 writes the result to a long-format parquet file, and produces four
 plots showing each observable as a function of training step.
@@ -26,10 +29,11 @@ loss directions become more or less aligned as Pythia trains?
 
 Sized to fit comfortably under the 15-minute budget on the reference
 hardware (RTX 3090 Ti, see ``examples/BENCHMARK.md`` for the budget
-arithmetic). On that hardware the script wallclock is ~15 s
-including model loads. Slower hardware or a cold HF cache will take
-longer; the rate-limiting step is the per-checkpoint download/load,
-not the chi_net computation.
+arithmetic). On that hardware the script wallclock is ~20 s with a
+warm HF cache and ~50 s on the first run (the four early-phase
+checkpoints add ~30 s of cold downloads). Slower hardware or a cold
+HF cache will take longer still; the rate-limiting step is the
+per-checkpoint download/load, not the chi_net computation.
 
 Run with::
 
@@ -72,11 +76,20 @@ from vatis import analyze
 
 MODEL = "EleutherAI/pythia-14m"
 
-# Nine pythia checkpoints spanning the published training schedule
-# (pythia-14m has revisions at every 1000 steps from 1000 to 143000).
-# A coarse log-spaced subset gives a clean trajectory without spending
-# too much time on checkpoint loading.
+# Thirteen pythia checkpoints spanning the published training schedule.
+# The early "log-spaced" phase (step1, step8, step64, step512) is
+# essential for catching the rapid pre-training dynamics — the cross
+# delta_loss(prose, code) only crosses zero somewhere in the first few
+# thousand steps, and without log-spaced early checkpoints we'd see a
+# truncated trajectory. step0 (random init) is omitted because log(0)
+# can't go on a log x-axis; step1 is one optimizer step away from init
+# and tells the same "barely trained" story without breaking the plot.
+# The main phase (step1000–step143000) gives the long-tail dynamics.
 REVISIONS: list[str] = [
+    "step1",
+    "step8",
+    "step64",
+    "step512",
     "step1000",
     "step2000",
     "step4000",

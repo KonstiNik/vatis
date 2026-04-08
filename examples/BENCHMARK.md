@@ -36,20 +36,26 @@ Per the task brief: the example must run end-to-end in **under 15 minutes**.
 
 ```
 example_budget       = 15 min                                     = 900 s
-model_load_amortized = 9 revisions × ~7 s/load                    = 63 s
+model_load_amortized = 13 revisions × ~3 s/load (warm cache)      = 39 s
+                       (cold cache: 13 × ~7 s = 91 s on first run)
 headroom             = 30% × 900 s                                = 270 s
-compute_budget       = 900 s − 63 s − 270 s                       = 567 s
+compute_budget       = 900 s − 39 s − 270 s                       = 591 s
 per_call_wallclock   = max(hutch, cv) at chosen parameters        ≈ 0.4 s
                        (per_seq_cv, n_h=32, B=8, S=128 — see table)
-max_pairs_in_budget  = 567 s / 0.4 s/pair                         ≈ 1417 pairs
+max_pairs_in_budget  = 591 s / 0.4 s/pair                         ≈ 1477 pairs
 required_pairs       = revisions × (self_pairs + cross_pairs)
-                     = 9 × (2 + 1)                                = 27 pairs
-slack                = 1417 − 27                                  = 1390 pairs
+                     = 13 × (2 + 1)                               = 39 pairs
+slack                = 1477 − 39                                  = 1438 pairs
 ```
 
-The actual measured wallclock with real-text inputs and the cross-pair
-on (`pythia_sweep.py` as committed) is **~17 s end-to-end**. We're
-using <2% of the available compute headroom — the bottleneck is
+The actual measured wallclock with real-text inputs, the cross-pair,
+and 13 checkpoints (`pythia_sweep.py` as committed) is:
+
+- **~50 s end-to-end on the first run** (cold HF cache for the 4 new
+  early-phase checkpoints — each is a fresh ~3–4 s download).
+- **~20 s on subsequent runs** (warm HF cache).
+
+We're using <3% of the available compute headroom — the bottleneck is
 checkpoint loading, not analysis. Sizing was deliberately conservative
 so that future maintainers running on slower hardware (or with a cold
 HF cache) still hit the 15-minute budget. Bumping `n_hutchinson` to
@@ -87,13 +93,49 @@ The example also computes the **cross-pair** observable
 product per checkpoint, zero extra backward passes — the gradients are
 already cached from the self-pair work) and is the most LNA-relevant
 quantity in the example: it measures whether a gradient step on prose
-helps or hurts the model on code. On `pythia-14m`, the cross
-delta_loss starts **positive** (~+2.6 at step1000) and crosses zero
-around step4000, then drifts negative — the prose and code loss
-directions become anti-aligned during training, the negative-`chi_pos`
-interference regime discussed in `background_info.tex §A.2`. None of
-that signal would be visible on random-integer inputs, where every
-batch is statistically equivalent to every other.
+helps or hurts the model on code.
+
+The example uses **13 revisions** spanning the published Pythia
+training schedule, with four log-spaced early checkpoints:
+
+```
+step1, step8, step64, step512,                          # log-2 phase
+step1000, step2000, step4000, step8000, step16000,      # main phase,
+step32000, step64000, step128000, step143000            # roughly log-2
+```
+
+The early phase is essential. Without it the trajectories look
+deceptively smooth and monotonic; with it several non-trivial features
+are visible:
+
+1. **chi_loss is flat at 1.0 through step64** on both batches. The
+   model literally doesn't improve on next-token prediction in the
+   first 64 SGD steps — those steps are warmup, not learning.
+2. **chi_net has a U-shape in the first ~100 steps.** It starts at
+   ~1e8 at step1 (the random-init Frobenius norm), drops by ~3× to
+   ~3e7 at step64, then climbs back up and grows monotonically to
+   ~5e10 by step143000. The dip is not noise — it shows up identically
+   on both prose and code, and it shows up in self delta_loss too.
+   Plausible interpretation: the very first SGD steps "smooth out"
+   high-magnitude initialization noise before the model starts
+   building structured representations.
+3. **The cross delta_loss has non-monotonic structure**. It starts
+   at **+3.25 at step1** (prose and code gradients well-aligned on a
+   random model), drops to **+0.95 at step64** (essentially
+   orthogonal), climbs back to **+2.62 at step1000**, then declines
+   and **crosses zero around step4000**, ending at **−18 by
+   step143000**. The non-monotonic phase between step1 and step1000
+   is invisible without the early checkpoints — without them the
+   trajectory looks like a clean monotonic decline from positive to
+   negative, and we'd be telling a much simpler (and partially
+   wrong) story about the dynamics.
+
+The negative end of the cross delta_loss trajectory is the
+negative-`chi_pos` interference regime discussed in
+`background_info.tex §A.2`: a gradient step that decreases prose loss
+*increases* code loss, and vice versa. None of this signal would be
+visible on random-integer inputs, where every batch is statistically
+equivalent to every other.
 
 ## Benchmark sweep
 
@@ -171,13 +213,16 @@ HF_HOME=/data/knikolaou/huggingface .venv/bin/python examples/pythia_sweep.py
 Outputs:
 
 - `examples/results.parquet` — the canonical long-format result table
-  (162 rows: 9 ckpts × 6 observables × (2 self pairs + 1 cross pair))
+  (234 rows: 13 ckpts × 6 observables × (2 self pairs + 1 cross pair))
 - `examples/chi_loss.png`, `examples/chi_net.png` — self-pair
-  trajectories (one line per eval batch). chi_loss decreases on both
-  prose and code, more strongly on code; chi_net grows ~80× over
-  training on both.
+  trajectories (one line per eval batch). chi_loss is flat at 1.0
+  through step64, then drops faster on code than on prose (0.93 → 0.71
+  vs 0.95 → 0.87 between step1000 and step143000). chi_net has a
+  U-shape in the first ~100 steps, then grows ~1500× from its step64
+  minimum (~3e7) to step143000 (~5e10).
 - `examples/delta_loss.png`, `examples/chi_pos.png` — self pairs and
   the prose×code cross pair on the same axes (symlog scale because the
-  cross values cross zero). The cross delta_loss goes negative around
-  step4000, indicating gradient interference between the two
-  distributions.
+  cross values cross zero). The cross delta_loss has non-monotonic
+  early-phase structure (step1: +3.25 → step64: +0.95 → step1000:
+  +2.62 → step4000: −0.12 → step143000: −18) and only crosses zero
+  permanently around step4000.
