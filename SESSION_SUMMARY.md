@@ -1,7 +1,7 @@
 # vatis — session summary
 
-End-to-end build of `vatis` per `CLAUDE.md`. Single agent session, autonomous,
-all 56 tests green.
+End-to-end build of `vatis` per `CLAUDE.md`, plus a v1.1 hardening pass per
+`TASKS_NEXT.md`. Two agent sessions, autonomous, **67 tests green**.
 
 ## Read first
 
@@ -118,18 +118,27 @@ Two correctness-relevant implementation details that aren't obvious from
 | HF model loading + analysis on real Llama-1.25M | ✓ | `tests/integration/test_hf_load.py` |
 | `python -m vatis run --help` | ✓ | manual smoke |
 
-### Test counts
+### Test counts (after v1.1 hardening pass)
 
 ```
-tests/unit/                42 tests   (test_normalization, test_probes, test_observables,
-                                       test_chi_net, test_distributed, test_analyzer)
-tests/cross_validation/    10 tests   (test_vs_perspic, parametrized over engine × method)
+tests/unit/                49 tests   (test_normalization 8, test_probes 7,
+                                       test_observables 6, test_chi_net 15,
+                                       test_distributed 4, test_analyzer 9)
+tests/cross_validation/    14 tests   (test_vs_perspic, parametrized over
+                                       engine × method)
 tests/integration/          4 tests   (test_ddp_loopback + test_hf_load)
                           ----
-                           56 tests
+                           67 tests
 ```
 
-Run with `.venv/bin/python -m pytest tests` (~30 s on CPU).
+Run with `.venv/bin/python -m pytest tests` (~65 s on the reference single
+RTX 3090 Ti, ~30 s for unit tests only).
+
+Test count delta from v1 (56 → 67):
+- `test_observables`: −3 (`chi_loss_from_autograd` tests deleted in task 6)
+- `test_chi_net`: +8 (5 memory pre-check, 2 exact-NTK ground truth, 1 LM padding)
+- `test_analyzer`: +2 (cross-pair contract, revision threading)
+- `test_vs_perspic`: +4 (2 tight-tolerance parametrized, 2 heavy-padding parametrized)
 
 ### Cross-validation key map (verified against perspic)
 
@@ -178,8 +187,8 @@ The math behind the mapping:
 ## What is blocked or risky
 
 Nothing is blocked. There is no `BLOCKED.md` — no permission denial or
-external obstacle was hit during the build. A few notes on things that
-could trip a future maintainer:
+external obstacle was hit during the build or the v1.1 hardening pass.
+A few notes on things that could trip a future maintainer:
 
 1. **`hash()` randomization.** Originally `_per_call_seed` used Python's
    built-in `hash((seed, ckpt_id, batch_name))` which is randomized per
@@ -188,23 +197,38 @@ could trip a future maintainer:
    (`vatis/analyzer.py::_per_call_seed`) uses `hashlib.sha256` for a
    deterministic mix. **Don't undo this** — the deterministic seed is what
    makes Hutchinson reproducible across runs.
-2. **Per-sequence-CV memory cost.** The estimator stores `B` flat
-   parameter-space gradient vectors at once (one per sample). For an 8B
-   model with `B=32` that's ~512 GB, infeasible. The auto-selection rule
-   keeps `per_sequence_cv` for `B ≤ 32` only, but for very large models the
-   user should explicitly request `chi_net_method="hutchinson"`. There's a
-   prominent docstring warning in `per_seq_cv.py`.
+2. **Per-sequence-CV memory cost.** ~~Latent footgun~~ **Now guarded.** Task 7
+   added a startup check (`PerSequenceControlVariateEstimator.check_memory_feasible`)
+   that raises if `B * n_params * 4 > 0.5 * available_device_memory`. The
+   auto-selection rule still picks `per_sequence_cv` for `B ≤ 32` only, but
+   the check fires regardless of how the estimator was constructed. For
+   8B-class models the check kicks in early and recommends switching to
+   `chi_net_method="hutchinson"`.
 3. **`ParquetSink` streaming uses `pyarrow.parquet.ParquetWriter`** which
    keeps the file handle open across flushes. Don't try to read the parquet
-   file from a separate process while a streaming writer is active.
-4. **The analyzer's cross-pair path** (`_compute_cross_pair`) computes
-   `delta_loss(A, B)` from cached self-pair gradients, but it currently
-   reads `chi_loss_a / chi_loss_b` from an attribute cache that's only
-   populated during the self loop. If a user ever calls
-   `_compute_cross_pair` before the corresponding self pairs, it will fall
-   back to zeros. The public API (`Analyzer.run`) always calls self pairs
-   first, so this is safe in practice.
-5. **The opacus warning during cross-validation tests** about
+   file from a separate process while a streaming writer is active. Also:
+   each new `analyze()` call constructs a fresh `ParquetSink` for the same
+   path, **truncating** the file. To accumulate across multiple `analyze()`
+   calls, either pass a single `ParquetSink` instance or use the
+   `revisions=[...]` parameter so a single `analyze()` call drives the
+   whole sweep. The deployment example in `examples/pythia_sweep.py`
+   demonstrates the latter. (See FOLLOWUPS.md for the systematic fix.)
+4. **The analyzer's cross-pair path** (`_compute_cross_pair`):
+   ~~Latent footgun~~ **Now guarded.** Task 5 added a precondition assert
+   that raises a clear `RuntimeError` if `_compute_cross_pair` is called
+   before the corresponding `_compute_self_pair`. The cache dicts are
+   eagerly initialized in `__init__`. The public `Analyzer.run` always
+   runs the self loop first, so the contract is invisible to normal users.
+5. **`Bundle.valid_mask_fn` and `chi_loss` token counting can disagree.**
+   The analyzer's `chi_loss` accumulator uses `valid_token_mask` (which
+   honors `labels=-100`) to compute the raw squared sum, but the
+   `n_valid` count (used to divide by `N²`) comes from
+   `bundle.valid_mask_fn`. If a user supplies a `valid_mask_fn` that
+   doesn't agree with the labels-vs-ignore_index convention, the two
+   paths will use different masks and chi_loss will be subtly wrong.
+   Task 4 sidesteps this by using a consistent `valid_mask_fn`. The
+   systematic fix is one line in the analyzer; see FOLLOWUPS.md.
+6. **The opacus warning during cross-validation tests** about
    `register_full_backward_hook` is from perspic's internal implementation,
    not ours. Ignore.
 
@@ -271,11 +295,11 @@ cd /tikhome/knikolaou/PycharmProjects/vatis
 .venv/bin/ruff check vatis/ tests/      # 0 errors
 .venv/bin/ruff format vatis/ tests/ --check
 .venv/bin/mypy vatis/                    # strict, 0 errors
-.venv/bin/python -m pytest tests        # 56 passed in ~30s
+.venv/bin/python -m pytest tests        # 67 passed in ~65s
 
 # Or run individual marker subsets:
-.venv/bin/python -m pytest tests/unit -q                       # 42 tests
-.venv/bin/python -m pytest tests/cross_validation -m cross_validation -q   # 10 tests
+.venv/bin/python -m pytest tests/unit -q                                   # 49 tests
+.venv/bin/python -m pytest tests/cross_validation -m cross_validation -q   # 14 tests
 .venv/bin/python -m pytest tests/integration -m integration -q             # 4 tests
 ```
 
@@ -283,9 +307,10 @@ cd /tikhome/knikolaou/PycharmProjects/vatis
 
 In rough order of "look at this first":
 
-1. **`vatis/core/observables.py`** — closed-form chi_loss, the autograd
-   fallback, delta_loss self/cross, the chi_pos combinator. The math is
-   short and self-contained.
+1. **`vatis/core/observables.py`** — closed-form chi_loss, delta_loss
+   self/cross, the chi_pos combinator. The math is short and
+   self-contained. (The autograd fallback was removed in v1.1 task 6;
+   non-CE losses are deferred to v1.2.)
 2. **`vatis/core/chi_net/per_seq_cv.py`** — the control-variate estimator
    with the full math derivation in the module docstring. This is the most
    subtle file.
@@ -306,6 +331,79 @@ If you want to understand DDP, read:
 7. **`vatis/distributed/sharding.py`** + the DDP block in
    `vatis/analyzer.py::_compute_self_pair` (the `if is_distributed():`
    branch), which shows the rank-weighting trick for the loss gradient.
+
+## v1.1 hardening pass
+
+A second autonomous session driven by `TASKS_NEXT.md`. Goal was *trust*
+and *demonstrability*, not new features. Eight tasks plus the baseline
+commit. Worked through them in the recommended order
+(`0 → 5 → 6 → 7 → 2 → 3 → 4 → 1 → 8` plus the final SESSION_SUMMARY
+update). All tests still green at the end of every task.
+
+### What got done
+
+| task | one-line summary | files touched | tests added |
+|---|---|---|---|
+| 0 | baseline commit (`git init`, snapshot of v1 build state) | `.gitignore` | — |
+| 5 | assert self-pair precedence in `_compute_cross_pair`; eagerly init caches | `vatis/analyzer.py`, `tests/unit/test_analyzer.py` | +1 |
+| 6 | delete unused `chi_loss_from_autograd`; non-CE losses deferred to v1.2 | `vatis/core/observables.py`, `tests/unit/test_observables.py`, `SESSION_SUMMARY.md`, `vatis/analyzer.py` (docstring) | −3 |
+| 7 | startup memory pre-check in `PerSequenceControlVariateEstimator` (refuses configs that would need >50% of free GPU/host RAM in per-sample grad cache) | `vatis/core/chi_net/per_seq_cv.py`, `tests/unit/test_chi_net.py` | +5 |
+| 2 | exact-NTK ground-truth tests for `chi_pos` and `delta_loss(A, B)` via an explicit per-token Jacobian builder; tight 1e-5 tolerance | `tests/unit/test_chi_net.py` | +2 |
+| 3 | tight-tolerance perspic cross-check at `n_hutchinson=16384` (rel 0.3%, abs 1e-6) for both vatis methods | `tests/cross_validation/test_vs_perspic.py` | +2 |
+| 4 | heavy-padding cross-validation: TinyMLP with 5/8 samples ignored vs perspic on the unpadded subset, plus an LM-padding regression against the exact-NTK Jacobian builder | `tests/cross_validation/test_vs_perspic.py`, `tests/unit/test_chi_net.py` | +3 |
+| 1 | deployment example + benchmark on `pythia-14m`: `examples/pythia_sweep.py` (~13 s end-to-end on RTX 3090 Ti), `examples/BENCHMARK.md` (18-row benchmark sweep + budget arithmetic), three plots, parquet output. Surfaced and fixed a latent bug: self-pair rows were emitting `revision=""` regardless of input. | `examples/`, `vatis/analyzer.py`, `tests/unit/test_analyzer.py`, `pyproject.toml`, `uv.lock` | +1 |
+| 8 | `CLAUDE.md.proposed` with allowed-section updates; `FOLLOWUPS.md` for items in the forbidden sections | `CLAUDE.md.proposed`, `FOLLOWUPS.md` | — |
+
+Total test delta: 56 → 67 (+11). All 67 tests pass; lint, format, and
+strict mypy are clean.
+
+### What got skipped (and why)
+
+Nothing was skipped. There is no `BLOCKED.md` from this session — every
+task ran to completion. `FOLLOWUPS.md` lists three categories of
+items that were noticed but deliberately not addressed:
+1. Stale paragraphs in CLAUDE.md sections that were forbidden to edit
+   in task 8 (mostly the "Loss handling" paragraph that still describes
+   the deleted autograd fallback).
+2. Two latent issues that aren't strictly bugs but could surprise users
+   (`Bundle.valid_mask_fn` vs chi_loss token-counting disagreement,
+   `ParquetSink` truncation on re-open within the same path).
+3. The 8B/A100 compute-scaling estimates in CLAUDE.md remain
+   unmeasured; the v1.1 example used a 14M/3090 Ti reference instead.
+
+### Surprises during the pass
+
+- `uv add matplotlib` silently upgraded torch from 2.8.0 to 2.11.0,
+  which broke the resident torchvision 0.23 build. Resolved by
+  reinstalling torch 2.8.0 explicitly and pinning `torch >=2.2,<2.11`
+  in `pyproject.toml`. The pin is documented inline so future agents
+  know why it exists.
+- Task 1 surfaced a latent bug in `_compute_self_pair`: the revision
+  field was hardcoded to `""` instead of being threaded through from
+  `_run_one_checkpoint`. Fixed inside the same commit with a unit
+  test. The bug had been invisible to the test suite because the v1
+  unit tests only checked rows from a single checkpoint at a time.
+- The toy fixture in `tests/fixtures/tiny_transformer.py` is sized
+  small enough that the explicit Jacobian builder (added for task 2)
+  runs in ~5 s; the resulting tests give us bulletproof ground truth
+  for `chi_pos` and `delta_loss(A,B)` without any Hutchinson noise.
+
+### Reproducing v1.1
+
+```bash
+cd /tikhome/knikolaou/PycharmProjects/vatis
+# Tests, lint, types
+.venv/bin/python -m pytest tests          # 67 passed
+.venv/bin/ruff check vatis/ tests/        # 0 errors
+.venv/bin/ruff format vatis/ tests/ --check
+.venv/bin/mypy vatis/                     # 0 errors
+
+# Deployment example (uses /data/knikolaou/huggingface for the HF cache)
+HF_HOME=/data/knikolaou/huggingface .venv/bin/python examples/pythia_sweep.py
+
+# Benchmark sweep (the table in examples/BENCHMARK.md)
+HF_HOME=/data/knikolaou/huggingface .venv/bin/python examples/_benchmark.py
+```
 
 ## Permissions notes
 

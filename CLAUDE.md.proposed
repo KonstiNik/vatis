@@ -162,16 +162,17 @@ the v1.1 hardening pass.
   is an additive note — propose adding it once to `tests/` heading):
 
   ```
-  Test counts at the end of v1.1: 52 unit tests + 12 cross-validation
-  tests + 4 integration tests = 66 total. CI runs 52 (unit only).
+  Test counts at the end of v1.1: 49 unit tests + 14 cross-validation
+  tests + 4 integration tests = 67 total. CI runs 49 (unit only).
   ```
 
-  (52 = 42 v1 unit tests + 5 task-7 memory tests + 2 task-2 NTK tests
-  + 1 task-4 LM padding test + 1 task-5 cross-pair contract test +
-  1 task-1 revision-threading test. 12 = 10 v1 cross-validation tests
-  + 2 task-3 tight tolerance + 2 task-4 heavy padding −2 because the
-  task-3 test is parametrized over methods only, etc. The exact split
-  is in `git log --grep "task " --oneline`.)
+  (49 = 42 v1 unit tests − 3 (task 6 deleted `chi_loss_from_autograd`
+  tests) + 5 (task 7 memory tests) + 2 (task 2 exact-NTK tests) +
+  1 (task 4 LM padding test) + 1 (task 5 cross-pair contract test) +
+  1 (task 1 revision-threading test). 14 = 10 v1 cross-validation tests
+  + 2 (task 3 tight-tolerance, parametrized over both vatis methods)
+  + 2 (task 4 heavy padding, parametrized over both vatis methods).
+  The exact split is in `git log --oneline`.)
 
 **Rationale**: the existing description references the
 `chi_loss_from_autograd` ground truth, which v1.1 deleted (task 6).
