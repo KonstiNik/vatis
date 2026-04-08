@@ -1,0 +1,95 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vatis"
+version = "0.1.0"
+description = "Compute LNA observables (chi_loss, chi_net, chi_pos) on pretrained model checkpoints, scaled across multiple GPUs via DDP."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "vatis authors" }]
+dependencies = [
+    "torch>=2.2",
+    "transformers>=4.40",
+    "pyarrow>=14",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+wandb = ["wandb>=0.16"]
+tensorboard = ["tensorboard>=2.15"]
+dev = [
+    "pytest>=8.0",
+    "pytest-timeout>=2.2",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+vatis = "vatis.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["vatis"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "vatis/**",
+    "pyproject.toml",
+    "CLAUDE.md",
+    "README.md",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B", "UP", "SIM"]
+ignore = [
+    "E501",  # line length handled by formatter
+    "B008",  # function call in default argument is fine for our DI patterns
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["vatis"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_decorators = false
+plugins = []
+
+[[tool.mypy.overrides]]
+module = [
+    "transformers",
+    "transformers.*",
+    "pyarrow",
+    "pyarrow.*",
+    "wandb",
+    "wandb.*",
+    "tensorboard.*",
+    "torch.distributed.*",
+    "torch.utils.tensorboard",
+    "torch.utils.tensorboard.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: end-to-end tests using real HF checkpoints (skipped in CI)",
+    "cross_validation: tests that compare vatis observables against perspic (skipped in CI)",
+    "slow: tests that take more than a few seconds",
+]
+addopts = "-q --strict-markers"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+    "ignore::UserWarning:torch.*",
+]

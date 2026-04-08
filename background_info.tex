@@ -1,0 +1,261 @@
+
+In this section, we introduce a decomposition of the loss dynamics into three components: the loss-network-alignment (LNA) decomposition. This framework enables computationally efficient computation of the alignment component, that otherwise requires expensive eNTK calculations. \\
+For simplicity, we present the derivation for full-batch gradient descent. While stochastic mini-batch training introduces additional complexity, the core concepts extend naturally, as discussed in the ``In Practice'' paragraph below. The full derivation is provided in Appendix~\ref{sec:derivation_lnas}.
+
+% Definition of Setup
+Let \(\mathbf{X}=[\mathbf{x}_1, ..., \mathbf{x}_D]^T\) denote the matrix of \(D\) training inputs \(\mathbf{x}_i\) and \(\mathbf{Y}=[y_1, ..., y_D]^T\) be the corresponding target outputs, which can be either supervised labels or self-supervised targets.
+Let the neural network be represented by a function \(f(\mathbf{x}; \boldsymbol{\theta})\) with parameters \(\boldsymbol{\theta}\).
+
+% Define Loss Change and Linear Component
+The training process involves minimizing a loss function \(\mathcal{L}(f(\mathbf{X}; \boldsymbol{\theta}), \mathbf{Y}) := \mathcal{L}(\mathbf{X}, \boldsymbol{\theta})\), over the dataset.\footnote{For simplicity, we omit the explicit notation of targets, as each input has a corresponding pair.}
+During training, the parameters \(\boldsymbol{\theta}\) are updated iteratively using gradient descent (GD).
+\begin{equation}
+\Delta \boldsymbol{\theta}_t := \boldsymbol{\theta}_{t+1} - \boldsymbol{\theta}_t =  - \eta \nabla_{\boldsymbol{\theta}} \mathcal{L}(\mathbf{X}, \boldsymbol{\theta}_t),
+\end{equation}
+where \(\eta\) is the learning rate. 
+Over the course of training, the loss decreases from its initial value \(\mathcal{L}(\mathbf{X}, \boldsymbol{\theta}_0)\) to \(\mathcal{L}(\mathbf{X}, \boldsymbol{\theta}_t)\) at training step \(t\).
+The change of the loss to a parameter update is given by
+\begin{equation}
+    \Delta \mathcal{L}(\mathbf{X}, \boldsymbol{\theta}_t) := \mathcal{L}(\mathbf{X}, \boldsymbol{\theta}_{t+1}) - \mathcal{L}(\mathbf{X}, \boldsymbol{\theta}_t) \, .
+    \label{eq:loss_change_def}
+\end{equation}
+To disentangle the factors driving the loss decrease, we use a first-order Taylor expansion to distinguish linear and non-linear contributions to the loss change at each training step \(t\).
+For sufficiently small learning rates \(\eta\), the parameter updates \(\Delta \boldsymbol{\theta}_t\) are small, making this expansion accurate:
+\begin{equation}
+\begin{split}
+    \Delta \mathcal{L}(\mathbf{X}, \boldsymbol{\theta}_t) 
+    &= \underbrace{\nabla^T_{\boldsymbol{\theta}} \mathcal{L}(\mathbf{X}, \boldsymbol{\theta}_t) \, \Delta \boldsymbol{\theta}_t}_{\text{(linearized change)}}
+    + \underbrace{O\!\left(\left\|\Delta \boldsymbol{\theta}_t\right\|^2\right)}_{:=\nu_t \, \text{(non-linear correction)}} \\
+    &= -\eta \, \underbrace{\left\| \nabla_{\boldsymbol{\theta}} \mathcal{L}(\mathbf{X}, \boldsymbol{\theta}_t) \right\|^2}_{=:\delta \mathcal{L}_t} + \nu_t \\
+    &= -\eta \, \delta \mathcal{L}_t + \nu_t \, 
+    \label{eq:linear_response}
+\end{split}
+\end{equation}
+We used the gradient descent update rule to express the linear component \(\delta \mathcal{L}_t\) independently of the learning rate \(\eta\), and a non-linear correction term \(\nu_t\). An illustration of this decomposition is provided in Figure~\ref{fig:lna_intuition} (middle).
+% The term \(\delta \mathcal{L}_t\) captures the linear component and \(\nu_t\) quantifies the non-linear corrections (see Figure~\ref{fig:lna_intuition}, middle).
+
+% The relation in Equation~\ref{eq:r-lr} connects the linear component to the loss dynamics. 
+% This suggests that rather than analyzing the full nonlinear dynamics of the neural network during training, we can focus on understanding the linear component dynamics, which provides a tractable approximation to the training process. 
+
+% In statistical physics, collective variables are used to describe the macroscopic behavior of complex systems by reducing the number of degrees of freedom.
+% Following this approach, we define collective variables derived from the linear component to capture the essential features of the training dynamics.
+% \newpage 
+
+We decompose the linearized loss $\delta \mathcal{L}$ into three components representing distinct scale contributions: the network architecture, the loss function, and their alignment. 
+This decomposition takes the form
+\begin{align}
+    \delta \mathcal{L}
+    &= (\nabla_\theta \mathcal{L})^T  (\nabla_\theta \mathcal{L}) \\
+    &= (\nabla_f \mathcal{L})^T \underbrace{\nabla_\theta f (\nabla_\theta f)^T}_{=: \, \Theta = \sum_{k} \lambda_k q_k q_k^T
+    } \, \nabla_f \mathcal{L} \\
+    &= \sum_{k} (\nabla_f^T \mathcal{L} \, q_k)^2 \, \lambda_k \label{eq:loss_evolution_spectral} \\
+    &=\underbrace{\left\| \nabla_f \mathcal{L} \right\|_2^2 }_{=: \, \chi_{\text{loss}}} \,
+    \underbrace{\left\| \nabla_\theta f \right\|_F^2}_{=: \, \chi_{\text{net}}} \,
+    \underbrace{\sum_{k} \frac{ (\nabla_f^T \mathcal{L} \, q_k)^2 }{\left\| \nabla_f \mathcal{L} \right\|_2^2} \frac{\lambda_k}{\left\| \nabla_\theta f \right\|_F^2}}_{=: \, \chi_{\text{align}}} \\
+    &= \, \chi_{\text{loss}} \cdot \chi_{\text{net}} \cdot \chi_{\text{align}} \, ,
+    % List of unknown terms
+    \label{eq:loss_evolution_factorized}
+\end{align}
+where we have used \(\nabla_\theta \mathcal{L} = (\nabla_\theta f)^T \nabla_f \mathcal{L}\) and defined the empirical NTK as \(\Theta = \nabla_\theta f (\nabla_\theta f)^T\) with eigenvectors \(q_k\) and eigenvalues \(\lambda_k\). We denote the Frobenius norm by \(\left\| \cdot \right\|_F\) and the Euclidean norm by \(\left\| \cdot \right\|_2\). 
+The key steps involve projecting the loss evolution onto the eigenmodes of the eNTK and identifying scale contributions from the network, loss, and their interaction. 
+% While $\chi_{\text{net}}$ and $\chi_{\text{loss}}$ capture the magnitude of the network response and loss gradient respectively, $\chi_{\text{align}} \in [0, 1]$ is a scale-free quantity that characterizes their interaction through the NTK's spectral properties.
+
+\paragraph{The Magnitudes $\chi_{\text{net}}$ and $\chi_{\text{loss}}$} capture the individual scales of the network and loss function:
+$\chi_{\text{net}}$ quantifies the overall sensitivity of the network outputs to parameter changes, reflecting how responsive the model is to parameter updates. It is equivalent to the trace of the eNTK matrix $\chi_{\text{net}} = \text{Tr}(\Theta)$.
+$\chi_{\text{loss}}$ involves the magnitude of the loss gradient with respect to the network outputs, reflecting how sensitive the loss is to changes in predictions. This term only depends on the specific loss function used (e.g., MSE, cross-entropy) and the current prediction errors.
+\paragraph{The Kernel Alignment $\chi_{\text{align}}$} accounts for the complex interaction between the network and the loss, quantifying how well the neural network's update directions align with those that most effectively reduce loss. It is a dimensionless quantity with range \(\chi_{\text{align}} \in [0, 1]\).
+To understand it further, we can rewrite it as
+\begin{equation}
+    \chi_{\text{align}} = \sum_{k} \underbrace{\frac{ (\nabla_f^T \mathcal{L} \, q_k)^2 }{\left\| \nabla_f \mathcal{L} \right\|_2^2}}_{=:\gamma_k^2} \,
+    \underbrace{\frac{\lambda_k}{\left\| \nabla_\theta f \right\|_F^2}}_{=:\ p_k}
+    = \sum_{k} \gamma_k^2 \, p_k \, ,
+\end{equation}
+where \( \gamma_k \) are the \emph{alignment coefficients} quantifying how well the loss gradient aligns with the \(k\)-th eNTK eigenmode, and \( p_k \) are the \emph{normalized eigenvalues} representing the relative strength of each eNTK mode.
+%  the \emph{energy density} representing the fraction of the total eNTK energy in that mode.
+% where \(\gamma_k\) represents the fraction of the loss gradient energy aligned with the \(k\)-th NTK eigenmode, and \(p_k\) is the fraction of the total NTK energy in that mode.
+Note that \(\sum_k \gamma_k^2 = \sum_k p_k = 1 \), which means that \( \gamma_k^2 \) re-weights the eNTK spectrum according to how well each eigenmode aligns with the loss gradient.
+
+Intuitively, $\chi_{\text{align}}$ measures which spectral modes dominate learning: when the loss gradient primarily aligns with high-eigenvalue modes (large \(p_k\)), $\chi_{\text{align}} \to 1$, indicating learning from strong, well-represented directions. Conversely, when learning relies on low-eigenvalue modes (small \(p_k\)), $\chi_{\text{align}} \to 0$, signaling that the model exploits weak, fine-grained spectral directions to make progress.
+% Concepts like effective rank and kernel entropy are implicitly captured within $\chi_{\text{align}}$.
+
+\paragraph{From decomposition to efficiency:} While computing $\chi_{\text{align}}$ would traditionally require an expensive full eNTK computation, our approach circumvents this limitation: the terms $\chi_{\text{net}}$ and $\chi_{\text{loss}}$ can be computed directly from sample-wise gradient magnitudes~\cite{novak19a-pre,yousefpour22a-pre}. Additionally, we compute $\delta \mathcal{L}$, allowing us to access the coupling term indirectly via 
+\begin{equation}
+    {\chi_{\text{align}} = {\delta \mathcal{L}} / ({\chi_{\text{net}} \cdot \chi_{\text{loss}}})} \, .
+\end{equation}
+This effectively bypasses the expensive eNTK computation when computing the kernel alignment.  
+Our framework adds minimal overhead: computing the analysis in Figure~\ref{fig:scaling_and_alignment} alongside training increases total compute and memory costs by less than 2x (details on computational overhead are provided in Appendix~\ref{sec:app_lna_computation}).
+This enables the application of fine-grained analysis of learning dynamics to model scales where conventional eNTK-based methods become impractical—including the regime of modern vision transformers and language models relevant to scaling law research. 
+
+\paragraph{In Practice} we use a slightly more general form of the loss decomposition provided in Equation~\ref{eq:loss_evolution_factorized_mb_final_app}. 
+The full derivation is provided in Appendix~\ref{sec:derivations}, where we take into account the nature of stochastic mini-batch training (\ref{sec:derivation_lnas}), and introduce correct batch-size scaling (\ref{sec:app_lna_normalization}).
+The LNA-components retain their interpretations, but $\chi_{\text{align}}$ can become negative due to stochastic effects and overfitting. 
+
+
+
+\section{Derivations}\label{sec:derivations}
+\subsection{Derivation of LNA-components}\label{sec:derivation_lnas}
+
+In this section, we provide a detailed derivation of the decomposition of loss dynamics into three components: the loss-network-alignment (LNA) decomposition. This framework enables computationally efficient calculation of the alignment component, that otherwise requires expensive computations of the empirical neural tangent kernel (eNTK).
+While the main idea is presented in Section~\ref{sec:lna}, we here provide a detailed derivation of the framework, that includes dynamics of stochastic mini-batch training.
+
+% Definition of Setup
+Let \(\mathbf{X}=[\mathbf{x}_1, ..., \mathbf{x}_D]^T\) denote the matrix of \(D\) training inputs \(\mathbf{x}_i \in \mathbb{R}^n\) and \(\mathbf{Y}=[y_1, ..., y_D]^T\) be the corresponding matrix of targets \(\mathbf{y}_i \in \mathbb{R}^m\), which can be either supervised labels or self-supervised targets.
+Let the neural network be represented by a function \(f(\mathbf{x}; \boldsymbol{\theta}) \in \mathbb{R}^m\) with \(N\) parameters \(\boldsymbol{\theta} \in \mathbb{R}^N\).
+
+% Define Loss Change and Linear Component
+The training process involves minimizing a loss function \(\mathcal{L}(f(\mathbf{X}; \boldsymbol{\theta}), \mathbf{Y}) =: \mathcal{L}(\mathbf{X}, \boldsymbol{\theta})\), over the dataset. For simplicity, we omit the explicit notation of targets, as each input has a corresponding pair.
+During training, the parameters \(\boldsymbol{\theta}_t\) at training step \(t \in \mathbb{N}\) are updated iteratively using stochastic gradient descent (SGD) according to
+\begin{equation}
+\Delta \boldsymbol{\theta}_t := \boldsymbol{\theta}_{t+1} - \boldsymbol{\theta}_t =  - \eta \nabla_{\boldsymbol{\theta}} \mathcal{L}(\mathbf{X}_t, \boldsymbol{\theta}_t),
+\end{equation}
+where \(\eta\) is the learning rate and \(\mathbf{X}_t\) is the mini-batch of data sampled at training step \(t\).
+In each training step, the loss changes according to
+\begin{equation}
+    \Delta \mathcal{L}_t := \mathcal{L}(\mathbf{X}_{t+1}, \boldsymbol{\theta}_{t+1}) - \mathcal{L}(\mathbf{X}_t, \boldsymbol{\theta}_t) \, ,
+    \label{eq:loss_change_def_app}
+\end{equation}
+where the updated loss is typically evaluated on a new mini-batch \(\mathbf{X}_{t+1}\).
+Analyzing the full non-linear dynamics of neural networks during training is challenging, which is why we will focus on the linear component of the loss change. 
+That is, for small step sizes \(\eta\), we can linearize the loss change around the current parameters \(\boldsymbol{\theta}_t\):
+\begin{equation}
+\begin{split}
+    \Delta \mathcal{L}_t
+    &= \underbrace{\nabla^T_{\boldsymbol{\theta}} \mathcal{L}(\mathbf{X}_{t+1}, \boldsymbol{\theta}_{t}) \, \Delta \boldsymbol{\theta}_t}_{\text{(linearized change)}}
+    + \underbrace{O\!\left(\eta^2\right)}_{=: \, \nu_t \, \text{(non-linear correction)}} \\
+    &= -\eta \, \nabla^T_{\boldsymbol{\theta}} \mathcal{L}(\mathbf{X}_{t+1}, \boldsymbol{\theta}_{t}) \, \nabla_{\boldsymbol{\theta}} \mathcal{L}(\mathbf{X}_t, \boldsymbol{\theta}_t) + \nu_t 
+    \label{eq:linear_response_app}
+\end{split}
+\end{equation}
+Note that the loss change is induced by the mini-batch \(\mathbf{X}_t\) sampled at step \(t\), while the loss is evaluated on a different mini-batch \(\mathbf{X}_{t+1}\) at step \(t+1\). This is in an extension of the derivation provided in Section~\ref{sec:lna}, where we assumed full-batch training for simplicity.\\
+
+We will now focus on the linearized loss change term in Equation~\ref{eq:linear_response_app} and derive its LNA-decomposition. To do this, we first simplify the notation:
+we drop the explicit dependence of the parameters \(\boldsymbol{\theta}_t\) and abstract the mini-batches \(\mathbf{X}_t\) and \(\mathbf{X}_{t+1}\) as batches \(\mathbf{X}_A\) and \(\mathbf{X}_B\), respectively.
+This allows us to express the linearized loss change more compactly as
+% the linearized loss in terms of one batch of data \(A\) inducing the \emph{action} and another batch of data \(B\) for measuring the loss change. Thus, we define the linearized loss change as:
+\begin{equation}
+    \delta \mathcal{L}(A, B) 
+    := \nabla^T_{\boldsymbol{\theta}} \mathcal{L}^B \, \nabla_{\boldsymbol{\theta}} \mathcal{L}^A \, ,
+    := \nabla^T_{\boldsymbol{\theta}} \mathcal{L}(\mathbf{X}_B, \boldsymbol{\theta}) \, \nabla_{\boldsymbol{\theta}} \mathcal{L}(\mathbf{X}_A, \boldsymbol{\theta}) 
+    \label{eq:linearized_loss_app}
+\end{equation}
+
+% We will now derive the LNA-decomposition of the linearized loss \(\delta \mathcal{L}(A, B)\).
+% Decomposition of Linearized loss
+We apply the chain rule to express the loss gradients with respect to the parameters \(\boldsymbol{\theta}\) in terms of the network outputs \(f\). For batch \(A\), this reads
+\begin{equation}
+    \nabla_{\boldsymbol{\theta}} \mathcal{L}^A = (\nabla_{\boldsymbol{\theta}} f^A)^T \, \nabla_f \mathcal{L}^A \, ,
+\end{equation}
+where \(\nabla_f \mathcal{L} \in \mathbb{R}^{m |A|}\) is the loss gradient with respect to the network outputs and \(\nabla_{\boldsymbol{\theta}} f \in \mathbb{R}^{N \times m|A|}\) is the Jacobian of the network outputs with respect to the parameters evaluated on batch \(A\). \(|A|\) and \(|B|\) denote the batch sizes of batches \(A\) and \(B\), respectively. 
+Note that we have vectorized the network outputs over the batch dimension, such that \(f^A = [f(\mathbf{x}_i; \boldsymbol{\theta})]_{\mathbf{x}_i \in \mathbf{X}_A} \in \mathbb{R}^{m |A|}\) and \(\nabla_f \mathcal{L}^A = [\nabla_{f(\mathbf{x}_i; \boldsymbol{\theta})} \mathcal{L}(\mathbf{X}_A, \boldsymbol{\theta})]_{\mathbf{x}_i \in \mathbf{X}_A} \in \mathbb{R}^{m |A|}\). Dataset \( B \) is treated analogously.
+Inserting this into Equation~\ref{eq:linearized_loss_app}, we obtain
+\begin{align}
+    \delta \mathcal{L}(A, B)
+    &= (\nabla_f \mathcal{L}^B)^T \underbrace{\nabla_{\boldsymbol{\theta}} f^B (\nabla_{\boldsymbol{\theta}} f^A)^T}_{=: \, \Theta^{A B}} \, \nabla_f \mathcal{L}^A \, ,
+    \label{eq:loss_evolution_factorized_general_app}
+\end{align}
+where we have defined the empirical NTK between batches \(A\) and \(B\) as \(\Theta^{A B} = \nabla_{\boldsymbol{\theta}} f^B (\nabla_{\boldsymbol{\theta}} f^A)^T \in \mathbb{R}^{m |B| \times m |A|}\).
+It is important to note that for mini-batch training with \(A \neq B\), the matrix \(\Theta^{A B}\) is not necessarily symmetric or positive semi-definite, in contrast to the full-batch empirical NTK with \(A = B\).
+To proceed, we perform an eigendecomposition onto the basis of \(\Theta^{AA}\) and \(\Theta^{BB}\):
+
+\begin{align}
+    \delta \mathcal{L}(A, B)
+    &= \sum_{k, l} (\nabla_f^T \mathcal{L}^B \, q_k^B) \, \left[ (q_k^B)^T \, \Theta^{A B} \, q_l^A \right] \, (\nabla_f^T \mathcal{L}^A \, q_l^A) 
+    \label{eq:loss_evolution_factorized_mb_app}
+\end{align}
+where \(q_k^A\) and \(q_k^B\) are the eigenvectors of \(\Theta^{AA}\) and \(\Theta^{BB}\), respectively.
+
+\paragraph{LNA-decomposition for Full-Batch Training}
+Equation~\ref{eq:loss_evolution_factorized_mb_app} generalizes Equation~\ref{eq:loss_evolution_spectral} to mini-batch training. This can be seen by noting that for full-batch training with \(A = B\), the matrix \(\Theta^{A B}\) becomes symmetric and positive semi-definite \(\Theta :=\Theta^{AA} = \Theta^{BB}\), allowing us to choose the same eigenbasis for both sides, i.e., \(q_k^A = q_k^B = q_k\).
+The kernel then projects onto its eigenmodes \( q_k^T \, \Theta \, q_l = \lambda_k \, \delta_{k l} \), yielding Equation~\ref{eq:loss_evolution_spectral}:
+\begin{equation}
+    \delta \mathcal{L}
+    = \sum_{k} (\nabla_f^T \mathcal{L} \, q_k)^2 \, \lambda_k \, 
+\end{equation}
+In that case, the eigenvectors \(q_k\) form a complete orthonormal basis, and the projections of the loss gradient onto this basis satisfy
+\begin{equation}
+    \sum_{k} (\nabla_f^T \mathcal{L} \, q_k)^2 = \left\| \nabla_f \mathcal{L} \right\|_2^2 \, ,
+\end{equation}
+which is the squared magnitude of the loss gradient with respect to the network outputs and identifies the scale contribution of the loss function. 
+% E.g., for a mean-squared error loss, this term will introduce a different scaling than for a cross-entropy loss. 
+Similarly, the eigenvalues \(\lambda_k\) satisfy
+\begin{equation}
+    \sum_{k} \lambda_k = \text{Tr}(\Theta) = \left\| \nabla_{\boldsymbol{\theta}} f \right\|_F^2 \, 
+\end{equation}
+where \(\left\| \nabla_{\boldsymbol{\theta}} f \right\|_F^2\) is the squared Frobenius norm of the Jacobian of the network outputs with respect to the parameters.
+This term captures the overall sensitivity of the network outputs to parameter changes, and identifies the scale contribution of the network.
+Using these relations, we can factorize both scale contributions from the sum in Equation~\ref{eq:loss_evolution_spectral} to obtain the LNA-decomposition:
+\begin{align}
+    \delta \mathcal{L}
+    &=\underbrace{\left\| \nabla_f \mathcal{L} \right\|_2^2 }_{=: \, \chi_{\text{loss}}} \,
+    \underbrace{\left\| \nabla_\theta f \right\|_F^2}_{=: \, \chi_{\text{net}}} \,
+    \underbrace{\sum_{k} \frac{ (\nabla_f^T \mathcal{L} \, q_k)^2 }{\left\| \nabla_f \mathcal{L} \right\|_2^2} \frac{\lambda_k}{\left\| \nabla_\theta f \right\|_F^2}}_{=: \, \chi_{\text{align}}} 
+    = \, \chi_{\text{loss}} \cdot \chi_{\text{net}} \cdot \chi_{\text{align}} \, ,
+    \label{eq:loss_evolution_factorized_app}
+\end{align}
+Factorizing out the two scale contributions yields a third component \(\chi_{\text{align}}\) that captures the interaction between the network and the loss function through the eNTK's spectral properties.
+This component is scale-free and takes values in the range \(\chi_{\text{align}} \in [0, 1]\). 
+For more information on the interpretation of the LNA-components, we refer to Section~\ref{sec:lna}.
+
+\paragraph{LNA-decomposition for Mini-Batch Training}
+For mini-batch training, the parameter update is carried out on batch \(A\) and the loss change is evaluated on batch \(B\) with \(A \neq B\). We proceed similarly by factorizing the scale contributions from Equation~\ref{eq:loss_evolution_factorized_mb_app}:
+\begin{align}
+    \delta \mathcal{L}(A, B)
+    &=\underbrace{\left\| \nabla_f \mathcal{L}^B \right\|_2 \, \left\| \nabla_f \mathcal{L}^A \right\|_2}_{=: \, \chi_{\text{loss}}^{A B}} \,
+    \underbrace{\left\| \nabla_\theta f^B \right\|_F \, \left\| \nabla_\theta f^A \right\|_F}_{=: \, \chi_{\text{net}}^{A B}} \,
+    \underbrace{\sum_{k, l} \frac{ (\nabla_f^T \mathcal{L}^B \, q_k^B) }{\left\| \nabla_f \mathcal{L}^B \right\|_2} \,\frac{ (\nabla_f^T \mathcal{L}^A \, q_l^A) }{\left\| \nabla_f \mathcal{L}^A \right\|_2} \, \frac{ (q_k^B)^T \, \Theta^{A B} \, q_l^A }{\left\| \nabla_\theta f^B \right\|_F \, \left\| \nabla_\theta f^A \right\|_F}}_{=: \, \chi_{\text{align}}^{A B}} \nonumber \\
+    &= \, \chi_{\text{loss}}^{A B} \cdot \chi_{\text{net}}^{A B} \cdot \chi_{\text{align}}^{A B}, 
+    \, .
+    \label{eq:loss_evolution_factorized_mb_final_app}
+\end{align}
+This expression generalizes the LNA-decomposition to mini-batch training, where each component now depends on both batches \(A\) and \(B\).
+We obtain a contribution of loss and network magnitude from both batches and an alignment component that captures the interaction between the two batches through the mixed eNTK \(\Theta^{A B}\).
+Note that the projections of the loss onto the eigenbases \( \nabla_f^T \mathcal{L}^B \, q_k^B \) and \( \nabla_f^T \mathcal{L}^A \, q_l^A \) can now result in negative values. Simiarly, the mixed eNTK projections \( (q_k^B)^T \, \Theta^{A B} \, q_l^A \) can also be negative.
+If a the alignment \( {\chi_{\text{align}}^{A B}}_{k l} \) of a specific mode pair \((k, l)\) satisfies
+\begin{equation}
+    {\chi_{\text{align}}^{A B}}_{k l} =
+    \frac{ (\nabla_f^T \mathcal{L}^B \, q_k^B) }{\left\| \nabla_f \mathcal{L}^B \right\|_2} \,\frac{ (\nabla_f^T \mathcal{L}^A \, q_l^A) }{\left\| \nabla_f \mathcal{L}^A \right\|_2} \, \frac{ (q_k^B)^T \, \Theta^{A B} \, q_l^A }{\left\| \nabla_\theta f^B \right\|_F \, \left\| \nabla_\theta f^A \right\|_F} < 0 \, ,
+\end{equation}
+it means that the mode \(l\) resulting from training on \(A\) has a detrimental effect on the mode \(k\) in \(B\). This happens when information learned from batch \(A\) does not generalize to batch \(B\) or even interferes destructively, which occurs e.g. in unlearning and overfitting scenarios.
+
+As this work is focused on pre-training settings with large and diverse datasets, we expect most mode pairs to contribute positively to the alignment, i.e., \({\chi_{\text{align}}^{A B}}_{k l} > 0\). Comparing Figures~\ref{fig:scaling_and_alignment} and~\ref{fig:scaling_laws_testloss}, we see that train and test losses yield the same quantitative scaling realatios. This means that training seems to converge before overfitting effects occur, which supports our assumption of positive alignment contributions.
+
+\subsection{Normalization of LNA-components}\label{sec:app_lna_normalization}
+In this section, we provide further details how to normalize the LNA-components introduced in Section~\ref{sec:lna} and Appendix~\ref{sec:derivation_lnas} to remove batch-size dependencies.
+
+The LNA-decomposition factors the linearized loss change into three components 
+\begin{equation}
+    \delta \mathcal{L}(A, B) 
+    = \chi_{\text{loss}}^{A B} \cdot \chi_{\text{net}}^{A B} \cdot \chi_{\text{align}}^{A B} \, .
+\end{equation}
+However, with the definition provided in Equations~\ref{eq:loss_evolution_factorized_mb_final_app}, the loss and network magnitudes \(\chi_{\text{loss}}^{A B}\) and \(\chi_{\text{net}}^{A B}\) depend on the batch sizes \(|A|\) and \(|B|\). 
+This can be understood by rewriting into sample-wise contributions. 
+For a loss function of the form \(\mathcal{L}^B = \frac{1}{|B|} \sum_{i \in B} \mathcal{L}(f(\mathbf{x}_i), y_i)\), we can express the loss magnitude component \( \left\| \nabla_f \mathcal{L}^B \right\|_2 \) as sample-wise sum
+\begin{equation}
+    \left\| \nabla_f \mathcal{L}^B \right\|_2
+    = \sqrt{ \frac{1}{|B|^2} \sum_{i \in B} \left\| \nabla_{f(\mathbf{x}_i)} \mathcal{L} \right\|_2^2 } \, 
+    = \frac{1}{\sqrt{|B|}} \, \sqrt{ \frac{1}{|B|} \sum_{i \in B} \left\| \nabla_{f(\mathbf{x}_i)} \mathcal{L} \right\|_2^2 } \,
+    = \frac{1}{\sqrt{|B|}} \, \sigma_{\text{loss}}^B \, ,
+    \label{eq:loss_magnitude_batchsize_app}
+\end{equation}
+where \(\sigma_{\text{loss}}^B\) is the standard deviation of the sample-wise loss gradients in batch \(B\). In expectation of large batch sizes, this quantity converges to the population standard deviation of the loss gradients over the data distribution.
+Thus, the loss magnitude scales with the inverse square root of the batch size \( \left\| \nabla_f \mathcal{L}^B \right\|_2 \propto \frac{1}{\sqrt{|B|}} \).
+
+Looking at the network magnitude \(\left\| \nabla_\theta f^B \right\|_F\), we can perform a similar derivation:
+\begin{equation}
+    \left\| \nabla_\theta f^B \right\|_F
+    = \sqrt{ \sum_{i \in B} \left\| \nabla_{\theta} f(\mathbf{x}_i) \right\|_2^2 } \, .
+    = \sqrt{|B|} \, \sqrt{ \frac{1}{|B|} \sum_{i \in B} \left\| \nabla_{\theta} f(\mathbf{x}_i) \right\|_2^2 } \, 
+    = \sqrt{|B|} \, \sigma_{\text{net}}^B \, ,
+    \label{eq:network_magnitude_batchsize_app}
+\end{equation}
+where \(\sigma_{\text{net}}^B\) is the standard deviation of the sample-wise network gradients in batch \(B\). In expectation of large batch sizes, this quantity converges to the population standard deviation of the network gradients over the data distribution.
+Thus, the network magnitude scales with the square root of the batch size \( \left\| \nabla_\theta f^B \right\|_F \propto \sqrt{|B|} \).
+
+To remove these batch-size dependencies, we can move the batch-size scaling factors from the loss into the network magnitude, yielding normalized LNA-components:
+\begin{align}
+    \delta \mathcal{L}(A, B) 
+    &= \underbrace{\sqrt{|A| \, |B|} \, \chi_{\text{loss}}^{A B}}_{=: \, \tilde{\chi}_{\text{loss}}^{A B}} \,
+    \underbrace{\frac{\chi_{\text{net}}^{A B}}{\sqrt{|A| \, |B|}} }_{=: \, \tilde{\chi}_{\text{net}}^{A B}} \,
+    \chi_{\text{align}}^{A B} \, 
+\end{align}
+In practice, we use these normalized LNA-components \(\tilde{\chi}_{\text{loss}}^{A B}\) and \(\tilde{\chi}_{\text{net}}^{A B}\) to analyze training dynamics across different batch sizes.

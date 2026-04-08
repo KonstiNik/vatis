@@ -1,0 +1,237 @@
+"""Cross-validate vatis observables against perspic as the reference.
+
+We run perspic's calculators directly (bypassing PyTorch Lightning) on the
+same model / batch / seed and assert that:
+
+    vatis.chi_loss_normalized  ~=  perspic.chi_loss
+    vatis.chi_net_normalized   ~=  perspic.chi_net           (within Hutch noise)
+    vatis.delta_loss           ~=  perspic.grad_norm_squared
+    vatis.chi_pos              ~=  perspic.chi_coup          (within Hutch noise)
+
+The key mapping is documented in CLAUDE.md §Glossary and §cross_validation.
+
+Perspic's default is sample=batch with per-sample CE, so we use a
+TinyMLP classifier on CPU with fp32 — the cleanest setup where the
+normalization conventions align without any LM-token gymnastics.
+
+Both perspic backends ("functorch", "opacus") are validated, and both vatis
+chi_net methods ("hutchinson", "per_sequence_cv") are validated against both.
+
+Gated behind ``pytest -m cross_validation`` because it needs perspic in the
+environment (which it is, via the shared venv in this repo).
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any
+
+import pytest
+import torch
+import torch.nn as nn
+
+from tests.fixtures.tiny_transformer import (
+    TinyMLP,
+    make_tiny_mlp_batch,
+    mlp_loss,
+    mlp_valid_mask,
+)
+from vatis import analyze
+from vatis.models.hf import ModelBundle
+
+pytestmark = pytest.mark.cross_validation
+
+
+# --------------------------------------------------------------- perspic side
+
+
+def _perspic_run(
+    model: nn.Module,
+    criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+    x: torch.Tensor,
+    y: torch.Tensor,
+    *,
+    engine: str,
+    approximate_with_n: int | None = None,
+) -> dict[str, float]:
+    """Run perspic's SamplewiseCalculator + Linearizer directly on ``model``.
+
+    Returns a dict of the four observables we care about, with perspic's
+    naming: ``chi_loss``, ``chi_net``, ``grad_norm_squared``, ``chi_coup``.
+    """
+    from perspic.calculator.coupling import CouplingCalculator
+    from perspic.calculator.linearizer import Linearizer
+
+    if engine == "functorch":
+        from perspic.calculator.samplewise_functorch import (
+            SamplewiseCalculatorFunctorch,
+        )
+
+        calc: Any = SamplewiseCalculatorFunctorch()
+    elif engine == "opacus":
+        from perspic.calculator.samplewise_opacus import SamplewiseCalculatorOpacus
+
+        calc = SamplewiseCalculatorOpacus(approximate_with_n=approximate_with_n)
+    else:
+        raise ValueError(f"unknown perspic engine: {engine}")
+
+    samplewise = calc.compute(model, criterion, x, y, normalize=True)
+    chi_loss = float(samplewise["batch_grad_norms_loss"])
+    chi_net = float(samplewise["batch_grad_norms_network"])
+
+    lin = Linearizer()
+    probe = lin.compute(model=model, criterion=criterion, x1=x, y1=y)
+    _, _, delta_loss_neg = probe["self"]
+    grad_norm_squared = -float(delta_loss_neg)
+
+    coup = CouplingCalculator().calculate(
+        delta_loss=delta_loss_neg,
+        chi_loss=chi_loss,
+        chi_net=chi_net,
+    )
+    return {
+        "chi_loss": chi_loss,
+        "chi_net": chi_net,
+        "grad_norm_squared": grad_norm_squared,
+        "chi_coup": float(coup),
+    }
+
+
+# --------------------------------------------------------------- vatis side
+
+
+def _vatis_run(
+    model: nn.Module,
+    x: torch.Tensor,
+    y: torch.Tensor,
+    *,
+    chi_net_method: str,
+    n_hutchinson: int,
+    seed: int,
+) -> dict[str, float]:
+    bundle = ModelBundle(
+        model=model,
+        params=list(model.parameters()),
+        forward_fn=lambda m, b: m(b[0]),
+        loss_fn=mlp_loss,
+        valid_mask_fn=mlp_valid_mask,
+        identifier="mlp@0",
+    )
+    results = analyze(
+        model=bundle,
+        revisions=["0"],
+        eval_batches={"val": (x, y)},
+        chi_net_method=chi_net_method,
+        n_hutchinson=n_hutchinson,
+        micro_batch_size=x.shape[0],  # one shot
+        seed=seed,
+        device="cpu",
+        sink=None,
+    )
+    by_obs = {r.observable: r.value for r in results[0].rows}
+    return by_obs
+
+
+# --------------------------------------------------------------- fixtures
+
+
+def _build_shared_model_and_batch(
+    seed: int = 42, batch_size: int = 8
+) -> tuple[nn.Module, torch.Tensor, torch.Tensor]:
+    torch.manual_seed(seed)
+    model = TinyMLP(in_dim=8, hidden=16, n_classes=4).eval()
+    for p in model.parameters():
+        p.requires_grad_(True)
+    x, y = make_tiny_mlp_batch(batch_size=batch_size, in_dim=8, n_classes=4, seed=seed)
+    return model, x, y
+
+
+def _snapshot(model: nn.Module) -> dict[str, torch.Tensor]:
+    return {k: v.detach().clone() for k, v in model.state_dict().items()}
+
+
+def _restore(model: nn.Module, state: dict[str, torch.Tensor]) -> None:
+    model.load_state_dict(state)
+
+
+# ---------------------------------------------------------------- tests
+
+
+@pytest.mark.parametrize("perspic_engine", ["functorch", "opacus"])
+def test_chi_loss_and_delta_loss_match_perspic(perspic_engine: str) -> None:
+    """chi_loss and delta_loss should match exactly (both are deterministic)."""
+    model, x, y = _build_shared_model_and_batch()
+    snapshot = _snapshot(model)
+    criterion = nn.CrossEntropyLoss(reduction="mean")
+
+    p = _perspic_run(model, criterion, x, y, engine=perspic_engine)
+
+    # Restore model weights (perspic.linearizer.compute may have mutated
+    # p.grad; we reload the state_dict to be sure).
+    _restore(model, snapshot)
+    v = _vatis_run(model, x, y, chi_net_method="hutchinson", n_hutchinson=16, seed=0)
+
+    # chi_loss: vatis.chi_loss_normalized ≡ perspic.chi_loss
+    assert v["chi_loss_normalized"] == pytest.approx(p["chi_loss"], rel=1e-4, abs=1e-6)
+
+    # delta_loss: vatis.delta_loss ≡ perspic.grad_norm_squared
+    assert v["delta_loss"] == pytest.approx(p["grad_norm_squared"], rel=1e-4, abs=1e-6)
+
+
+@pytest.mark.parametrize("perspic_engine", ["functorch", "opacus"])
+@pytest.mark.parametrize("vatis_method", ["hutchinson", "per_sequence_cv"])
+def test_chi_net_matches_perspic_within_hutchinson_noise(
+    perspic_engine: str, vatis_method: str
+) -> None:
+    """chi_net is stochastic in vatis (Hutchinson) but deterministic in perspic.
+
+    We use a large n_hutchinson to drive the Hutchinson variance below 2%,
+    then assert vatis matches perspic within that bound. Empirically (see
+    the test docstring), n=2048 is enough for both methods to consistently
+    hit <1% relative error on the toy MLP.
+    """
+    model, x, y = _build_shared_model_and_batch()
+    snapshot = _snapshot(model)
+    criterion = nn.CrossEntropyLoss(reduction="mean")
+
+    p = _perspic_run(model, criterion, x, y, engine=perspic_engine)
+
+    _restore(model, snapshot)
+    n_h = 2048
+    v = _vatis_run(model, x, y, chi_net_method=vatis_method, n_hutchinson=n_h, seed=0)
+
+    # vatis.chi_net_normalized ≡ perspic.chi_net
+    rel = abs(v["chi_net_normalized"] - p["chi_net"]) / max(1e-12, abs(p["chi_net"]))
+    # 2% noise floor. With n=2048 both methods sit well under 1% empirically.
+    assert rel < 0.02, (
+        f"chi_net mismatch: vatis={v['chi_net_normalized']:.6f} vs "
+        f"perspic={p['chi_net']:.6f} (rel err {rel:.3%}, method={vatis_method}, "
+        f"engine={perspic_engine})"
+    )
+
+
+@pytest.mark.parametrize("perspic_engine", ["functorch", "opacus"])
+@pytest.mark.parametrize("vatis_method", ["hutchinson", "per_sequence_cv"])
+def test_chi_pos_matches_perspic_chi_coup(perspic_engine: str, vatis_method: str) -> None:
+    """vatis.chi_pos == perspic.chi_coup within the Hutchinson noise floor.
+
+    Because chi_pos = delta_loss / (chi_loss * chi_net) and delta_loss /
+    chi_loss are deterministic, the only noise comes from chi_net. We
+    inherit the same 2% tolerance as above.
+    """
+    model, x, y = _build_shared_model_and_batch()
+    snapshot = _snapshot(model)
+    criterion = nn.CrossEntropyLoss(reduction="mean")
+
+    p = _perspic_run(model, criterion, x, y, engine=perspic_engine)
+
+    _restore(model, snapshot)
+    n_h = 2048
+    v = _vatis_run(model, x, y, chi_net_method=vatis_method, n_hutchinson=n_h, seed=0)
+
+    rel = abs(v["chi_pos"] - p["chi_coup"]) / max(1e-12, abs(p["chi_coup"]))
+    assert rel < 0.02, (
+        f"chi_pos/chi_coup mismatch: vatis={v['chi_pos']:.6f} vs "
+        f"perspic={p['chi_coup']:.6f} (rel err {rel:.3%}, method={vatis_method}, "
+        f"engine={perspic_engine})"
+    )
