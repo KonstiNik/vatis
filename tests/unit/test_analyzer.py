@@ -176,6 +176,53 @@ def test_analyzer_invalid_observable_raises() -> None:
         )
 
 
+def test_compute_cross_pair_before_self_pair_raises() -> None:
+    """Calling _compute_cross_pair before the corresponding self pairs is a
+    contract violation. The analyzer should fail loudly with a clear message
+    pointing the caller at the contract, not silently fall back to zeros.
+    """
+    bundle = _build_lm_bundle()
+    batch = make_tiny_lm_batch(batch_size=2, seed=0)
+    analyzer = Analyzer(
+        eval_batches={"a": batch, "b": batch},
+        cross_pairs=[("a", "b")],
+        n_hutchinson=2,
+        micro_batch_size=2,
+        sink=None,
+    )
+    # Caches are initialized but empty — calling _compute_cross_pair directly
+    # without first running the self loop must raise.
+    fake_grad = torch.zeros(sum(p.numel() for p in bundle.params))
+    with pytest.raises(RuntimeError, match=r"self-pair cache is missing"):
+        analyzer._compute_cross_pair(
+            ckpt_id="ckpt0",
+            revision="r0",
+            name_a="a",
+            name_b="b",
+            g_a=fake_grad,
+            g_b=fake_grad,
+            n_valid_a=4,
+            n_valid_b=4,
+            bundle=bundle,
+        )
+
+    # After running the self loop, the same cross pair must succeed.
+    # We exercise the public path so the caches get populated naturally.
+    results = analyze(
+        model=bundle,
+        revisions=["step0"],
+        eval_batches={"a": batch, "b": batch},
+        cross_pairs=[("a", "b")],
+        n_hutchinson=2,
+        micro_batch_size=2,
+        sink=None,
+    )
+    rows = results[0].rows
+    pair_rows = [r for r in rows if r.batch_a == "a" and r.batch_b == "b"]
+    # All six observables should be emitted for the cross pair.
+    assert {r.observable for r in pair_rows} == set(ALL_OBSERVABLES)
+
+
 def test_parquet_sink_streaming_flush(tmp_path: Path) -> None:
     bundle = _build_lm_bundle()
     batch = make_tiny_lm_batch(batch_size=4, seed=0)

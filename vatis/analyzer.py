@@ -167,6 +167,14 @@ class Analyzer:
         # Sink wiring
         self.sinks: list[ResultSink] = self._normalize_sinks(sink)
 
+        # Per-batch self-pair scratch caches. ``_compute_cross_pair`` reads
+        # ``chi_loss`` / ``chi_net`` for each named batch from these dicts;
+        # they are populated by ``_emit_rows`` during the self loop. Initialize
+        # them eagerly so the cross-pair precondition check doesn't need to
+        # special-case "cache not yet created".
+        self._chi_loss_cache: dict[str, float] = {}
+        self._chi_net_cache: dict[str, float] = {}
+
     @staticmethod
     def _normalize_sinks(
         sink: ResultSink | str | list[ResultSink] | None,
@@ -477,20 +485,37 @@ class Analyzer:
         practice users want this normalized so the √(N_A·N_B) factors cancel.
         We follow the convention from CLAUDE.md and use the unnormalized
         chi_loss / chi_net (since chi_pos is invariant under normalization).
+
+        Contract: this method assumes that the self pairs for ``name_a`` and
+        ``name_b`` have already been computed (so ``_chi_loss_cache`` and
+        ``_chi_net_cache`` contain entries for both names). The public
+        :meth:`run` always runs the self loop before any cross pair, so this
+        is satisfied automatically. The assertion below catches direct
+        callers that violate the ordering — silently falling back to a zero
+        chi_loss / chi_net would mask the bug.
         """
+        missing = [
+            name
+            for name in (name_a, name_b)
+            if name not in self._chi_loss_cache or name not in self._chi_net_cache
+        ]
+        if missing:
+            raise RuntimeError(
+                f"_compute_cross_pair called for cross pair ({name_a!r}, {name_b!r}) "
+                f"but the self-pair cache is missing {missing}. "
+                f"Call _compute_self_pair for both batches first; "
+                f"Analyzer.run() does this automatically."
+            )
+
         # Cross delta_loss is just the dot product of the cached flat grads.
         delta_loss_cross_value = float((g_a.to(torch.float64) * g_b.to(torch.float64)).sum())
 
-        # We need the per-batch chi_loss and chi_net to compute chi_pos cross.
-        # These were emitted in the self pair rows; rather than re-derive them
-        # from the rows, we just look them up via a small in-memory dict the
-        # caller built. To keep this method standalone we recompute via the
-        # batches — but that's expensive. Easier: stash the values during the
-        # self loop on the analyzer instance.
-        chi_loss_a = self._chi_loss_cache.get(name_a, 0.0)
-        chi_loss_b = self._chi_loss_cache.get(name_b, 0.0)
-        chi_net_a = self._chi_net_cache.get(name_a, 0.0)
-        chi_net_b = self._chi_net_cache.get(name_b, 0.0)
+        # Per-batch chi_loss / chi_net stashed by the self loop in
+        # ``_emit_rows``. The contract above guarantees both keys exist.
+        chi_loss_a = self._chi_loss_cache[name_a]
+        chi_loss_b = self._chi_loss_cache[name_b]
+        chi_net_a = self._chi_net_cache[name_a]
+        chi_net_b = self._chi_net_cache[name_b]
 
         # cross chi_loss / chi_net per the mini-batch derivation (geometric
         # mean of the two batches' magnitudes).
@@ -521,8 +546,6 @@ class Analyzer:
     # ------------------------------------------------------------- emission
 
     _last_n_valid: int = 0
-    _chi_loss_cache: dict[str, float]
-    _chi_net_cache: dict[str, float]
 
     def _emit_rows(
         self,
@@ -544,10 +567,8 @@ class Analyzer:
         wallclock_s: float | None,
     ) -> list[ResultRow]:
         # Stash the per-batch chi_loss / chi_net for the cross pair use.
+        # Caches are eagerly initialized in __init__.
         if batch_a == batch_b:
-            if not hasattr(self, "_chi_loss_cache"):
-                self._chi_loss_cache = {}
-                self._chi_net_cache = {}
             self._chi_loss_cache[batch_a] = chi_loss
             self._chi_net_cache[batch_a] = chi_net
 
