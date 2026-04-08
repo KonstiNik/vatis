@@ -11,10 +11,14 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "vatis authors" }]
 dependencies = [
-    "torch>=2.2",
+    # Pinned to <2.11 because torch 2.11 silently broke the resident
+    # torchvision 0.23 build during a `uv add matplotlib` resolve in the
+    # v1.1 hardening pass. The minimum is still 2.2 per the original spec.
+    "torch>=2.2,<2.11",
     "transformers>=4.40",
     "pyarrow>=14",
     "numpy>=1.24",
+    "matplotlib>=3.10",
 ]
 
 [project.optional-dependencies]

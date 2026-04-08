@@ -255,7 +255,7 @@ class Analyzer:
         per_batch_n_valid: dict[str, int] = {}
 
         for name, spec in self.eval_batches.items():
-            self_result, g_full = self._compute_self_pair(bundle, ckpt_id, name, spec)
+            self_result, g_full = self._compute_self_pair(bundle, ckpt_id, revision, name, spec)
             result.rows.extend(self_result)
             # The cached gradient lives on the model device; sized P (params).
             if g_full is not None:
@@ -295,6 +295,7 @@ class Analyzer:
         self,
         bundle: ModelBundle,
         ckpt_id: str,
+        revision: str,
         batch_name: str,
         spec: EvalBatchSpec,
     ) -> tuple[list[ResultRow], torch.Tensor | None]:
@@ -441,7 +442,7 @@ class Analyzer:
 
         rows = self._emit_rows(
             ckpt_id=ckpt_id,
-            revision="",
+            revision=revision,
             batch_a=batch_name,
             batch_b=batch_name,
             n_valid_a=n_valid_a,

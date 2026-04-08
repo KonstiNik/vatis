@@ -176,6 +176,32 @@ def test_analyzer_invalid_observable_raises() -> None:
         )
 
 
+def test_analyzer_threads_revision_through_self_pair_rows() -> None:
+    """Self-pair rows should carry the revision label, not an empty string.
+
+    Latent bug discovered while writing ``examples/pythia_sweep.py``: the
+    self-pair rows used to hardcode ``revision=""`` instead of threading
+    through the value the analyzer received. The fix passes ``revision``
+    from ``_run_one_checkpoint`` into ``_compute_self_pair`` and onward
+    into ``_emit_rows``.
+    """
+    bundle = _build_lm_bundle()
+    batch = make_tiny_lm_batch(batch_size=2, seed=0)
+    results = analyze(
+        model=bundle,
+        revisions=["my_revision_label"],
+        eval_batches={"v": batch},
+        n_hutchinson=2,
+        micro_batch_size=2,
+        sink=None,
+    )
+    rows = results[0].rows
+    assert all(r.revision == "my_revision_label" for r in rows), (
+        f"expected all rows to carry revision='my_revision_label', got "
+        f"{sorted({r.revision for r in rows})}"
+    )
+
+
 def test_compute_cross_pair_before_self_pair_raises() -> None:
     """Calling _compute_cross_pair before the corresponding self pairs is a
     contract violation. The analyzer should fail loudly with a clear message
