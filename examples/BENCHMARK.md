@@ -41,18 +41,59 @@ headroom             = 30% × 900 s                                = 270 s
 compute_budget       = 900 s − 63 s − 270 s                       = 567 s
 per_call_wallclock   = max(hutch, cv) at chosen parameters        ≈ 0.4 s
                        (per_seq_cv, n_h=32, B=8, S=128 — see table)
-max_calls_in_budget  = 567 s / 0.4 s/call                         ≈ 1417 calls
-required_calls       = revisions × eval_batches × methods
-                     = 9 × 2 × 1                                  = 18 calls
-slack                = 1417 − 18                                  = 1399 calls
+max_pairs_in_budget  = 567 s / 0.4 s/pair                         ≈ 1417 pairs
+required_pairs       = revisions × (self_pairs + cross_pairs)
+                     = 9 × (2 + 1)                                = 27 pairs
+slack                = 1417 − 27                                  = 1390 pairs
 ```
 
-We're using <2% of the available compute headroom — the bottleneck is
+The actual measured wallclock with real-text inputs and the cross-pair
+on (`pythia_sweep.py` as committed) is **~17 s end-to-end**. We're
+using <2% of the available compute headroom — the bottleneck is
 checkpoint loading, not analysis. Sizing was deliberately conservative
 so that future maintainers running on slower hardware (or with a cold
 HF cache) still hit the 15-minute budget. Bumping `n_hutchinson` to
 128, doubling the eval batch count, or running both methods in parallel
 would all stay comfortably under budget on this hardware.
+
+## What the deployment example evaluates on
+
+`examples/pythia_sweep.py` uses **two real-text eval batches**:
+
+- **prose**: the opening of Jane Austen's *Pride and Prejudice* (public
+  domain), tokenized with the model's own tokenizer and sliced into
+  `B × S = 8 × 128 = 1024` non-overlapping tokens.
+- **code**: a small self-contained Python module (linear-algebra
+  primitives, sorting, primality), same `B × S = 1024` tokens after
+  tokenization.
+
+Real text matters here in a way the benchmark sweep below does not.
+The benchmark below measures **per-call wallclock and peak memory** as
+a function of method, n_hutchinson, and batch size — these are
+shape-only quantities, so feeding `_benchmark.py` synthetic random
+integers is fine; the cycle counts and memory footprints would be
+identical for real text. The deployment example, on the other hand,
+needs the **observable values themselves** to be theory-relevant. The
+chi_net term is the squared Frobenius norm of the parameter Jacobian
+**evaluated at the input**; feeding random tokens puts the evaluation
+at an off-distribution point in input-space and the resulting
+trajectory across checkpoints reflects nothing about Pythia's actual
+training dynamics. Tokenized prose puts the evaluation back on
+the data manifold the model was trained on.
+
+The example also computes the **cross-pair** observable
+`δL(prose, code) = ⟨∇_θ L^prose, ∇_θ L^code⟩` and the corresponding
+`chi_pos(prose, code)`. This is essentially free (one extra dot
+product per checkpoint, zero extra backward passes — the gradients are
+already cached from the self-pair work) and is the most LNA-relevant
+quantity in the example: it measures whether a gradient step on prose
+helps or hurts the model on code. On `pythia-14m`, the cross
+delta_loss starts **positive** (~+2.6 at step1000) and crosses zero
+around step4000, then drifts negative — the prose and code loss
+directions become anti-aligned during training, the negative-`chi_pos`
+interference regime discussed in `background_info.tex §A.2`. None of
+that signal would be visible on random-integer inputs, where every
+batch is statistically equivalent to every other.
 
 ## Benchmark sweep
 
@@ -130,5 +171,13 @@ HF_HOME=/data/knikolaou/huggingface .venv/bin/python examples/pythia_sweep.py
 Outputs:
 
 - `examples/results.parquet` — the canonical long-format result table
-- `examples/chi_loss.png`, `examples/chi_net.png`, `examples/chi_pos.png`
-   — observable trajectories vs training step, one line per eval batch
+  (162 rows: 9 ckpts × 6 observables × (2 self pairs + 1 cross pair))
+- `examples/chi_loss.png`, `examples/chi_net.png` — self-pair
+  trajectories (one line per eval batch). chi_loss decreases on both
+  prose and code, more strongly on code; chi_net grows ~80× over
+  training on both.
+- `examples/delta_loss.png`, `examples/chi_pos.png` — self pairs and
+  the prose×code cross pair on the same axes (symlog scale because the
+  cross values cross zero). The cross delta_loss goes negative around
+  step4000, indicating gradient interference between the two
+  distributions.
