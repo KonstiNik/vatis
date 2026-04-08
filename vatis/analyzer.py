@@ -8,7 +8,8 @@ helpers (sharding, all-reduce, rank-aware sink writes).
 The flow per ``(checkpoint, eval_batch)`` is:
 
     1. Move the (sub-shard of the) batch to the model device.
-    2. Compute ``chi_loss`` (closed form for CE, autograd fallback otherwise).
+    2. Compute ``chi_loss`` (closed form for CE; non-CE losses are deferred
+       to v1.2 — see SESSION_SUMMARY.md).
     3. Compute ``delta_loss`` self via one backward of the total loss.
     4. Compute ``chi_net`` via the chosen estimator.
     5. (For each cross pair) compute ``delta_loss`` cross via two backwards.

@@ -9,10 +9,8 @@ The math here matches CLAUDE.md:
 For cross-entropy on logits ``z`` with mean reduction over N valid tokens,
 ``dL/dz_{b,s,v} = (1/N) * (softmax(z_{b,s})_v - onehot(y_{b,s})_v)`` at valid
 positions, and zero elsewhere. We exploit this closed form so chi_loss costs
-zero backwards through theta.
-
-For other loss functions we fall back to a single ``torch.autograd.grad(L,
-logits)`` call, which is one cheap backward through the loss head only.
+zero backwards through theta. v1 only supports the cross-entropy path;
+non-CE losses are deferred to v1.2 (see SESSION_SUMMARY.md).
 
 This module knows nothing about HF, DDP, sinks, or even nn.Module — it takes
 plain tensors and parameter iterables.
@@ -108,52 +106,6 @@ def chi_loss_cross_entropy(
         logits, targets, ignore_index=ignore_index, attention_mask=attention_mask
     )
     return (raw.to(dtype=torch.float64) / (n_valid * n_valid)).to(dtype=torch.float32)
-
-
-def chi_loss_from_autograd(
-    loss: torch.Tensor,
-    logits: torch.Tensor,
-    *,
-    valid_mask: torch.Tensor | None = None,
-) -> torch.Tensor:
-    """Generic chi_loss via one autograd backward through the loss head only.
-
-    For non-CE loss functions, we cannot exploit the closed form, but we can
-    still get ``grad_f L`` cheaply with a single ``torch.autograd.grad`` call
-    that backprops only through the loss function (not through theta). This
-    is the fallback path for custom ``loss_fn``s.
-
-    Args:
-        loss: scalar loss tensor with a graph back to ``logits``.
-        logits: the logit tensor that ``loss`` was computed from. Must have
-            ``requires_grad=True`` (set by the caller before the forward).
-        valid_mask: optional boolean mask broadcastable to ``logits[..., 0]``;
-            invalid positions are zeroed before squaring (so they do not
-            contribute even if the loss function happens to leak gradient
-            into them).
-
-    Returns:
-        A 0-dim tensor holding ``chi_loss``.
-    """
-    if not logits.requires_grad:
-        raise RuntimeError(
-            "chi_loss_from_autograd requires logits.requires_grad=True. Set "
-            "this *before* the forward pass."
-        )
-    (grad_f,) = torch.autograd.grad(
-        loss,
-        logits,
-        retain_graph=True,
-        create_graph=False,
-        allow_unused=False,
-    )
-    grad_f = grad_f.to(dtype=torch.float32)
-    if valid_mask is not None:
-        m = valid_mask.to(dtype=torch.bool)
-        while m.ndim < grad_f.ndim:
-            m = m.unsqueeze(-1)
-        grad_f = grad_f * m.to(dtype=torch.float32)
-    return (grad_f * grad_f).sum()
 
 
 def parameter_grad_vector(params: Iterable[torch.nn.Parameter]) -> torch.Tensor:

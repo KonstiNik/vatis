@@ -163,11 +163,13 @@ The math behind the mapping:
   `perspic/calculator/samplewise_opacus.py`.
 - **FSDP / tensor parallel.** v1 only does plain DDP with the model
   replicated on each rank. CLAUDE.md says this is intentional.
-- **Custom `loss_fn` autograd `chi_loss` fallback** is implemented at the
-  observable level (`chi_loss_from_autograd` in `core/observables.py` and
-  has unit tests) but the **analyzer always uses the closed-form CE path**.
-  If a future user passes a non-CE loss they will need to plumb the autograd
-  path through `_compute_self_pair`. There's a TODO at the call site.
+- **Custom `loss_fn` (non-CE) is out of scope until v1.2.** The analyzer
+  always uses the closed-form CE path for `chi_loss`. The previously-shipped
+  `chi_loss_from_autograd` helper was deleted in the v1.1 hardening pass
+  because it was unused outside its own tests; if a future user needs a
+  non-CE path, the smaller building blocks (`torch.autograd.grad(loss,
+  logits)` plus a masked squared sum) make it easy to re-add behind a
+  bundle flag.
 - **Per-sample variance observables beyond the cross-sample alignment
   matrix.** Per CLAUDE.md scope.
 - **OOM auto-tuning of `micro_batch_size`.** Per CLAUDE.md the user is
