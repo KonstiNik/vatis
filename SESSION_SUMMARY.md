@@ -508,16 +508,16 @@ the example before assuming a literal prose reading is the whole fix.
 
 ### Task 2 caveat — CI committed, not yet observed
 
+(**Resolved** — see "First push and CI green" subsection below.)
+
 `.github/workflows/ci.yml` matches the spec exactly (single matrix
 entry `python-3.11`, `astral-sh/setup-uv@v3` with cache enabled,
 `uv sync --extra dev`, four separate steps for ruff check / ruff
 format check / mypy strict / pytest unit tier). All four commands
 pass on the local venv at the same configuration the workflow will
-run. **The workflow itself has not yet been observed running** — no
-push to GitHub has occurred since the commit landed. The Tier 1
-done-criterion "CI is set up and passing on the master branch" is
-half-met: set up locally and proven equivalent, but the green-checks
-will only show up on the next push.
+run. At the time the task 2 commit landed the workflow itself had not
+yet been observed running — no push to GitHub had occurred. The
+half-met state was resolved by the first push, documented below.
 
 ### Doc updates that landed alongside tasks 1 and 2
 
@@ -535,6 +535,81 @@ formal session-boundary refresh is task 8's job (per `TASKS_NEXT.md`).
 The "v1.2 phase progress" section above is the lightweight in-flight
 note that bridges this session and the next without claiming the
 phase is over.
+
+### First push and CI green
+
+After tasks 1 and 2 landed, the repo got pushed to GitHub for the
+first time. The push uncovered a real bug that 67+ local test runs
+across the entire v1 build, v1.1 hardening pass, and v1.2 task 1
+work had never caught — the kind of thing CI exists to find.
+
+**Repo**: https://github.com/KonstiNik/vatis (private). Created via
+`gh repo create vatis --private --source . --remote origin --push`
+after a local `git branch -m master main`. Branch `main` tracks
+`origin/main`; CI workflow `pull_request` trigger was retargeted from
+`[master]` to `[main]` in the same commit as the rename so the first
+push triggered the workflow correctly.
+
+**License**: Apache-2.0, copyright "Konstantin Nikolaou", year 2026.
+The original `pyproject.toml` declared MIT and there was no `LICENSE`
+file; we picked Apache-2.0 over MIT for the explicit patent grant
+(more legally substantive for research code that might end up
+implementing patentable methods, and a clean default for a sister
+package to perspic / consumer of HuggingFace). Both `LICENSE` and the
+`pyproject.toml` declaration were updated together so the metadata is
+coherent.
+
+**Surprise — the first CI run failed**, fixed in commit `aaff18b`:
+
+`tests/fixtures/tiny_transformer.py` had `import pytorch_lightning
+as pl` at module level. The import existed only to define a
+`TinyMLPLightning` class — a Lightning shim around `TinyMLP`
+apparently planned for the perspic cross-validation suite but
+**never wired up**: a grep across the entire tree found exactly one
+definition and zero usages. The cross-validation suite explicitly
+runs perspic's calculators directly and bypasses Lightning (see the
+docstring at `tests/cross_validation/test_vs_perspic.py:3`).
+
+This worked locally because perspic is installed editable in `.venv`
+and pulls in `pytorch_lightning` transitively; CI installs only
+`--extra dev`, so the import errored at collection time and broke
+**every** test file that touched anything from the fixture (which is
+all of them). 50/50 unit tests failed to even collect, with the
+identical `ModuleNotFoundError`.
+
+The fix was to delete the dead `TinyMLPLightning` class and its
+`pytorch_lightning` import. One file changed, 31 lines deleted, 0
+added, no production code touched. Verified locally: 50 unit tests
+pass, 14 cross-validation tests still pass (the deleted class really
+was dead).
+
+**Lesson** — local venvs accumulate transitive dependencies that
+mask import-level dead code. Every additional editable install in
+`.venv` makes "it passes locally" a weaker statement about what
+will pass in a clean environment. CI in a fresh runner is exactly
+the discipline that catches this. **Adding CI in v1.2 task 2 paid
+for itself on its own first run.**
+
+After the fix, the second CI run (`24158632656`) was green: ✓ test
+in 1m37s on `main`. All four steps passed: ruff check, ruff format
+check, mypy strict, pytest unit tier (50 tests). The Tier 1
+done-criterion "CI is set up and passing" is now fully met.
+
+**Test count and tier mapping unchanged** — still 68 total (50
+unit + 14 cross-validation + 4 integration). The dead-class deletion
+removed lines, not tests.
+
+**Two minor warnings on the green run**, neither blocking:
+1. **Node.js 20 deprecation** for `actions/checkout@v4` and
+   `astral-sh/setup-uv@v3`. GitHub forces Node 24 by 2026-06-02 and
+   removes Node 20 by 2026-09-16. Will need an action-version bump
+   before then. Defer to task 8 or whenever the warning becomes
+   load-bearing.
+2. **`Failed to save: ... Failed to restore: Cache service responded
+   with 400`** on the uv cache step. Looks like a transient GitHub
+   Actions cache service blip; doesn't affect correctness, just means
+   the next run may also re-download the torch wheel. Watch if it
+   persists across multiple runs.
 
 ## Permissions notes
 
