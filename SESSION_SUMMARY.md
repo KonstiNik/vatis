@@ -471,7 +471,7 @@ Test count delta: 67 → **85** (+1 unit test from task 1's regression,
 |---|---|---|
 | 1 | a4f549e | fix `valid_mask_fn` ↔ `chi_loss` token-counting consistency by intersecting both masks before counting |
 | 2 | bdc3316 | add `.github/workflows/ci.yml` for ruff / mypy / pytest unit tier |
-| (gap fill) | — | cross-validate cross-pair observables against perspic: `δL(A,B)`, `chi_pos(A,B)`, geometric-mean `chi_loss`/`chi_net`, heavy-padding cross, asymmetric batch sizes, symmetry. 17 new tests in `tests/cross_validation/test_vs_perspic.py`, all passing at the same tolerances as the self-pair suite. Not a numbered `TASKS_NEXT.md` task — identified as an undocumented coverage gap and filled in-session. |
+| (gap fill) | f9d977d | cross-validate cross-pair observables against perspic: `δL(A,B)`, `chi_pos(A,B)`, geometric-mean `chi_loss`/`chi_net`, heavy-padding cross, asymmetric batch sizes, symmetry. 17 new tests in `tests/cross_validation/test_vs_perspic.py`, all passing at the same tolerances as the self-pair suite. Not a numbered `TASKS_NEXT.md` task — identified as an undocumented coverage gap and filled in-session. |
 
 ### Surprise during task 1 — the spec prose was incomplete
 
