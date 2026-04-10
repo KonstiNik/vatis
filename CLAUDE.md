@@ -351,10 +351,10 @@ Soft (extras):
 - **Python:** `>= 3.11`.
 - **Lint + format:** `ruff` (for both — `ruff check` and `ruff format`). Black-compatible style. Drop-in for black, much faster, one tool.
 - **Types:** `mypy --strict` on `vatis/`. Tests are unchecked.
-- **Tests:** 68 total (50 unit + 14 cross-validation + 4 integration). Run via `.venv/bin/python -m pytest tests`. CI runs the unit tier only.
+- **Tests:** 85 total (50 unit + 31 cross-validation + 4 integration). Run via `.venv/bin/python -m pytest tests`. CI runs the unit tier only.
   - `tests/unit/` (50 tests) — runs in CI. Uses a hand-built ~1M-param toy transformer (defined in `tests/fixtures/tiny_transformer.py`). Tests math correctness: Hutchinson convergence to the exact trace as `n → ∞`, `χ_loss` closed-form correctness on the supported CE shapes, `δL` symmetry, normalization invariants, the chi_pos combinator, the per-seq-CV memory pre-check, and the analyzer's contract assertions. v1.1 added exact-NTK ground-truth tests for `chi_pos` and `δL(A, B)` via an explicit per-token Jacobian builder (`_build_full_jacobian_and_u` in `tests/unit/test_chi_net.py`) — this is the most rigorous correctness reference because it bypasses Hutchinson entirely. v1.2 task 1 added a regression test for the `valid_mask_fn`/`chi_loss` intersection fix.
   - `tests/integration/` (4 tests) — gated behind `pytest -m integration`, **skipped in CI**, runnable locally. Uses `EleutherAI/pythia-14m` (smallest published Pythia) to verify the full HF loading + DDP path on real checkpoints. The DDP test is currently a 2-rank CPU loopback only — **the multi-GPU DDP path has never been validated on real GPUs**. Adding a real-GPU DDP test is on the v1.2 work order.
-  - `tests/cross_validation/` (14 tests) — gated behind `pytest -m cross_validation`, **skipped in CI** (requires perspic in the environment), runnable locally. **Cross-validates every observable against perspic** as the ground-truth reference implementation. The protocol:
+  - `tests/cross_validation/` (31 tests) — gated behind `pytest -m cross_validation`, **skipped in CI** (requires perspic in the environment), runnable locally. **Cross-validates every observable against perspic** as the ground-truth reference implementation — both self-pair and cross-pair. The protocol:
     1. Build a small model that perspic can wrap (a `pl.LightningModule` with `criterion`) — e.g. a tiny MLP or the toy transformer with a Lightning shim.
     2. Run `perspic.analyzer(...)` on a single training step with a fixed batch and seed, capturing the logged `chi_loss`, `chi_net`, `chi_align`, `chi_coup`, and `grad_norm_squared` (= `δL`).
     3. Run `vatis.analyze(...)` on the **same model weights, same batch, same seed**, with the requested `chi_net_method` and an `n_hutchinson` large enough to drive the Hutchinson noise below the asserted tolerance.
@@ -363,6 +363,15 @@ Soft (extras):
     6. Repeated with both `opacus` and `functorch` perspic backends to make sure normalization conventions match across the board.
 
     v1.1 added a tight-tolerance test (`test_all_observables_tight_tolerance_at_n16384`) at relative 0.3% / absolute 1e-6 with `n_hutchinson = 16384`, plus a heavy-padding test (`test_heavy_padding_matches_perspic_on_valid_subset`) that drives 5/8 samples through `labels=-100` and asserts the padded vatis run agrees with perspic on the unpadded subset.
+
+    v1.2 added **cross-pair cross-validation** (17 tests), closing the gap where only self-pair observables (`δL(A,A)`, `chi_pos(A,A)`) were validated against perspic. The cross-pair tests use perspic's `Linearizer.compute(x1, y1, x2, y2)` for cross `δL(A,B)` and `SamplewiseCalculator.compute_cross_metrics()` for the geometric-mean `chi_loss_cross` / `chi_net_cross`, then `CouplingCalculator` for `chi_coup_cross`. Coverage:
+
+    - **Basic cross `δL` and `chi_pos`** (`test_cross_delta_loss_matches_perspic`, `test_cross_chi_pos_matches_perspic`): two batches from different seeds, both perspic engines × both vatis methods. `δL` is deterministic (rel 1e-4); `chi_pos` within 2% (Hutchinson noise via geometric-mean `chi_net`).
+    - **Tight tolerance at n=16384** (`test_cross_observables_tight_tolerance_at_n16384`): catches constant-factor normalization bugs hidden by the 2% bound.
+    - **Heavy-padding cross** (`test_cross_heavy_padding_matches_perspic`): asymmetric masking (3/8 valid in A, 5/8 valid in B) verifies that the gradient cache doesn't leak masked positions into the cross dot product.
+    - **Asymmetric batch sizes** (`test_cross_asymmetric_batch_sizes`): batch A has 6 samples, B has 4. Catches bugs in `normalization_factor(N_A, N_B)` that equal-sized batches would miss.
+    - **Symmetry** (`test_cross_symmetry_delta_loss_and_chi_pos`): asserts `δL(A,B) == δL(B,A)` and `chi_pos(A,B) == chi_pos(B,A)` at bit-level precision. Vatis-internal (no perspic needed) — catches ordering bugs the perspic comparison can't.
+    - **Explicit geometric-mean check** (`test_cross_geometric_mean_chi_loss_chi_net_match_perspic`): directly compares `chi_loss_normalized` and `chi_net_normalized` from the cross rows against perspic's `compute_cross_metrics` output. Catches reciprocal-factor bugs that would cancel in the `chi_pos` ratio.
 
     **Naming map for the cross-validation tests:**
 

@@ -117,7 +117,7 @@ Two correctness-relevant implementation details that aren't obvious from
 | Single-GPU end-to-end (TinyMLP) | ✓ | `test_analyzer_works_for_mlp` |
 | chi_loss / delta_loss invariant under micro-batching | ✓ | `test_analyzer_chi_loss_invariant_to_micro_batch_size` |
 | ParquetSink streaming flush | ✓ | `test_parquet_sink_streaming_flush` |
-| Cross-validation against perspic (functorch + opacus, both vatis methods) | ✓ | `tests/cross_validation/test_vs_perspic.py` (10 tests) |
+| Cross-validation against perspic (functorch + opacus, both vatis methods, self + cross pairs) | ✓ | `tests/cross_validation/test_vs_perspic.py` (31 tests) |
 | DDP 2-rank loopback (CPU torchrun) | ✓ | `tests/integration/test_ddp_loopback.py` |
 | HF model loading + analysis on real Llama-1.25M | ✓ | `tests/integration/test_hf_load.py` |
 | `python -m vatis run --help` | ✓ | manual smoke |
@@ -464,12 +464,14 @@ TASKS_NEXT.md and dive directly into v1.2 work.
 
 The v1.2 work order in `TASKS_NEXT.md` lists eight tasks across three
 tiers. Tier 1 tasks 1 and 2 have landed; tasks 3–8 are still pending.
-Test count delta: 67 → **68** (+1 unit test from task 1's regression).
+Test count delta: 67 → **85** (+1 unit test from task 1's regression,
++17 cross-validation tests from the cross-pair gap fill).
 
 | task | commit  | one-line summary |
 |---|---|---|
 | 1 | a4f549e | fix `valid_mask_fn` ↔ `chi_loss` token-counting consistency by intersecting both masks before counting |
 | 2 | bdc3316 | add `.github/workflows/ci.yml` for ruff / mypy / pytest unit tier |
+| (gap fill) | — | cross-validate cross-pair observables against perspic: `δL(A,B)`, `chi_pos(A,B)`, geometric-mean `chi_loss`/`chi_net`, heavy-padding cross, asymmetric batch sizes, symmetry. 17 new tests in `tests/cross_validation/test_vs_perspic.py`, all passing at the same tolerances as the self-pair suite. Not a numbered `TASKS_NEXT.md` task — identified as an undocumented coverage gap and filled in-session. |
 
 ### Surprise during task 1 — the spec prose was incomplete
 
