@@ -233,9 +233,7 @@ def _vatis_cross_run(
     )
     # Extract only the cross-pair rows (batch_a="a", batch_b="b").
     cross_rows = {
-        r.observable: r.value
-        for r in results[0].rows
-        if r.batch_a == "a" and r.batch_b == "b"
+        r.observable: r.value for r in results[0].rows if r.batch_a == "a" and r.batch_b == "b"
     }
     return cross_rows
 
@@ -522,13 +520,17 @@ def test_cross_delta_loss_matches_perspic(perspic_engine: str) -> None:
 
     _restore(model, snapshot)
     v = _vatis_cross_run(
-        model, x_a, y_a, x_b, y_b,
-        chi_net_method="hutchinson", n_hutchinson=16, seed=0,
+        model,
+        x_a,
+        y_a,
+        x_b,
+        y_b,
+        chi_net_method="hutchinson",
+        n_hutchinson=16,
+        seed=0,
     )
 
-    assert v["delta_loss"] == pytest.approx(
-        p["delta_loss_cross"], rel=1e-4, abs=1e-6
-    ), (
+    assert v["delta_loss"] == pytest.approx(p["delta_loss_cross"], rel=1e-4, abs=1e-6), (
         f"cross delta_loss mismatch (engine={perspic_engine}): "
         f"vatis={v['delta_loss']:.8f} vs perspic={p['delta_loss_cross']:.8f}"
     )
@@ -554,14 +556,18 @@ def test_cross_chi_pos_matches_perspic(perspic_engine: str, vatis_method: str) -
     _restore(model, snapshot)
     n_h = 2048
     v = _vatis_cross_run(
-        model, x_a, y_a, x_b, y_b,
-        chi_net_method=vatis_method, n_hutchinson=n_h, seed=0,
+        model,
+        x_a,
+        y_a,
+        x_b,
+        y_b,
+        chi_net_method=vatis_method,
+        n_hutchinson=n_h,
+        seed=0,
     )
 
     # delta_loss is deterministic — tight check even here.
-    assert v["delta_loss"] == pytest.approx(
-        p["delta_loss_cross"], rel=1e-4, abs=1e-6
-    ), (
+    assert v["delta_loss"] == pytest.approx(p["delta_loss_cross"], rel=1e-4, abs=1e-6), (
         f"cross delta_loss mismatch (engine={perspic_engine}, method={vatis_method}): "
         f"vatis={v['delta_loss']:.8f} vs perspic={p['delta_loss_cross']:.8f}"
     )
@@ -592,16 +598,20 @@ def test_cross_observables_tight_tolerance_at_n16384(vatis_method: str) -> None:
 
     _restore(model, snapshot)
     v = _vatis_cross_run(
-        model, x_a, y_a, x_b, y_b,
-        chi_net_method=vatis_method, n_hutchinson=16384, seed=0,
+        model,
+        x_a,
+        y_a,
+        x_b,
+        y_b,
+        chi_net_method=vatis_method,
+        n_hutchinson=16384,
+        seed=0,
     )
 
     rel_tol = 3e-3
     abs_tol = 1e-6
 
-    assert v["delta_loss"] == pytest.approx(
-        p["delta_loss_cross"], rel=rel_tol, abs=abs_tol
-    ), (
+    assert v["delta_loss"] == pytest.approx(p["delta_loss_cross"], rel=rel_tol, abs=abs_tol), (
         f"cross delta_loss mismatch (method={vatis_method}): "
         f"vatis={v['delta_loss']:.8f} vs perspic={p['delta_loss_cross']:.8f}"
     )
@@ -649,7 +659,12 @@ def test_cross_heavy_padding_matches_perspic(vatis_method: str) -> None:
     # perspic sees only the valid subsets.
     criterion = nn.CrossEntropyLoss(reduction="mean")
     p = _perspic_cross_run(
-        model, criterion, x_a_valid, y_a_valid, x_b_valid, y_b_valid,
+        model,
+        criterion,
+        x_a_valid,
+        y_a_valid,
+        x_b_valid,
+        y_b_valid,
         engine="functorch",
     )
 
@@ -687,16 +702,10 @@ def test_cross_heavy_padding_matches_perspic(vatis_method: str) -> None:
         device="cpu",
         sink=None,
     )
-    v = {
-        r.observable: r.value
-        for r in results[0].rows
-        if r.batch_a == "a" and r.batch_b == "b"
-    }
+    v = {r.observable: r.value for r in results[0].rows if r.batch_a == "a" and r.batch_b == "b"}
 
     # delta_loss is deterministic.
-    assert v["delta_loss"] == pytest.approx(
-        p["delta_loss_cross"], rel=1e-4, abs=1e-6
-    ), (
+    assert v["delta_loss"] == pytest.approx(p["delta_loss_cross"], rel=1e-4, abs=1e-6), (
         f"heavy-padding cross delta_loss mismatch (method={vatis_method}): "
         f"vatis={v['delta_loss']:.8f} vs perspic={p['delta_loss_cross']:.8f}"
     )
@@ -729,19 +738,29 @@ def test_cross_asymmetric_batch_sizes(perspic_engine: str) -> None:
 
     criterion = nn.CrossEntropyLoss(reduction="mean")
     p = _perspic_cross_run(
-        model, criterion, x_a, y_a, x_b, y_b, engine=perspic_engine,
+        model,
+        criterion,
+        x_a,
+        y_a,
+        x_b,
+        y_b,
+        engine=perspic_engine,
     )
 
     _restore(model, snapshot)
     v = _vatis_cross_run(
-        model, x_a, y_a, x_b, y_b,
-        chi_net_method="hutchinson", n_hutchinson=2048, seed=0,
+        model,
+        x_a,
+        y_a,
+        x_b,
+        y_b,
+        chi_net_method="hutchinson",
+        n_hutchinson=2048,
+        seed=0,
     )
 
     # delta_loss is deterministic.
-    assert v["delta_loss"] == pytest.approx(
-        p["delta_loss_cross"], rel=1e-4, abs=1e-6
-    ), (
+    assert v["delta_loss"] == pytest.approx(p["delta_loss_cross"], rel=1e-4, abs=1e-6), (
         f"asymmetric cross delta_loss mismatch (engine={perspic_engine}): "
         f"vatis={v['delta_loss']:.8f} vs perspic={p['delta_loss_cross']:.8f}"
     )
@@ -789,16 +808,8 @@ def test_cross_symmetry_delta_loss_and_chi_pos() -> None:
         sink=None,
     )
 
-    ab = {
-        r.observable: r.value
-        for r in results[0].rows
-        if r.batch_a == "a" and r.batch_b == "b"
-    }
-    ba = {
-        r.observable: r.value
-        for r in results[0].rows
-        if r.batch_a == "b" and r.batch_b == "a"
-    }
+    ab = {r.observable: r.value for r in results[0].rows if r.batch_a == "a" and r.batch_b == "b"}
+    ba = {r.observable: r.value for r in results[0].rows if r.batch_a == "b" and r.batch_b == "a"}
     assert ab and ba, "expected cross-pair rows for both (a,b) and (b,a)"
 
     # Exact floating-point equality: the element-wise product g_a*g_b is
@@ -847,19 +858,29 @@ def test_cross_geometric_mean_chi_loss_chi_net_match_perspic(
 
     criterion = nn.CrossEntropyLoss(reduction="mean")
     p = _perspic_cross_run(
-        model, criterion, x_a, y_a, x_b, y_b, engine=perspic_engine,
+        model,
+        criterion,
+        x_a,
+        y_a,
+        x_b,
+        y_b,
+        engine=perspic_engine,
     )
 
     _restore(model, snapshot)
     v = _vatis_cross_run(
-        model, x_a, y_a, x_b, y_b,
-        chi_net_method=vatis_method, n_hutchinson=2048, seed=0,
+        model,
+        x_a,
+        y_a,
+        x_b,
+        y_b,
+        chi_net_method=vatis_method,
+        n_hutchinson=2048,
+        seed=0,
     )
 
     # chi_loss is deterministic (closed form) — tight bound.
-    assert v["chi_loss_normalized"] == pytest.approx(
-        p["chi_loss_cross"], rel=1e-4, abs=1e-6
-    ), (
+    assert v["chi_loss_normalized"] == pytest.approx(p["chi_loss_cross"], rel=1e-4, abs=1e-6), (
         f"cross chi_loss_normalized mismatch "
         f"(engine={perspic_engine}, method={vatis_method}): "
         f"vatis={v['chi_loss_normalized']:.8f} vs perspic={p['chi_loss_cross']:.8f}"
