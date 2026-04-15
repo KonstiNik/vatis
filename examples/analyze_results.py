@@ -92,13 +92,10 @@ matplotlib.use("Agg")  # headless
 import matplotlib.pyplot as plt
 import pyarrow.parquet as pq
 
-DEFAULT_PARQUET = Path(__file__).parent / "results.parquet"
-COS_PLOT_PATH = Path(__file__).parent / "cos_similarity.png"
+from _helpers import step_from_revision
 
-
-def step_from_revision(rev: str) -> int:
-    """Parse the trailing integer step out of a Pythia-style revision tag."""
-    return int(rev.removeprefix("step"))
+DEFAULT_PARQUET = Path(__file__).parent / "pythia_sweep" / "results.parquet"
+COS_PLOT_PATH = Path(__file__).parent / "pythia_sweep" / "cos_similarity.png"
 
 
 def main(parquet_path: Path = DEFAULT_PARQUET) -> None:

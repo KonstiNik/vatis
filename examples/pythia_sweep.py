@@ -70,6 +70,7 @@ import pyarrow.parquet as pq
 import torch
 from transformers import AutoTokenizer
 
+from _helpers import step_from_revision, tokenize_into_lm_batch
 from vatis import analyze
 
 # ---------------------------------------------------------------- config
@@ -116,7 +117,7 @@ EVAL_BATCH_NAMES = (PROSE_NAME, CODE_NAME)
 # row label; ⟨g_A, g_B⟩ is symmetric.
 CROSS_PAIRS: list[tuple[str, str]] = [(PROSE_NAME, CODE_NAME)]
 
-OUT_DIR = Path(__file__).parent
+OUT_DIR = Path(__file__).parent / "pythia_sweep"
 PARQUET_PATH = OUT_DIR / "results.parquet"
 PLOTS = {
     "chi_loss_normalized": OUT_DIR / "chi_loss.png",
@@ -331,49 +332,6 @@ if __name__ == "__main__":
 '''
 
 # ---------------------------------------------------------------- helpers
-
-
-def tokenize_into_lm_batch(
-    text: str,
-    tokenizer: AutoTokenizer,
-    *,
-    batch_size: int,
-    seq_len: int,
-) -> dict[str, torch.Tensor]:
-    """Tokenize ``text`` and reshape into a ``(batch_size, seq_len)`` LM batch.
-
-    The text is tokenized with no special tokens, then truncated or
-    cyclically repeated to produce exactly ``batch_size * seq_len``
-    tokens, which are reshaped row-major into the batch. Labels are the
-    HF causal-LM convention: ``labels[:, :-1] = input_ids[:, 1:]``,
-    ``labels[:, -1] = -100`` so the last position of every sequence is
-    ignored (no next-token target available there).
-    """
-    enc = tokenizer(text, return_tensors="pt", add_special_tokens=False)
-    ids = enc["input_ids"][0]  # (T,)
-    needed = batch_size * seq_len
-
-    # If the text is shorter than needed, repeat it. We never expect
-    # this to fire in this example (the embedded texts are sized to
-    # comfortably exceed `needed` for both prose and code), but the
-    # fallback keeps the helper robust to future text edits.
-    while ids.shape[0] < needed:
-        ids = torch.cat([ids, ids], dim=0)
-
-    ids = ids[:needed].reshape(batch_size, seq_len).contiguous()
-    attention_mask = torch.ones_like(ids)
-    labels = torch.full_like(ids, fill_value=-100)
-    labels[:, :-1] = ids[:, 1:]
-    return {
-        "input_ids": ids,
-        "attention_mask": attention_mask,
-        "labels": labels,
-    }
-
-
-def step_from_revision(rev: str) -> int:
-    """Parse the trailing integer step out of a Pythia revision tag."""
-    return int(rev.removeprefix("step"))
 
 
 def cross_label(name_a: str, name_b: str) -> str:
