@@ -613,6 +613,43 @@ removed lines, not tests.
    the next run may also re-download the torch wheel. Watch if it
    persists across multiple runs.
 
+## Spectral tail experiment expansion (2026-04-16)
+
+Expanded the spectral tail experiment from 2 probes / 4 model scales to
+4 probes / 5 model scales, with a negative control and compute-scaled
+plotting.
+
+### Changes
+
+- **Prose probe** (`STYLE_C_TEXT`): English natural-language description
+  of the same 7 matmul operations. Positive control — tests whether
+  prose-to-code semantic correspondence produces a chi_pos bump. Result:
+  tracks python x cpp but weaker; no independent bump.
+- **C++ string-processing probe** (`STYLE_D_TEXT`): C++ code implementing
+  7 string operations (reverse, palindrome, char frequency, RLE, substring
+  search, Caesar cipher). Negative control — same language as cpp matmul,
+  different algorithm. Cross pairs: `cpp x cpp_str` and `python x cpp_str`.
+- **pythia-410m** added to the model sweep. Uses `hutchinson` method
+  (per_sequence_cv OOMs at this scale with B=1, S=1024).
+- **Compute-scaled x-axis** (`--compute` flag on evaluate script): plots
+  over estimated FLOPs (6ND) instead of training steps. Reveals that the
+  initial chi_pos decline collapses across model scales when aligned by
+  compute.
+- **Signal-vs-controls figure**: single-model plot comparing all 4 cross
+  pairs with shaded late-training window.
+- **Figures moved** to `examples/spectral_tail/figures/` subdirectory.
+- **Deleted** stale `SPECTRAL_TAIL_BRIEFING.md` (one-shot handoff doc).
+
+### Finding
+
+At 14m–410m scale, the predicted spectral tail bump is not observed.
+The positive signal (python x cpp) runs 2–4x above the negative control
+(python x cpp_str) in the late-training window, suggesting partial
+algorithm specificity, but the effect is modest and not the transient
+bump the hypothesis predicts. Follow-ups: (1) larger models (1B+),
+(2) probe for a simpler semantic feature these models plausibly learn.
+See `examples/spectral_tail/README.md` for the full write-up.
+
 ## Permissions notes
 
 The `.claude/settings.local.json` was extended during this session to grant

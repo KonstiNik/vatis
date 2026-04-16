@@ -12,7 +12,7 @@ If two eval batches A and B share similarity only in the "tail" of the NTK spect
 
 This would appear as a transient bump in `chi_pos(A, B)` at the checkpoint where training "arrives at" the spectral band where A and B overlap.
 
-## Probe design intuition
+## Probe design
 
 Model of what LMs learn in order:
 1. Token combinations into words (surface statistics)
@@ -21,39 +21,51 @@ Model of what LMs learn in order:
 
 Good probes should **differ at stages 1-2 but share stage 3**. This is why Python vs C++ implementing the same algorithm is a better probe than two Python styles — Python vs C++ eliminates almost all syntactic overlap, isolating the semantic layer.
 
-Key design principles discovered:
-- **Repetition is signal, not redundancy.** Multiple implementations of the same algorithm within one text creates within-context pressure for the model to build abstract representations. A single function plus filler doesn't create that pressure.
-- **Parallel structure matters.** Both texts should implement the same operations in the same order (matmul, transpose, dot, trace, Frobenius) — not divergent operations (Strassen in one, Gram-Schmidt in the other).
-- **B=1 with long S is optimal.** Longer sequences give the model more context to build semantic representations. B doesn't affect statistical quality (same total tokens, Hutchinson noise depends on n_hutchinson not B). B=1, S=1024 maximizes context per position.
+Key design principles:
+- **Repetition is signal, not redundancy.** Multiple implementations of the same algorithm within one text creates within-context pressure for the model to build abstract representations.
+- **Parallel structure matters.** Both texts should implement the same operations in the same order (matmul, transpose, dot, trace, Frobenius) — not divergent operations.
+- **B=1 with long S is optimal.** Longer sequences give the model more context to build semantic representations. B=1, S=1024 maximizes context per position.
 
-## Why raw cross chi_pos, not a normalized ratio
+## Findings (2026-04-16)
 
-An earlier version used `chi_pos(A,B) / sqrt(chi_pos(A,A) * chi_pos(B,B))` to factor out the shared chi_net magnitude trend. This turned out to suppress the signal we're looking for.
+**At 14m–410m scale, we do not observe the predicted spectral tail bump.** All cross chi_pos trajectories show a monotonic decline after early training, with some scale-dependent late-training structure (secondary rises at 70m and 410m) that is not clearly separated from the negative control. The positive signal (python x cpp, shared algorithm) runs 2–4x above the negative control (python x cpp_str, different algorithm) in the late-training window, but the effect is modest and not the transient bump the hypothesis predicts.
 
-The reason: each self pair (Python, Python) already contains multiple matmul implementations, so the "matmul" spectral band contributes to the self chi_pos. Dividing the cross by the self divides out the very band we're trying to detect. The normalized ratio isolates only the language-switch effect, not the semantic-resolution effect.
+The most likely explanation is that models at this scale do not develop cross-domain abstract representations of "matrix multiplication" that bridge programming languages. The feature we are probing for may require larger models.
 
-The raw cross chi_pos is the right quantity. It measures total spectral overlap between Python-matmul and C++-matmul. Language-specific features contribute to the self pairs but not to the cross term, so they don't inflate the signal.
+One additional observation: when plotted over estimated compute (6ND FLOPs) instead of training steps, the initial chi_pos decline collapses across all model scales onto a single curve (`--compute` flag). This early phase reflects generic token-statistics learning and is compute-determined, not scale-dependent.
 
-## Findings on model scale
+### Follow-ups
 
-Larger models decorrelate the two languages faster and more completely:
-- 14m: cross chi_pos stays positive throughout training
-- 31m, 70m: decline more steeply, 70m shows a secondary rise around step16000-64000
-- 160m: declines fastest, touches zero/negative at step143000
+1. **Larger models (1B+).** Cross-lingual code understanding is a capability that emerges at scale. These models may actually build the shared representations we are probing for.
+2. **Simpler semantic overlap.** Instead of probing for a highly abstract feature (cross-lingual algorithm equivalence), probe for something these models plausibly do learn — e.g. repeated structural patterns, same topic in different registers. This tests whether the method works at all before scaling up.
 
-All models show a peak at step64 in the raw cross chi_pos, driven by the shared chi_net dip (the Jacobian norm shrinks in the first ~100 steps). This is a real effect but reflects early restructuring, not semantic resolution.
+Doing (2) first is the more cautious path: if a simpler feature doesn't produce a bump even at 410m, the method itself needs rethinking, not just the scale.
 
-The late-training structure (step8000+) is where the semantic signal lives. The 70m secondary rise around step16000-64000 is particularly interesting — it could be the model resolving a spectral band where Python and C++ matmul implementations overlap.
-
-## Experiment status (2026-04-15)
+## Experiment setup
 
 Code: `examples/spectral_tail_experiment.py` (compute), `examples/spectral_tail_evaluate.py` (plots).
-Results: `examples/spectral_tail/results_pythia-{14m,31m,70m,160m}.parquet`.
-Key plot: `chi_pos_cross_scale.png`.
+Results: `examples/spectral_tail/results_pythia-{14m,31m,70m,160m,410m}.parquet`.
+Figures: `examples/spectral_tail/figures/`.
+Key plots: `figures/chi_pos_signal_vs_controls_pythia-410m.png`, `figures/chi_pos_cross_scale_python_x_cpp.png`.
 
-Current probe: Python vs C++ implementing the same 7 operations (naive matmul, accumulator matmul, transpose-and-dot matmul, transpose, dot product, trace, Frobenius norm) in the same order. B=1, S=1024, n_hutchinson=32. Models: pythia-14m, 31m, 70m, 160m across 13 training checkpoints.
+Current probes (4 eval batches, all describing 7 aligned operations):
+- **python**: Python matmul code (verbose, type-hinted, docstrings)
+- **cpp**: C++ matmul code (raw pointers, C-style)
+- **prose**: English prose describing matmul (no code syntax)
+- **cpp_str**: C++ string-processing code (negative control — same language as cpp, different algorithm)
 
-Iterations that led here:
+Cross pairs measured:
+- `python x cpp` — positive signal (cross-language, same algorithm)
+- `python x prose` — positive control (cross-genre, same algorithm)
+- `cpp x cpp_str` — negative control (same language, different algorithm)
+- `python x cpp_str` — secondary control (cross-language, different algorithm)
+
+B=1, S=1024, n_hutchinson=32. Models: pythia-14m, 31m, 70m, 160m, 410m across 13 training checkpoints. Plots available in step-based and compute-scaled (6ND FLOPs, `--compute` flag) versions.
+
+### Probe design iterations
+
 1. Python verbose vs Python terse — too much syntactic overlap, couldn't isolate semantic layer
 2. Python vs C++ with divergent operations — cleaner separation but misaligned operations added noise
-3. Python vs C++ with aligned operations (current) — tightest probe, same ops in same order
+3. Python vs C++ with aligned operations — tightest probe, same ops in same order
+4. Added prose probe as positive control — tracks python x cpp but weaker, confirms signal is robust to surface form
+5. Added cpp_str negative control — shows code-structure baseline; python x cpp signal is 2-4x above python x cpp_str in the late-training window, suggesting partial algorithm specificity

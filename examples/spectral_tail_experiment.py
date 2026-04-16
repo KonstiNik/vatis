@@ -49,9 +49,9 @@ import time
 from pathlib import Path
 
 import torch
+from _helpers import tokenize_into_lm_batch
 from transformers import AutoTokenizer
 
-from _helpers import tokenize_into_lm_batch
 from vatis import analyze
 
 # ---------------------------------------------------------------- config
@@ -63,6 +63,7 @@ MODELS_FOR_COMPARISON = [
     "EleutherAI/pythia-31m",
     "EleutherAI/pythia-70m",
     "EleutherAI/pythia-160m",
+    "EleutherAI/pythia-410m",
 ]
 
 REVISIONS: list[str] = [
@@ -88,7 +89,14 @@ SEED = 0
 
 STYLE_A_NAME = "python"
 STYLE_B_NAME = "cpp"
-CROSS_PAIRS: list[tuple[str, str]] = [(STYLE_A_NAME, STYLE_B_NAME)]
+STYLE_C_NAME = "prose"
+STYLE_D_NAME = "cpp_str"
+CROSS_PAIRS: list[tuple[str, str]] = [
+    (STYLE_A_NAME, STYLE_B_NAME),
+    (STYLE_A_NAME, STYLE_C_NAME),
+    (STYLE_B_NAME, STYLE_D_NAME),
+    (STYLE_A_NAME, STYLE_D_NAME),
+]
 
 OUT_DIR = Path(__file__).parent / "spectral_tail"
 
@@ -100,7 +108,6 @@ def model_tag(model_name: str) -> str:
 
 def parquet_path(model_name: str) -> Path:
     return OUT_DIR / f"results_{model_tag(model_name)}.parquet"
-
 
 
 # ---------------------------------------------------------------- texts
@@ -416,7 +423,7 @@ if __name__ == "__main__":
     print("All matrix operation tests passed.")
 '''
 
-STYLE_B_TEXT = '''
+STYLE_B_TEXT = """
 #include <cstdio>
 #include <cmath>
 #include <cstring>
@@ -528,15 +535,223 @@ int main() {
     printf("All matrix operation tests passed.\\n");
     return 0;
 }
-'''
+"""
+
+STYLE_D_TEXT = """
+#include <cstdio>
+#include <cstring>
+#include <cassert>
+
+void reverse_string(const char* src, char* dst, int len) {
+    for (int i = 0; i < len; ++i) {
+        dst[i] = src[len - 1 - i];
+    }
+    dst[len] = '\0';
+}
+
+int is_palindrome(const char* s, int len) {
+    for (int i = 0; i < len / 2; ++i) {
+        if (s[i] != s[len - 1 - i]) return 0;
+    }
+    return 1;
+}
+
+void char_frequency(const char* s, int len, int* freq) {
+    memset(freq, 0, 256 * sizeof(int));
+    for (int i = 0; i < len; ++i) {
+        freq[(unsigned char)s[i]]++;
+    }
+}
+
+int run_length_encode(const char* src, int len, char* dst) {
+    int pos = 0;
+    int i = 0;
+    while (i < len) {
+        char ch = src[i];
+        int count = 1;
+        while (i + count < len && src[i + count] == ch) {
+            ++count;
+        }
+        dst[pos++] = ch;
+        if (count > 1) {
+            int digits = 0;
+            int tmp = count;
+            char buf[12];
+            while (tmp > 0) {
+                buf[digits++] = '0' + (tmp % 10);
+                tmp /= 10;
+            }
+            for (int d = digits - 1; d >= 0; --d) {
+                dst[pos++] = buf[d];
+            }
+        }
+        i += count;
+    }
+    dst[pos] = '\0';
+    return pos;
+}
+
+int find_substring(const char* text, int tlen, const char* pat, int plen) {
+    for (int i = 0; i <= tlen - plen; ++i) {
+        int match = 1;
+        for (int j = 0; j < plen; ++j) {
+            if (text[i + j] != pat[j]) {
+                match = 0;
+                break;
+            }
+        }
+        if (match) return i;
+    }
+    return -1;
+}
+
+void caesar_encrypt(const char* src, int len, int shift, char* dst) {
+    for (int i = 0; i < len; ++i) {
+        char ch = src[i];
+        if (ch >= 'a' && ch <= 'z') {
+            dst[i] = 'a' + (ch - 'a' + shift) % 26;
+        } else if (ch >= 'A' && ch <= 'Z') {
+            dst[i] = 'A' + (ch - 'A' + shift) % 26;
+        } else {
+            dst[i] = ch;
+        }
+    }
+    dst[len] = '\0';
+}
+
+void caesar_decrypt(const char* src, int len, int shift, char* dst) {
+    caesar_encrypt(src, len, 26 - (shift % 26), dst);
+}
+
+void verify_string_operations() {
+    char buf[256], buf2[256];
+
+    reverse_string("hello", buf, 5);
+    assert(strcmp(buf, "olleh") == 0);
+
+    assert(is_palindrome("racecar", 7) == 1);
+    assert(is_palindrome("hello", 5) == 0);
+
+    int freq[256];
+    char_frequency("abracadabra", 11, freq);
+    assert(freq['a'] == 5);
+    assert(freq['b'] == 2);
+    assert(freq['r'] == 2);
+
+    run_length_encode("aaabbbccca", 10, buf);
+    assert(strcmp(buf, "a3b3c3a") == 0);
+
+    assert(find_substring("hello world", 11, "world", 5) == 6);
+    assert(find_substring("hello world", 11, "xyz", 3) == -1);
+
+    caesar_encrypt("hello", 5, 3, buf);
+    assert(strcmp(buf, "khoor") == 0);
+    caesar_decrypt(buf, 5, 3, buf2);
+    assert(strcmp(buf2, "hello") == 0);
+}
+
+int main() {
+    verify_string_operations();
+    printf("All string operation tests passed.\\n");
+    return 0;
+}
+"""
+
+STYLE_C_TEXT = """
+Rectangular arrays of numbers arise throughout applied mathematics and
+engineering. When we need to combine two such arrays, the fundamental
+operation is to take each horizontal slice of the first array and pair
+it with each vertical slice of the second. For every such pairing, we
+walk along the shared dimension, multiplying corresponding entries and
+accumulating a running total. That running total becomes one entry in
+the output array. Concretely, to fill the entry in the i-th horizontal
+position and j-th vertical position of the result, we scan through
+every position along the shared inner dimension, take the element at
+horizontal position i and inner position from the left-hand array,
+take the element at inner position and vertical position j from the
+right-hand array, multiply them, and add the product to the running
+total. Once the inner scan finishes, the running total is placed in
+the output. Repeating this for all horizontal and vertical positions
+fills the entire result.
+
+There is an alternative traversal that produces the same result but
+accesses memory in a friendlier pattern. Instead of fixing one output
+entry at a time, we fix one horizontal slice of the left-hand array
+and one position along the inner dimension. We read off the single
+scaling factor at that crossing. Then we sweep across the
+corresponding horizontal slice of the right-hand array, multiplying
+every entry in that slice by the scaling factor and adding each
+product into the matching position of the output slice. Because the
+inner loop now moves along consecutive entries of the right-hand
+array, the processor's cache lines are used more efficiently. The
+numerical outcome is identical to the earlier approach, merely
+rearranged in time.
+
+A third route to the same answer leans on two simpler building blocks.
+First, we flip the second array so that its horizontal slices become
+vertical slices and vice versa. Second, for each horizontal slice of
+the first array and each horizontal slice of the flipped second array,
+we perform a pairwise sum of products — the standard inner product of
+two equal-length sequences. The value we obtain is exactly the entry
+that belongs at the corresponding horizontal and vertical position of
+the result. This perspective highlights that array combination is
+really a batch of inner products performed on reoriented data.
+
+Flipping an array — exchanging its horizontal and vertical axes — is
+itself a basic operation. To flip an array with R horizontal slices
+and C vertical positions, we create a new array with C horizontal
+slices and R vertical positions. The entry originally at horizontal
+position i and vertical position j moves to horizontal position j and
+vertical position i. Every entry migrates exactly once, and the
+resulting shape is the transpose of the original.
+
+The inner product of two equal-length sequences is the simplest of
+these operations. Given two sequences of the same length, we walk
+through them in lockstep, multiplying the first entries together, then
+the second entries, and so on, accumulating a single running total.
+The final total is a single number that captures how much the two
+sequences point in the same direction.
+
+For a square array — one where the number of horizontal slices equals
+the number of vertical positions — there is a distinguished scalar
+summary called the diagonal sum. It is obtained by walking down the
+main diagonal: position one-one, position two-two, position
+three-three, and so on, adding each diagonal entry to a running total.
+The diagonal sum of the identity array (ones on the diagonal, zeros
+elsewhere) equals the side length of the array. This quantity appears
+in physics, statistics, and differential geometry as an invariant
+under change of basis.
+
+Finally, a natural measure of the overall magnitude of an array is
+obtained by squaring every entry and summing all the squares. This
+yields the squared length of the array when it is viewed as a single
+long sequence of numbers. Equivalently, it equals the diagonal sum of
+the product of the flipped array with the original. For the identity
+array of side length three, the squared magnitude is three, since
+exactly three entries are nonzero and each of those entries is one.
+
+To confirm that all three combination procedures agree, one can work
+through a small hand example. Take a two-by-three array with entries
+one through six in the top slice and four through six in the bottom
+slice, paired with a three-by-two array with entries seven through
+twelve. All three methods should yield the same two-by-two result
+whose entries are fifty-eight, sixty-four, one hundred thirty-nine,
+and one hundred fifty-four. One can also verify that the inner product
+of the first three natural numbers with the next three natural numbers
+is fifty-eight, that the diagonal sum of the three-by-three identity
+is three, and that the squared magnitude of the identity is also
+three. These hand checks guard against silent bookkeeping errors.
+"""
 
 # ---------------------------------------------------------------- main
 
 
 def pick_chi_net_method(model_name: str) -> str:
-    """Choose chi_net method. With B=1 the per-seq-CV grad cache is just
-    one gradient vector (~n_params * 4 bytes), so per_sequence_cv fits
-    for all models up to ~1B on a 24 GB GPU."""
+    """Choose chi_net method. per_sequence_cv caches a full gradient vector
+    per sequence (~n_params * 4 bytes) which OOMs on larger models.
+    Fall back to hutchinson for 410m+."""
+    if "410m" in model_name or "1b" in model_name:
+        return "hutchinson"
     return "per_sequence_cv"
 
 
@@ -563,6 +778,12 @@ def run_single_model(model_name: str) -> None:
         STYLE_B_NAME: tokenize_into_lm_batch(
             STYLE_B_TEXT, tokenizer, batch_size=BATCH_SIZE, seq_len=SEQ_LEN
         ),
+        STYLE_C_NAME: tokenize_into_lm_batch(
+            STYLE_C_TEXT, tokenizer, batch_size=BATCH_SIZE, seq_len=SEQ_LEN
+        ),
+        STYLE_D_NAME: tokenize_into_lm_batch(
+            STYLE_D_TEXT, tokenizer, batch_size=BATCH_SIZE, seq_len=SEQ_LEN
+        ),
     }
     for name, batch in eval_batches.items():
         n_tokens = int(batch["input_ids"].numel())
@@ -585,11 +806,13 @@ def run_single_model(model_name: str) -> None:
     )
     total_s = time.perf_counter() - t_total
 
-    n_calls = len(REVISIONS) * (len([STYLE_A_NAME, STYLE_B_NAME]) + len(CROSS_PAIRS))
+    n_self = len(eval_batches)
+    n_cross = len(CROSS_PAIRS)
+    n_calls = len(REVISIONS) * (n_self + n_cross)
     print(
         f"\nDone in {total_s:.1f}s. "
         f"{len(REVISIONS)} checkpoints x "
-        f"(2 self pairs + {len(CROSS_PAIRS)} cross pair) = "
+        f"({n_self} self pairs + {n_cross} cross pairs) = "
         f"{n_calls} measurements. Wrote {pq_path}"
     )
 

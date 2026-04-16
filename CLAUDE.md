@@ -215,19 +215,17 @@ examples/
 │   ├── results.parquet
 │   ├── chi_loss.png, chi_net.png, delta_loss.png, chi_pos.png
 │   └── cos_similarity.png
-├── spectral_tail_experiment.py    # research: spectral tail overlap (Python vs C++ matmul)
-├── spectral_tail_evaluate.py      # evaluation plots for the spectral tail experiment
+├── spectral_tail_experiment.py    # research: spectral tail overlap (4 probes, 5 model scales)
+├── spectral_tail_evaluate.py      # evaluation plots (--compute flag for FLOPs x-axis)
 └── spectral_tail/                 # outputs + README with hypothesis and findings
     ├── README.md
-    ├── results_pythia-{14m,31m,70m,160m}.parquet
-    ├── chi_pos_cross_scale.png, delta_loss_cross_scale.png
-    ├── chi_pos.png, chi_loss_normalized.png, chi_net_normalized.png
-    └── delta_loss.png
+    ├── results_pythia-{14m,31m,70m,160m,410m}.parquet
+    └── figures/                   # all plots (step-based and _compute variants)
 ```
 
 The deployment example is the canonical "does vatis work end-to-end on real weights" check. After any significant change to the analyzer or an estimator, **re-run `examples/pythia_sweep.py` and check the plots haven't moved unexpectedly**. The plots are an integration test the unit suite can't replicate.
 
-The spectral tail experiment (`examples/spectral_tail/README.md`) is a research investigation using vatis to probe whether `chi_pos(A, B)` can detect when training resolves a shared semantic feature (matrix multiplication) between texts in different programming languages. It runs across four Pythia model scales (14m–160m).
+The spectral tail experiment (`examples/spectral_tail/README.md`) is a research investigation using vatis to probe whether `chi_pos(A, B)` can detect when training resolves a shared semantic feature (matrix multiplication) between texts in different programming languages. It runs across five Pythia model scales (14m–410m) with four probes (Python matmul, C++ matmul, English prose matmul, C++ string-processing as negative control).
 
 ### Public API
 
