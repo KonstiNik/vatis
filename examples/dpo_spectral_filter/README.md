@@ -45,11 +45,12 @@ knows. Diminishing returns.
 
 ### The DPO gradient isolates the tail
 
-The DPO loss involves the difference of log-probabilities:
+The DPO gradient (derived in [derivations.md §1](derivations.md#1-the-dpo-gradient))
+is the *difference* of two score functions, modulated by an adaptive weight:
 
-$$\mathcal{L}_{\mathrm{DPO}} = -\log \sigma\!\Big(\beta \big[\log \pi_\theta(y_w \mid x) - \log \pi_\theta(y_l \mid x) - \log \pi_{\mathrm{ref}}(y_w \mid x) + \log \pi_{\mathrm{ref}}(y_l \mid x)\big]\Big)$$
+$$\nabla_\theta \mathcal{L}_{\mathrm{DPO}} = -\beta \, w \big[\nabla_\theta \log \pi_\theta(y_w \mid x) - \nabla_\theta \log \pi_\theta(y_l \mid x)\big]$$
 
-The gradient is proportional to:
+Projecting through the Jacobian into output space:
 
 $$\mathbf{g}_{\mathrm{DPO}} \propto J^\top \Big(\nabla_f \log \pi_\theta(y_w \mid x) - \nabla_f \log \pi_\theta(y_l \mid x)\Big)$$
 
@@ -227,8 +228,9 @@ $$\delta L(\mathcal{L}_{\mathrm{DPO}}, \mathcal{L}_{\mathrm{CE}}) = \langle \nab
 
 Positive means SFT helps DPO. Zero means they're orthogonal. Negative means
 SFT hurts DPO. But raw $\delta L$ is unusable as a training diagnostic —
-applying the chain rule to each gradient shows why. The product decomposes
-into:
+applying the chain rule to each gradient shows why (full derivation in
+[derivations.md §2–4](derivations.md#2-dot-product-of-dpo-and-ce-gradients-in-parameter-space)).
+The product decomposes into:
 
 - the **loss sensitivity** of each objective — how steep each loss landscape is
   in output space ($\nabla_f \mathcal{L}$, one per objective),
@@ -296,6 +298,146 @@ gains require the contrastive structure that only DPO provides.
 **Cost:** a couple of backward passes on a held-out preference batch per
 checkpoint — negligible compared to a training step. No changes to the
 training loop; the measurement is purely diagnostic.
+
+### Necessary vs sufficient: parameter space and spectral space
+
+The DPO-CE gradient overlap can be decomposed in two complementary ways (see
+[derivations.md §2–5](derivations.md#2-dot-product-of-dpo-and-ce-gradients-in-parameter-space)
+for the full math):
+
+**In parameter space**, with score functions
+$g_w = \nabla_\theta \log \pi_\theta(y_w \mid x)$ and
+$g_l = \nabla_\theta \log \pi_\theta(y_l \mid x)$, and setting
+$\pi_{\mathrm{ref}} = \pi_\theta$ (the diagnostic setting), the overlap
+reduces to:
+
+$$\frac{\beta}{2} \, \lVert g_w \rVert \big(\lVert g_w \rVert - \lVert g_l \rVert \cos \alpha\big)$$
+
+where $\alpha$ is the angle between $g_w$ and $g_l$. This makes three
+quantities visible: the norm of each score function and their angular
+separation.
+
+The parameter-space angle $\cos \alpha$ is probably already well below 1 right
+after SFT — due to high dimensionality of parameter space alone. So the
+contrastive signal $g_w - g_l$ is nontrivial from the start. But existing is
+not enough — and the norm dynamics of $\lVert g_w \rVert$ and
+$\lVert g_l \rVert$ are unpredictable (each is the product of a loss gradient
+and a Jacobian that can move in opposite directions during training).
+
+$\chi_{\mathrm{pos}}$ adds eigenvalue weighting: it measures alignment not in
+raw parameter space but through the lens of the model's current learning
+dynamics. Two score functions can differ in parameter space while projecting
+onto the *same* eNTK eigenmodes in the bulk, with their differences
+concentrated in eigenmodes with tiny eigenvalues — directions where gradient
+descent barely moves the outputs.
+
+This gives a two-part diagnostic:
+
+| | what it tells you | what it costs |
+|---|---|---|
+| **$\cos \alpha < 1$** (parameter space) | the contrastive signal exists — **necessary condition** | cheap: two backward passes, no Hutchinson |
+| **$\chi_{\mathrm{pos}} > 0$** (spectral) | the model can act on the signal — **sufficient condition** | requires Hutchinson trace estimation |
+
+The switch point is the sufficient condition. The gap between necessary and
+sufficient is itself informative: a large gap means the preference-relevant
+features are deep in the tail (hard to learn); a small gap means they're
+closer to the bulk (easier).
+
+### What the diagnostic tells us about DPO
+
+The practical value is the transition point. But if the transition exists, it
+proves something deeper about what DPO is actually doing.
+
+A neural network doesn't learn all features equally easily. At any point
+during training, some output directions respond strongly to weight updates —
+a small change in the weights produces a large change in the outputs. Others
+respond weakly — the weights barely move the outputs at all. The model learns
+the easy directions first and the hard directions last. This ordering is not a
+design choice; it falls out of the weight geometry.
+
+The picture below shows what this looks like. The x-axis ranks directions by
+how strongly they respond to weight updates (technically: the eigenvalues of
+the Jacobian outer product $\nabla_\theta f (\nabla_\theta f)^\top$). The
+y-axis is the magnitude. It typically looks like a power law — a few large
+values (the "bulk") and a long tail of small values:
+
+```
+Panel A: The learning spectrum and SFT progression
+
+eigenvalue
+  │
+  │▓▓
+  │▓▓▓▓
+  │▓▓▓▓▓▓
+  │▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+  │▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+  └───────────────────────────────────────────────>
+   bulk                                      tail
+   grammar, coherence,            preference-relevant:
+   common patterns                helpfulness, tone,
+                                  factual accuracy
+
+         ◄══════╗
+         SFT    ║  SFT resolves the spectrum left to right.
+         window ║  The window slides toward the tail during
+                ║  training.
+                ║
+                ╚══► zero-to-positive transition:
+                     SFT arrives at the band where
+                     DPO features live
+```
+
+```
+Panel B: What DPO does — the spectral filter
+
+eigenvalue
+  │
+  │▓▓                                        SFT gradient: broad,
+  │▓▓▓▓                                      covers the full spectrum
+  │▓▓▓▓▓▓            ◄───── SFT ─────►
+  │▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+  │▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+  └───────────────────────────────────────────────>
+                                  ◄── DPO ──►
+                                  DPO gradient: narrow,
+                                  tail only — the contrast
+                                  between y_w and y_l cuts
+                                  out the bulk
+
+                      ◄─ overlap ─►
+                      chi_pos > 0 only
+                      when SFT reaches
+                      this region
+```
+
+Panel A shows the spectrum and SFT's progression through it. The bulk (left)
+contains the easy, coarse features. The tail (right) contains the hard,
+fine-grained features — including the ones that distinguish preferred from
+dispreferred responses. SFT works through the spectrum left to right.
+
+Panel B shows the key insight: the DPO gradient, because it contrasts two
+similar responses, cancels the bulk and isolates the tail. The SFT gradient
+covers the full spectrum. $\chi_{\mathrm{pos}}$ measures their overlap. Before
+SFT reaches the tail, the overlap is zero. After it does, the overlap is
+positive. That's the transition.
+
+**The theoretical claim, precisely stated.** In the eigendecomposition of the
+empirical Neural Tangent Kernel
+$\Theta = \nabla_\theta f \, (\nabla_\theta f)^\top$ with eigenvalues
+$\lambda_k$ and eigenvectors $q_k$, the bulk (large $\lambda_k$) is resolved
+first during SFT, the tail (small $\lambda_k$) last. The DPO loss gradient
+$\nabla_f \mathcal{L}_{\mathrm{DPO}}$ projects predominantly onto tail
+eigenmodes because the contrastive structure cancels the bulk projection. The
+zero-to-positive transition of $\chi_{\mathrm{pos}}$ is evidence that
+preference-relevant features live in the tail of the supervised learning
+spectrum.
+
+If this holds, it places DPO in the learning-theoretic picture: preference
+optimization is not a different kind of learning — it is the same gradient
+descent, but targeted at the spectral band that supervised learning reaches
+last. The contrastive structure of the DPO loss is what makes it possible to
+operate in that band directly, rather than waiting for SFT to get there on its
+own.
 
 ## Relation to the spectral\_tail experiment
 
