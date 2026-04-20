@@ -1,470 +1,201 @@
 # DPO as a spectral filter
 
-## Hypothesis
+## The claim
 
-Preference optimization (DPO) acts as a spectral filter on the empirical
-Neural Tangent Kernel (eNTK). By contrasting a preferred response $y_w$ against
-a dispreferred response $y_l$ to the same prompt, the DPO gradient subtracts out
-the bulk eigenmodes shared by both responses and isolates the spectral tail —
-the late-learned, fine-grained directions in parameter space that encode
-preference-relevant distinctions.
+Standard LLM alignment pipelines run SFT first, then DPO. The transition
+between them is chosen by heuristic — run SFT until the loss plateaus, then
+switch. This work proposes:
 
-### Setup in LNA language
+1. A **diagnostic** for when a model is ready to switch from SFT to DPO,
+   computable from a cheap gradient dot product.
+2. A **theoretical test** of the claim that DPO operates in the spectral tail
+   of supervised learning — a claim that, if true, places preference
+   optimization in the learning-theoretic picture of neural network training.
 
-The LNA decomposition factors the linearized loss change between two
-distributions $A$ and $B$ as:
+These are two logically independent claims. The diagnostic can work even if
+the spectral theory is wrong. The theory can be confirmed independently of
+the diagnostic's utility. Both use the same measurements.
 
-$$\delta L(A, B) = \chi_{\mathrm{loss}} \cdot \chi_{\mathrm{net}} \cdot \chi_{\mathrm{pos}}$$
+## Background: what we know from pre-training
 
-where $\chi_{\mathrm{pos}}$ captures the spectral overlap: which eigenmodes of
-the eNTK are shared between the gradient directions of $A$ and $B$, weighted by
-eigenvalue.
+A neural network does not learn all features equally easily. At any point
+during training, some directions in the model's output space respond strongly
+to weight updates, others barely at all. The **spectrum** ranks these
+directions by how strongly they respond.
 
-Now consider two eval batches at a given checkpoint:
+Intuitively: large eigenvalues correspond to dominant, shared features —
+directions that many data samples pull the model toward (grammar, common
+patterns, coarse semantics). Small eigenvalues correspond to sparse
+directions — features only a few samples push on (subtle distinctions,
+fine-grained quality). The top of the spectrum is the **bulk**; the tail is,
+well, the tail.
 
-- **$A$ = preferred completions** ($y_w$ given prompt $x$)
-- **$B$ = dispreferred completions** ($y_l$ given same prompt $x$)
+Empirically, gradient descent resolves this spectrum from bulk to tail.
+Large-eigenvalue directions are learned first; small-eigenvalue directions
+are learned last.
 
-Because $y_w$ and $y_l$ respond to the same prompt and share most surface-level
-structure (syntax, vocabulary, topic), their per-sample gradients project onto
-nearly the same bulk eigenmodes of the eNTK. The spectral bulk — large
-eigenvalues, well-learned features — is shared. The spectral tail — small
-eigenvalues, late-learned or unresolved features — is where the two responses
-diverge.
+![Pre-training dynamics: loss and kernel alignment vs compute](PT-dynamics.png)
 
-### The SFT gradient lives in the bulk
+The figure shows kernel alignment (a scalar measuring where the loss gradient
+sits in the spectrum — high = bulk, low = tail) dropping systematically during
+pre-training on SimpleStories, across model scales from 7M to 66M parameters.
+The loss follows a clean power law; the kernel alignment reveals the spectral
+story underneath: learning progresses from bulk to tail.
 
-SFT minimizes cross-entropy on $y_w$:
+## Hypothesis: SFT extends this, DPO operates on the tail
 
-$$\mathbf{g}_{\mathrm{SFT}} = J^\top \nabla_f \mathcal{L}(y_w)$$
+SFT is a continuation of pre-training with specific high-quality data. The same
+bulk-to-tail dynamics should apply: early SFT resolves coarse features shared
+by all in-distribution completions; late SFT resolves subtler features
+distinguishing good completions from bad. Once the bulk is resolved, the
+remaining signals are weak — small eigenvalues, small gradients, diminishing
+returns from continued SFT.
 
-This gradient is dominated by the large eigenvalues of $J J^\top$ (the eNTK).
-The model is pushed to "predict these tokens better", but the bulk eigenmodes
-are already resolved, so the gradient mostly reinforces what the model already
-knows. Diminishing returns.
+Now consider DPO. Its gradient is the *difference* of two score functions:
 
-### The DPO gradient isolates the tail
+$$\nabla_\theta \mathcal{L}_{\mathrm{DPO}} \propto \nabla_\theta \log \pi_\theta(y_w \mid x) - \nabla_\theta \log \pi_\theta(y_l \mid x)$$
 
-The DPO gradient (derived in [derivations.md §1](derivations.md#1-the-dpo-gradient))
-is the *difference* of two score functions, modulated by an adaptive weight:
+When $y_w$ and $y_l$ are completions to the same prompt, their score
+functions share most of their structure (same prompt, similar syntax, similar
+surface patterns). The subtraction cancels the shared part. What survives is
+the component where they differ. 
+Since DPO improves on SFT, it is targeting the parts of the signals that SFT hasn't resolved yet — likely living in the tail of the spectrum. 
 
-$$\nabla_\theta \mathcal{L}_{\mathrm{DPO}} = -\beta \, w \big[\nabla_\theta \log \pi_\theta(y_w \mid x) - \nabla_\theta \log \pi_\theta(y_l \mid x)\big]$$
+**This suggests a natural reading of why we switch from SFT to DPO.** SFT
+eventually hits a regime where only weak tail signals remain. If DPO then
+starts making progress again, it must be because its contrastive structure
+highlights exactly those tail modes — features the bulk-focused SFT gradient
+can't reach.
 
-Projecting through the Jacobian into output space:
+## Two goals
 
-$$\mathbf{g}_{\mathrm{DPO}} \propto J^\top \Big(\nabla_f \log \pi_\theta(y_w \mid x) - \nabla_f \log \pi_\theta(y_l \mid x)\Big)$$
+We want to do two things, and they require the same measurements but have
+different standards of proof:
 
-The subtraction cancels the shared bulk projection. What survives is the
-component along eigenmodes where $y_w$ and $y_l$ differ — the spectral tail.
+1. **Test the hypothesis.** Does DPO's loss gradient live in the spectral
+   tail relative to SFT's? This is a claim about mechanism.
+2. **Provide a readiness diagnostic.** Can we tell, from the current model
+   state, whether SFT has resolved enough structure for DPO to take over?
+   This is a practical tool.
 
-### Consequences
+## Two diagnostics
 
-1. **Why DPO outperforms more SFT on good data.** SFT keeps pushing on
-   already-resolved bulk modes. DPO targets the unresolved tail where the
-   model still has room to improve.
+Consider a held-out preference pair $(y_w, y_l)$ for prompt $x$. Evaluate at
+each SFT checkpoint:
 
-2. **Why DPO is unstable.** Operating in the tail means small eigenvalues,
-   small gradients, high relative variance. Stochastic estimation (minibatch
-   noise, any Hutchinson-style approximation) has proportionally larger
-   errors. This predicts sensitivity to learning rate, $\beta$, and batch
-   composition.
+**(a) Spectral-position ratio:**
 
-3. **Why the reference model matters.** The KL penalty to $\pi_{\mathrm{ref}}$
-   anchors the bulk eigenmodes. Without it, the tail-only gradient can drag
-   bulk modes through nonlinear coupling, degrading general capabilities. The
-   reference model pins the bulk so only the tail moves. Consistent with the
-   empirical observation that DPO without KL regularization degrades fluency.
+$$R_{\mathrm{spec}} = \frac{\chi_{\mathrm{pos}}(\mathcal{L}_{\mathrm{DPO}}, \mathcal{L}_{\mathrm{DPO}})}{\chi_{\mathrm{pos}}(\mathcal{L}_{\mathrm{CE}}, \mathcal{L}_{\mathrm{CE}})}$$
 
-4. **When DPO should fail.** The bulk cancellation relies on $y_w$ and $y_l$
-   being spectrally close in the bulk — i.e., structurally similar completions
-   that differ in subtle quality. When pairs are structurally very different (a
-   500-token helpful response vs a 20-token refusal), the bulk doesn't cancel
-   cleanly and DPO behaves more like SFT-on-the-difference. This may explain
-   why DPO on low-quality preference data (where pairs are structurally
-   dissimilar) tends to underperform.
-
-## Testable predictions
+where $\chi_{\mathrm{pos}}(\mathcal{L}, \mathcal{L})$ is a spectral position
+score (see [derivations.md](derivations.md)). It measures the (normalized) eigenvalue of the spectrum that the model currently learns. 
+It lives in $[0, 1]$ — close
+to 1 when the loss gradient aligns with bulk eigenmodes, close to 0 when it
+aligns with the tail.
 
-Using vatis, we can measure $\chi_{\mathrm{pos}}(A, B)$ where $A$ = preferred
-and $B$ = dispreferred completions at the same prompt, evaluated at different
-checkpoints during training.
-
-### Prediction 1: $\chi_{\mathrm{pos}}(y_w, y_l)$ is small at the SFT checkpoint
-
-At the end of SFT, the bulk is resolved but the tail is not. The preferred and
-dispreferred responses share the bulk (by construction — same prompt, similar
-surface structure), so their gradient overlap lives mostly in well-resolved
-eigenmodes. $\chi_{\mathrm{pos}}$, which weights overlap by the spectral
-position, should be small because the tail modes where $y_w$ and $y_l$ diverge
-have small eigenvalues.
-
-### Prediction 2: $\chi_{\mathrm{pos}}(y_w, y_l)$ shifts during DPO
-
-As DPO training progresses, the optimizer resolves the tail modes that
-distinguish $y_w$ from $y_l$. At intermediate DPO checkpoints,
-$\chi_{\mathrm{pos}}(y_w, y_l)$ should show a transient bump — the same
-"spectral arrival" signature we looked for in the spectral\_tail experiment.
-After those modes are resolved, $\chi_{\mathrm{pos}}$ should decrease again.
-
-### Prediction 3: structurally dissimilar pairs weaken the filter
-
-For preference pairs where $y_w$ and $y_l$ differ substantially in length,
-topic, or format, the bulk cancellation is incomplete.
-$\chi_{\mathrm{pos}}(y_w, y_l)$ should be larger (more bulk leakage) and less
-predictive of DPO training dynamics.
-
-## Using $\chi_{\mathrm{pos}}$ with the DPO loss directly
-
-The predictions above use the CE loss inside vatis: $y_w$ and $y_l$ are
-separate eval batches, and we measure spectral overlap of their CE gradients.
-But we can also plug $\mathcal{L}_{\mathrm{DPO}}$ itself into vatis as the
-loss function. This gives access to a different set of observables that probe
-the hypothesis from the inside — asking not "how do the two completions relate
-in CE-space?" but "where does the DPO gradient actually live in the spectrum?"
-
-To set up notation: write the eNTK eigendecomposition as
-$\Theta = \sum_k \lambda_k \mathbf{v}_k \mathbf{v}_k^\top$ and the
-logit-space gradient of a loss $\mathcal{L}$ as
-$\mathbf{u} = \nabla_f \mathcal{L}$. Then:
-
-$$\chi_{\mathrm{pos}}(A, B) = \frac{\sum_k \lambda_k \, (\hat{\mathbf{u}}_A \cdot \mathbf{v}_k)(\hat{\mathbf{u}}_B \cdot \mathbf{v}_k)}{\sum_k \lambda_k}$$
-
-where $\hat{\mathbf{u}} = \mathbf{u} / \lVert \mathbf{u} \rVert$. This is
-the eigenvalue-weighted cosine alignment between the two logit-space gradient
-directions, normalized by the trace. It tells you: in which spectral band do
-$A$ and $B$ overlap, and how large are the eigenvalues there?
-
-### Measurement A: DPO self-pair — $\chi_{\mathrm{pos}}(\mathcal{L}_{\mathrm{DPO}}, \mathcal{L}_{\mathrm{DPO}})$
-
-The self-pair $\chi_{\mathrm{pos}}$ is positive by definition — it is
-$\sum_k \lambda_k (\hat{\mathbf{u}}_{\mathrm{DPO}} \cdot \mathbf{v}_k)^2 / \sum_k \lambda_k$,
-a sum of non-negative terms. Its magnitude tells us where the DPO gradient
-sits in the NTK spectrum: large means the gradient projects onto bulk
-eigenvectors (large $\lambda_k$), small means it projects onto tail
-eigenvectors (small $\lambda_k$).
-
-The interesting structure is the temporal dynamics during SFT, which split into
-two regimes:
-
-1. **Early SFT — resolving the bulk.** The optimizer is reshuffling the
-   dominant eigenmodes: the eigenbasis is rotating rapidly, eigenvalues are
-   shifting. The DPO gradient $\mathbf{u}_{\mathrm{DPO}}$ projects onto modes
-   that are currently unresolved or being restructured. Its projection is
-   unstable — the eigenvectors it aligns with keep moving under it. This
-   predicts **fluctuations** in
-   $\chi_{\mathrm{pos}}(\mathcal{L}_{\mathrm{DPO}}, \mathcal{L}_{\mathrm{DPO}})$
-   during the early SFT phase. The signal size is unclear a priori — the DPO
-   gradient may be small in norm (the model hasn't developed the features
-   preference optimization cares about), so the fluctuations could be
-   dominated by Hutchinson noise.
-
-2. **Late SFT — approaching the tail.** The bulk is stabilized, the large
-   eigenvalues and their eigenvectors have settled. The DPO gradient now gets a
-   clean projection onto well-defined tail modes. If these tail modes have
-   growing eigenvalues (the model is starting to develop the fine-grained
-   features that distinguish $y_w$ from $y_l$), then
-   $\chi_{\mathrm{pos}}(\mathcal{L}_{\mathrm{DPO}}, \mathcal{L}_{\mathrm{DPO}})$
-   should increase — the DPO loss is picking up a clean spectral signal. This
-   is the regime where the model is ready for preference optimization.
-
-### Measurement B: DPO vs CE — $\chi_{\mathrm{pos}}(\mathcal{L}_{\mathrm{DPO}}, \mathcal{L}_{\mathrm{CE}}(y_w))$
-
-Unlike the self-pair, the cross-pair
-$\chi_{\mathrm{pos}}(\mathcal{L}_{\mathrm{DPO}}, \mathcal{L}_{\mathrm{CE}})$
-can be negative. The sign carries physical meaning: it measures whether a CE
-update (an SFT step on $y_w$) improves or hurts the DPO loss.
-
-- $\chi_{\mathrm{pos}} > 0$: the SFT gradient and DPO gradient project onto
-  the same eigenmodes with the same sign — an SFT step also helps the
-  preference objective. The two losses share a common spectral basis.
-- $\chi_{\mathrm{pos}} \approx 0$: the two gradients live in decoupled
-  spectral bands — SFT neither helps nor hurts DPO.
-- $\chi_{\mathrm{pos}} < 0$: the SFT gradient opposes the DPO gradient in the
-  dominant spectral band — continued SFT actively hurts preference alignment.
-
-**Predicted dynamics during SFT:**
-
-Early in SFT, $\mathbf{u}_{\mathrm{CE}}$ lives in the bulk and
-$\mathbf{u}_{\mathrm{DPO}}$ targets features the model hasn't developed yet.
-The two gradients project onto different spectral bands, so their
-eigenvalue-weighted overlap averages to $\approx 0$. As SFT progresses and
-the model reaches the tail where preference-relevant features live, common
-structure emerges: both gradients start to project onto the same modes, and
-$\chi_{\mathrm{pos}}(\mathcal{L}_{\mathrm{DPO}}, \mathcal{L}_{\mathrm{CE}})$
-becomes positive.
-
-The zero-to-positive transition marks the point where SFT and DPO become
-spectrally coupled — where the model has developed enough structure that
-next-token prediction and preference optimization share a common basis. This
-is a candidate diagnostic for **when to switch from SFT to DPO**: before the
-transition, DPO has no spectral foothold; after it, the model is ready.
-
-### Implementation note
-
-Measurements A and B require vatis to accept a non-CE loss function for
-$\chi_{\mathrm{loss}}$ (currently only the closed-form CE path is wired up).
-The math is one extra `torch.autograd.grad(L, logits)` call plus a masked
-squared sum — trivial, but it needs the custom-loss plumbing from the v1.2
-work order.
-
-## Practical perspective
-
-### When to switch from SFT to DPO
-
-**The claim:** we can tell you when a model is ready to switch from SFT to
-DPO — not by waiting for the loss to plateau, but by measuring whether the
-two objectives are directionally aligned.
-
-**The problem.** A standard alignment pipeline runs SFT first, then DPO. The
-transition point is chosen by heuristic — run SFT until the loss plateaus,
-then switch. There is no principled diagnostic for whether the model has
-developed the internal representations that preference optimization needs.
-
-**The idea.** Take a held-out preference pair $(y_w, y_l)$ for a prompt $x$.
-At each SFT checkpoint, ask: does an SFT gradient step also reduce the DPO
-loss? The natural quantity is the gradient overlap:
-
-$$\delta L(\mathcal{L}_{\mathrm{DPO}}, \mathcal{L}_{\mathrm{CE}}) = \langle \nabla_\theta \mathcal{L}_{\mathrm{DPO}},\; \nabla_\theta \mathcal{L}_{\mathrm{CE}} \rangle$$
-
-Positive means SFT helps DPO. Zero means they're orthogonal. Negative means
-SFT hurts DPO. But raw $\delta L$ is unusable as a training diagnostic —
-applying the chain rule to each gradient shows why (full derivation in
-[derivations.md §2–4](derivations.md#2-dot-product-of-dpo-and-ce-gradients-in-parameter-space)).
-The product decomposes into:
-
-- the **loss sensitivity** of each objective — how steep each loss landscape is
-  in output space ($\nabla_f \mathcal{L}$, one per objective),
-- the **model sensitivity** to weight perturbations — how much the outputs
-  change when you nudge the parameters ($\nabla_\theta f$, one per input),
-- and the directional alignment between the two.
-
-The first four factors (two loss sensitivities, two model sensitivities) each
-change by orders of magnitude during training, and since DPO and CE are
-evaluated on different inputs, all four are independent. Any directional signal
-is buried under their drift.
-
-Identifying and dividing out all four scales yields:
-
-$$\chi_{\mathrm{pos}}\!\big(\mathcal{L}_{\mathrm{DPO}},\; \mathcal{L}_{\mathrm{CE}}(y_w)\big) = \frac{\overbrace{(\nabla_f \mathcal{L}_{\mathrm{DPO}})^\top}^{\text{DPO loss direction}} \; \overbrace{\nabla_\theta f_{\mathrm{DPO}} \, (\nabla_\theta f_{\mathrm{CE}})^\top}^{\text{model coupling}} \; \overbrace{\nabla_f \mathcal{L}_{\mathrm{CE}}}^{\text{CE loss direction}}}{\underbrace{\lVert \nabla_f \mathcal{L}_{\mathrm{DPO}} \rVert_2 \;\lVert \nabla_\theta f_{\mathrm{DPO}} \rVert_F}_{\text{DPO scales}} \;\underbrace{\lVert \nabla_\theta f_{\mathrm{CE}} \rVert_F \;\lVert \nabla_f \mathcal{L}_{\mathrm{CE}} \rVert_2}_{\text{CE scales}}}$$
-
-The numerator is $\delta L$ expanded via the chain rule. The denominator
-normalizes each object by its magnitude. What's left — $\chi_{\mathrm{pos}}$
-— is the pure directional alignment between the two objectives, independent
-of how large any gradient or sensitivity happens to be.
-
-**What the sign tells you:**
-
-- **$\chi_{\mathrm{pos}} > 0$**: an SFT step also helps the DPO objective —
-  the two losses share a common feature basis. The model is ready for DPO.
-- **$\chi_{\mathrm{pos}} \approx 0$**: the two objectives are orthogonal —
-  SFT is resolving features (e.g. grammar, common syntax) that have nothing to
-  do with what distinguishes the preferred from the dispreferred response.
-  Starting DPO here means the preference gradient has no foothold.
-- **$\chi_{\mathrm{pos}} < 0$**: the two objectives are in conflict —
-  continued SFT actively hurts preference alignment.
-
-**Expected trajectory during SFT:**
-
-```
-chi_pos
-  ^
-  |          ┌─────────── model is ready for DPO
-  |         /
-  + - - - -/- - - - - - - - - - - -  0
-  |       /
-  |      /
-  +─────·
-  └──────────────────────────────────> SFT step
-    early SFT:              late SFT:
-    learning grammar,       resolving features
-    basic token patterns    DPO cares about
-```
-
-Early in SFT, the model learns to produce grammatical text, predict common
-token patterns, maintain coherence — features shared equally by the preferred
-and dispreferred response. The DPO gradient targets the subtle features that
-distinguish them (helpfulness, factual accuracy, safety). These are unrelated,
-so $\chi_{\mathrm{pos}} \approx 0$.
-
-As SFT progresses and the model develops richer internal representations, the
-features being resolved begin to overlap with what preference optimization
-cares about. $\chi_{\mathrm{pos}}$ becomes positive.
-
-The **zero-to-positive transition** marks the earliest point at which DPO can
-get a clean signal. Before it, the model lacks the representational
-prerequisites. After it, further SFT has diminishing returns — the remaining
-gains require the contrastive structure that only DPO provides.
-
-**Cost:** a couple of backward passes on a held-out preference batch per
-checkpoint — negligible compared to a training step. No changes to the
-training loop; the measurement is purely diagnostic.
-
-### Necessary vs sufficient: parameter space and spectral space
-
-The DPO-CE gradient overlap can be decomposed in two complementary ways (see
-[derivations.md §2–5](derivations.md#2-dot-product-of-dpo-and-ce-gradients-in-parameter-space)
-for the full math):
-
-**In parameter space**, with score functions
-$g_w = \nabla_\theta \log \pi_\theta(y_w \mid x)$ and
-$g_l = \nabla_\theta \log \pi_\theta(y_l \mid x)$, and setting
-$\pi_{\mathrm{ref}} = \pi_\theta$ (the diagnostic setting), the overlap
-reduces to:
-
-$$\frac{\beta}{2} \, \lVert g_w \rVert \big(\lVert g_w \rVert - \lVert g_l \rVert \cos \alpha\big)$$
-
-where $\alpha$ is the angle between $g_w$ and $g_l$. This makes three
-quantities visible: the norm of each score function and their angular
-separation.
-
-The parameter-space angle $\cos \alpha$ is probably already well below 1 right
-after SFT — due to high dimensionality of parameter space alone. So the
-contrastive signal $g_w - g_l$ is nontrivial from the start. But existing is
-not enough — and the norm dynamics of $\lVert g_w \rVert$ and
-$\lVert g_l \rVert$ are unpredictable (each is the product of a loss gradient
-and a Jacobian that can move in opposite directions during training).
-
-$\chi_{\mathrm{pos}}$ adds eigenvalue weighting: it measures alignment not in
-raw parameter space but through the lens of the model's current learning
-dynamics. Two score functions can differ in parameter space while projecting
-onto the *same* eNTK eigenmodes in the bulk, with their differences
-concentrated in eigenmodes with tiny eigenvalues — directions where gradient
-descent barely moves the outputs.
-
-This gives a two-part diagnostic:
-
-| | what it tells you | what it costs |
+If the hypthesis is correct, data that sits in the tail for CE (small $\chi_{\mathrm{pos}}$) sit in the bulk for DPO (large $\chi_{\mathrm{pos}}$), so $R_{\mathrm{spec}}$ should increase above 1 during SFT. This picture means that changing to the DPO objective effectively applies a spectral filter that cancels the bulk and isolates the tail. We expect this behavior to be more pronounced the more nuanced the preference pairs are.
+
+
+**(b) Directional alignment:**
+
+$$R_{\mathrm{dir}} 
+= \frac{\chi_{\mathrm{pos}}(\mathcal{L}_{\mathrm{DPO}}, \mathcal{L}_{\mathrm{CE}})}{\sqrt{\chi_{\mathrm{pos}}(\mathcal{L}_{\mathrm{DPO}}, \mathcal{L}_{\mathrm{DPO}}) \cdot \chi_{\mathrm{pos}}(\mathcal{L}_{\mathrm{CE}}, \mathcal{L}_{\mathrm{CE}})}}
+= \frac{\langle \nabla_\theta \mathcal{L}_{\mathrm{DPO}},\; \nabla_\theta \mathcal{L}_{\mathrm{CE}} \rangle}{\lVert \nabla_\theta \mathcal{L}_{\mathrm{DPO}} \rVert \;\lVert \nabla_\theta \mathcal{L}_{\mathrm{CE}} \rVert}$$
+
+Bounded in $[-1, 1]$. Sign interpretation:
+
+- $R_{\mathrm{dir}} > 0$: an SFT step also reduces the DPO loss. The two
+  objectives are aligned.
+- $R_{\mathrm{dir}} \approx 0$: orthogonal. SFT neither helps nor hurts DPO.
+- $R_{\mathrm{dir}} < 0$: the objectives are in conflict.
+
+This is the **readiness claim** — a test of whether an SFT step is
+operationally useful for DPO, regardless of why. For maximum readiness, we want to maximize $R_{\mathrm{dir}}$ — the more SFT pushes toward the DPO tail, the better.
+
+**Why $R_{\mathrm{dir}}$ is surprisingly cheap.** $R_{\mathrm{dir}}$ can be
+derived from the same spectral decomposition used for $R_{\mathrm{spec}}$, but
+it reduces to a plain parameter-space cosine. Computing it requires only two
+backward passes (one for each loss) and a dot product — **no Hutchinson trace
+estimation, no Jacobian machinery**. This matters in practice: you can
+evaluate $R_{\mathrm{dir}}$ at every SFT checkpoint at negligible cost.
+$R_{\mathrm{spec}}$ requires Hutchinson trace estimation through vatis, so
+it's more expensive but still tractable on held-out evaluation data.
+
+## Four possible outcomes
+
+The two diagnostics can each pass or fail independently:
+
+| $R_{\mathrm{spec}} > 1$ | $R_{\mathrm{dir}}$ stable positive | conclusion |
 |---|---|---|
-| **$\cos \alpha < 1$** (parameter space) | the contrastive signal exists — **necessary condition** | cheap: two backward passes, no Hutchinson |
-| **$\chi_{\mathrm{pos}} > 0$** (spectral) | the model can act on the signal — **sufficient condition** | requires Hutchinson trace estimation |
+| ✓ | ✓ | hypothesis supported, diagnostic works |
+| ✗ | ✓ | hypothesis wrong — but the practical diagnostic still works via a different mechanism |
+| ✓ | ✗ | DPO is spectrally separated from SFT but SFT doesn't help — interesting anomaly |
+| ✗ | ✗ | the whole picture doesn't apply |
 
-The switch point is the sufficient condition. The gap between necessary and
-sufficient is itself informative: a large gap means the preference-relevant
-features are deep in the tail (hard to learn); a small gap means they're
-closer to the bulk (easier).
+The practical claim is **robust**: it survives even if the theoretical story
+is wrong. The theoretical claim is **independently testable**: we can
+falsify or support it regardless of whether the diagnostic has practical
+value. This is a stronger position than a single combined measurement.
 
-### What the diagnostic tells us about DPO
+## Detection strategy
 
-The practical value is the transition point. But if the transition exists, it
-proves something deeper about what DPO is actually doing.
+Evaluate both diagnostics on a held-out set of preference pairs at regular
+SFT checkpoints. Per-pair measurements are noisy; aggregation is what turns
+them into high-confidence detection:
 
-A neural network doesn't learn all features equally easily. At any point
-during training, some output directions respond strongly to weight updates —
-a small change in the weights produces a large change in the outputs. Others
-respond weakly — the weights barely move the outputs at all. The model learns
-the easy directions first and the hard directions last. This ordering is not a
-design choice; it falls out of the weight geometry.
+- Track the **median $R_{\mathrm{spec}}$** across the held-out set per
+  checkpoint. The transition is a rise above a threshold (say 5) — CE's
+  gradient has slid into its own tail while DPO's gradient sits in the bulk
+  of its own kernel.
+- Track the **fraction of pairs with $R_{\mathrm{dir}} > 0$**. The transition
+  is when this fraction exceeds (say) 80%.
 
-The picture below shows what this looks like. The x-axis ranks directions by
-how strongly they respond to weight updates (technically: the eigenvalues of
-the Jacobian outer product $\nabla_\theta f (\nabla_\theta f)^\top$). The
-y-axis is the magnitude. It typically looks like a power law — a few large
-values (the "bulk") and a long tail of small values:
+The readiness point is when **both** conditions are met:
 
-```
-Panel A: The learning spectrum and SFT progression
+- $R_{\mathrm{spec}}$ large → CE has exhausted its bulk (SFT signal is
+  decaying) while DPO has untapped bulk signal in its own kernel
+- $R_{\mathrm{dir}}$ positive → SFT is currently pushing in a direction that
+  also reduces DPO loss
 
-eigenvalue
-  │
-  │▓▓
-  │▓▓▓▓
-  │▓▓▓▓▓▓
-  │▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-  │▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-  └───────────────────────────────────────────────>
-   bulk                                      tail
-   grammar, coherence,            preference-relevant:
-   common patterns                helpfulness, tone,
-                                  factual accuracy
-
-         ◄══════╗
-         SFT    ║  SFT resolves the spectrum left to right.
-         window ║  The window slides toward the tail during
-                ║  training.
-                ║
-                ╚══► zero-to-positive transition:
-                     SFT arrives at the band where
-                     DPO features live
-```
-
-```
-Panel B: What DPO does — the spectral filter
-
-eigenvalue
-  │
-  │▓▓                                        SFT gradient: broad,
-  │▓▓▓▓                                      covers the full spectrum
-  │▓▓▓▓▓▓            ◄───── SFT ─────►
-  │▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-  │▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-  └───────────────────────────────────────────────>
-                                  ◄── DPO ──►
-                                  DPO gradient: narrow,
-                                  tail only — the contrast
-                                  between y_w and y_l cuts
-                                  out the bulk
-
-                      ◄─ overlap ─►
-                      chi_pos > 0 only
-                      when SFT reaches
-                      this region
-```
-
-Panel A shows the spectrum and SFT's progression through it. The bulk (left)
-contains the easy, coarse features. The tail (right) contains the hard,
-fine-grained features — including the ones that distinguish preferred from
-dispreferred responses. SFT works through the spectrum left to right.
-
-Panel B shows the key insight: the DPO gradient, because it contrasts two
-similar responses, cancels the bulk and isolates the tail. The SFT gradient
-covers the full spectrum. $\chi_{\mathrm{pos}}$ measures their overlap. Before
-SFT reaches the tail, the overlap is zero. After it does, the overlap is
-positive. That's the transition.
-
-**The theoretical claim, precisely stated.** In the eigendecomposition of the
-empirical Neural Tangent Kernel
-$\Theta = \nabla_\theta f \, (\nabla_\theta f)^\top$ with eigenvalues
-$\lambda_k$ and eigenvectors $q_k$, the bulk (large $\lambda_k$) is resolved
-first during SFT, the tail (small $\lambda_k$) last. The DPO loss gradient
-$\nabla_f \mathcal{L}_{\mathrm{DPO}}$ projects predominantly onto tail
-eigenmodes because the contrastive structure cancels the bulk projection. The
-zero-to-positive transition of $\chi_{\mathrm{pos}}$ is evidence that
-preference-relevant features live in the tail of the supervised learning
-spectrum.
-
-If this holds, it places DPO in the learning-theoretic picture: preference
-optimization is not a different kind of learning — it is the same gradient
-descent, but targeted at the spectral band that supervised learning reaches
-last. The contrastive structure of the DPO loss is what makes it possible to
-operate in that band directly, rather than waiting for SFT to get there on its
-own.
+Either alone has a failure mode. $R_{\mathrm{spec}}$ large but
+$R_{\mathrm{dir}} \approx 0$: the two objectives are spectrally separated but
+orthogonal — switching to DPO may work but further SFT won't help build
+toward it. $R_{\mathrm{spec}} \approx 1$ but $R_{\mathrm{dir}} > 0$: SFT and
+DPO overlap, both in the bulk of their respective kernels — more SFT is
+still useful, DPO hasn't specialized yet. Only the conjunction says "the
+objectives have spectrally separated, DPO has fresh signal to learn, and
+SFT is currently pushing toward it."
 
 ## Relation to the spectral\_tail experiment
 
-The spectral\_tail experiment asked: can $\chi_{\mathrm{pos}}$ detect when a
-model resolves shared semantic structure between Python and C++ implementations
-of the same algorithms? The signal was ambiguous — a possible bump at 70m but
-not reproducibly separable from Hutchinson noise.
+A previous experiment in this repo asked whether $\chi_{\mathrm{pos}}$ can
+detect when a model resolves shared semantic structure between Python and C++
+implementations of the same algorithms. The signal was ambiguous.
 
-This experiment is the same question in a setting where the "shared structure"
-is operationally defined (the preference dataset tells us which features matter)
-and the "spectral arrival" should be more pronounced (DPO explicitly targets
-the distinguishing features, whereas pretraining resolves them incidentally).
+This experiment is the same question in a setting where the shared structure
+is operationally defined (the preference dataset tells us which features
+matter) and the spectral arrival should be more pronounced (DPO explicitly
+targets the distinguishing features, whereas pre-training resolves them
+incidentally).
 
-If $\chi_{\mathrm{pos}}$ shows clear spectral arrival dynamics during DPO, it
-retroactively validates the spectral\_tail approach and suggests the earlier
-experiment was limited by model scale and probe design, not by the method
-itself.
+If $R_{\mathrm{spec}}$ and $R_{\mathrm{dir}}$ show clear transitions during
+SFT→DPO, it retroactively validates the spectral\_tail approach and suggests
+the earlier experiment was limited by probe design, not by the method itself.
 
 ## Open questions
 
-- Is the linearization (LNA) accurate enough in the DPO regime? DPO operates
-  with small learning rates on a pretrained model, which is favorable for
-  linearization. But the spectral tail has small eigenvalues, so higher-order
-  terms may matter precisely where we're looking.
-- Can we disentangle "DPO resolves the tail" from "DPO changes the bulk
-  geometry enough that $\chi_{\mathrm{pos}}$ moves as a side effect"? The
-  self-pair controls and the unrelated-pair controls should help here.
-- What's the right granularity — per-prompt $\chi_{\mathrm{pos}}$, or
-  aggregated across a batch of preference pairs? Per-prompt is noisier but
-  more informative.
+- **Threshold choice.** What values of $\tau_{\mathrm{spec}}$ and
+  $\tau_{\mathrm{dir}}$ mark the transition? Do they vary by model scale, by
+  preference-dataset quality, by DPO hyperparameters?
+- **When does the filter fail?** The spectral cancellation in DPO relies on
+  $y_w$ and $y_l$ sharing bulk representations (structurally similar
+  completions). When pairs are very different (a 500-token helpful response
+  vs a 20-token refusal), the bulk doesn't cancel cleanly. The hypothesis
+  predicts degraded $R_{\mathrm{spec}}$ for such pairs — does it hold?
+- **Linearization accuracy.** The LNA (linear network approximation)
+  underlies the decomposition. DPO operates with small learning rates on a
+  pre-trained model, which is favorable for linearization, but the spectral
+  tail has small eigenvalues where higher-order terms may matter.
+- **Disentangling cause and effect.** Can we show that DPO *resolves* the
+  tail modes it targets, rather than just operating there? This would require
+  tracking $R_{\mathrm{spec}}$ through DPO training itself.
