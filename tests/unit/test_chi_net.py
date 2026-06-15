@@ -235,20 +235,29 @@ def test_opacus_estimator_raises_not_implemented() -> None:
         )
 
 
-def test_per_seq_cv_memory_check_fires_for_oversized_config() -> None:
+def test_per_seq_cv_memory_check_fires_for_oversized_config(monkeypatch) -> None:
     """The startup memory check must reject configurations that would
     cache more than the configured fraction of available memory in
     per-sample gradient vectors.
 
-    We pick a deliberately huge n_params (1B) so the check fires regardless
-    of how much RAM/VRAM is on the host.
+    We pin the reported "available memory" to a fixed modest value so the
+    test is independent of host RAM. An absolute 128 GB config used to be
+    assumed "always too big", but on a fat node (e.g. a 1 TB login node)
+    50% of available RAM exceeds 128 GB and the check correctly does not
+    fire — so the old test was brittle, not the check.
     """
-    huge_n_params = 1_000_000_000  # 1B params -> 32 * 1B * 4 = 128 GB at B=32
+    # Pretend 8 GB free; default 50% threshold = 4 GB.
+    monkeypatch.setattr(
+        PerSequenceControlVariateEstimator,
+        "_available_memory_bytes",
+        staticmethod(lambda device: 8 * 1024**3),
+    )
+    huge_n_params = 1_000_000_000  # 32 * 1B * 4 = 128 GB at B=32, >> 4 GB
     with pytest.raises(ValueError, match="per_sequence_cv would need"):
         PerSequenceControlVariateEstimator.check_memory_feasible(
             b_total=32,
             n_params=huge_n_params,
-            device=None,  # use host RAM
+            device=None,  # host RAM path (now stubbed)
         )
 
 
