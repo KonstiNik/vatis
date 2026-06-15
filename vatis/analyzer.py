@@ -388,7 +388,7 @@ class Analyzer:
                 )
                 _add_grads_into_flat(flat_grad_local, grads, bundle.params)
                 del logits
-            delta_loss_local = (flat_grad_local.to(dtype=torch.float64) ** 2).sum()
+            delta_loss_local = _sum_sq_fp64(flat_grad_local)
 
         # ----- chi_net (per-rank partial) -----
         method = select_chi_net_method(b_total=_global_b, requested=self.chi_net_method_request)
@@ -433,7 +433,7 @@ class Analyzer:
                 rank_weight = 0.0
             flat_grad_local.mul_(rank_weight)
             dist.all_reduce(flat_grad_local, op=dist.ReduceOp.SUM)
-            delta_loss_global = float((flat_grad_local.to(torch.float64) ** 2).sum())
+            delta_loss_global = float(_sum_sq_fp64(flat_grad_local))
         else:
             chi_loss_raw_global = float(chi_loss_raw_local)
             chi_net_global = float(chi_net_local)
@@ -518,8 +518,11 @@ class Analyzer:
                 f"Analyzer.run() does this automatically."
             )
 
-        # Cross delta_loss is just the dot product of the cached flat grads.
-        delta_loss_cross_value = float((g_a.to(torch.float64) * g_b.to(torch.float64)).sum())
+        # Cross delta_loss is the dot product of the cached flat grads. We
+        # accumulate in fp64 via ``sum(dtype=...)`` rather than casting both
+        # full-P vectors to fp64 first (which would materialize two P-sized
+        # fp64 temporaries — ~21 GiB for a 1.4B model).
+        delta_loss_cross_value = float(_dot_fp64(g_a, g_b))
 
         # Per-batch chi_loss / chi_net stashed by the self loop in
         # ``_emit_rows``. The contract above guarantees both keys exist.
@@ -619,6 +622,33 @@ def _zero_param_vector(params: list[torch.nn.Parameter], device: torch.device) -
     if not sizes:
         raise ValueError("model has no parameters")
     return torch.zeros(sum(sizes), dtype=torch.float32, device=device)
+
+
+def _sum_sq_fp64(flat: torch.Tensor, chunk: int = 1 << 25) -> torch.Tensor:
+    """``sum(flat**2)`` accumulated in fp64, chunked so it never materializes a
+    full-length fp64 copy.
+
+    The naive ``flat.to(float64).pow(2).sum()`` — and even
+    ``flat.pow(2).sum(dtype=float64)`` — allocates a P*8-byte temporary (~10 GiB
+    at 1.4B params, which OOMs a 40 GB GPU). Chunking caps the extra to ~``chunk``
+    elements while keeping the reduction in fp64.
+    """
+    total = torch.zeros((), dtype=torch.float64, device=flat.device)
+    for i in range(0, flat.numel(), chunk):
+        c = flat[i : i + chunk].to(dtype=torch.float64)
+        total = total + (c * c).sum()
+    return total
+
+
+def _dot_fp64(a: torch.Tensor, b: torch.Tensor, chunk: int = 1 << 25) -> torch.Tensor:
+    """``sum(a*b)`` accumulated in fp64, chunked (avoids the two full-length fp64
+    copies the cross-pair dot would otherwise make — ~21 GiB at 1.4B params)."""
+    total = torch.zeros((), dtype=torch.float64, device=a.device)
+    for i in range(0, a.numel(), chunk):
+        ca = a[i : i + chunk].to(dtype=torch.float64)
+        cb = b[i : i + chunk].to(dtype=torch.float64)
+        total = total + (ca * cb).sum()
+    return total
 
 
 def _add_grads_into_flat(
