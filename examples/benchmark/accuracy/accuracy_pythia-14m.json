@@ -1,0 +1,8414 @@
+{
+  "model": "EleutherAI/pythia-14m",
+  "revision": "step3000",
+  "batch_size": 8,
+  "seq_len": 64,
+  "n_params": 14067712,
+  "ref_n_h": 4096,
+  "ref_chi_net": 999831371776.0,
+  "chi_pos": 7.093021991977366e-08,
+  "batch_file": "examples/benchmark/eval_batch_b64_s512.pt",
+  "seeds": 100,
+  "records": [
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 0,
+      "chi_net": 945160847360.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 1,
+      "chi_net": 891637137408.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 2,
+      "chi_net": 1073882988544.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 3,
+      "chi_net": 884603092992.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 4,
+      "chi_net": 1025441857536.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 5,
+      "chi_net": 947310166016.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 6,
+      "chi_net": 980166115328.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 7,
+      "chi_net": 995323805696.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 8,
+      "chi_net": 992025378816.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 9,
+      "chi_net": 948864352256.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 10,
+      "chi_net": 924985982976.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 11,
+      "chi_net": 922344161280.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 12,
+      "chi_net": 1124647960576.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 13,
+      "chi_net": 984124817408.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 14,
+      "chi_net": 969402286080.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 15,
+      "chi_net": 1061799788544.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 16,
+      "chi_net": 1066705879040.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 17,
+      "chi_net": 966166380544.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 18,
+      "chi_net": 1032382644224.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 19,
+      "chi_net": 932130521088.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 20,
+      "chi_net": 1110132391936.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 21,
+      "chi_net": 1213695787008.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 22,
+      "chi_net": 1101549928448.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 23,
+      "chi_net": 915902955520.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 24,
+      "chi_net": 1017235570688.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 25,
+      "chi_net": 1002392977408.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 26,
+      "chi_net": 1029865144320.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 27,
+      "chi_net": 970020028416.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 28,
+      "chi_net": 962250539008.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 29,
+      "chi_net": 944051585024.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 30,
+      "chi_net": 1019064287232.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 31,
+      "chi_net": 1012777549824.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 32,
+      "chi_net": 994545106944.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 33,
+      "chi_net": 974895054848.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 34,
+      "chi_net": 882310119424.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 35,
+      "chi_net": 956506439680.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 36,
+      "chi_net": 997904678912.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 37,
+      "chi_net": 824764596224.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 38,
+      "chi_net": 1006461255680.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 39,
+      "chi_net": 984340824064.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 40,
+      "chi_net": 1084274245632.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 41,
+      "chi_net": 1000783413248.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 42,
+      "chi_net": 974874017792.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 43,
+      "chi_net": 925701111808.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 44,
+      "chi_net": 894863671296.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 45,
+      "chi_net": 995884466176.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 46,
+      "chi_net": 933344116736.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 47,
+      "chi_net": 968346435584.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 48,
+      "chi_net": 1053078126592.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 49,
+      "chi_net": 929207812096.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 50,
+      "chi_net": 1090649522176.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 51,
+      "chi_net": 1004268355584.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 52,
+      "chi_net": 1096019083264.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 53,
+      "chi_net": 1042714132480.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 54,
+      "chi_net": 1058119221248.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 55,
+      "chi_net": 990228840448.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 56,
+      "chi_net": 1003234787328.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 57,
+      "chi_net": 1001803612160.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 58,
+      "chi_net": 1012581662720.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 59,
+      "chi_net": 911294857216.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 60,
+      "chi_net": 1161879486464.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 61,
+      "chi_net": 1062026674176.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 62,
+      "chi_net": 1013261402112.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 63,
+      "chi_net": 1006718615552.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 64,
+      "chi_net": 1084909289472.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 65,
+      "chi_net": 1184742375424.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 66,
+      "chi_net": 1057236189184.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 67,
+      "chi_net": 943863627776.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 68,
+      "chi_net": 1208077385728.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 69,
+      "chi_net": 1012417560576.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 70,
+      "chi_net": 979573211136.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 71,
+      "chi_net": 1090143453184.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 72,
+      "chi_net": 943960948736.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 73,
+      "chi_net": 1037946191872.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 74,
+      "chi_net": 1001437659136.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 75,
+      "chi_net": 1011387400192.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 76,
+      "chi_net": 924565569536.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 77,
+      "chi_net": 936483880960.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 78,
+      "chi_net": 900555800576.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 79,
+      "chi_net": 900075356160.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 80,
+      "chi_net": 991095357440.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 81,
+      "chi_net": 956966830080.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 82,
+      "chi_net": 1110347087872.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 83,
+      "chi_net": 1005954334720.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 84,
+      "chi_net": 882428870656.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 85,
+      "chi_net": 987969552384.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 86,
+      "chi_net": 1071396945920.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 87,
+      "chi_net": 990587191296.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 88,
+      "chi_net": 867346808832.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 89,
+      "chi_net": 959688278016.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 90,
+      "chi_net": 1017945063424.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 91,
+      "chi_net": 1010690293760.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 92,
+      "chi_net": 954430849024.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 93,
+      "chi_net": 909442809856.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 94,
+      "chi_net": 1154422800384.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 95,
+      "chi_net": 919519166464.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 96,
+      "chi_net": 1032563916800.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 97,
+      "chi_net": 956993830912.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 98,
+      "chi_net": 840306393088.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 1,
+      "seed": 99,
+      "chi_net": 1050678722560.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 0,
+      "chi_net": 964318461952.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 1,
+      "chi_net": 950455500800.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 2,
+      "chi_net": 1012890009600.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 3,
+      "chi_net": 938937614336.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 4,
+      "chi_net": 1056626704384.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 5,
+      "chi_net": 949362884608.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 6,
+      "chi_net": 987112734720.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 7,
+      "chi_net": 959785730048.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 8,
+      "chi_net": 988280717312.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 9,
+      "chi_net": 973799817216.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 10,
+      "chi_net": 980065648640.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 11,
+      "chi_net": 996253958144.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 12,
+      "chi_net": 1032113946624.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 13,
+      "chi_net": 999970766848.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 14,
+      "chi_net": 928485081088.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 15,
+      "chi_net": 1038447083520.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 16,
+      "chi_net": 1011106840576.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 17,
+      "chi_net": 981755428864.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 18,
+      "chi_net": 967156695040.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 19,
+      "chi_net": 963359670272.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 20,
+      "chi_net": 1016915296256.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 21,
+      "chi_net": 1129109258240.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 22,
+      "chi_net": 1068510412800.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 23,
+      "chi_net": 994997895168.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 24,
+      "chi_net": 1044822556672.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 25,
+      "chi_net": 1004800835584.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 26,
+      "chi_net": 1030600130560.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 27,
+      "chi_net": 1060126916608.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 28,
+      "chi_net": 986579402752.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 29,
+      "chi_net": 932727685120.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 30,
+      "chi_net": 983873814528.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 31,
+      "chi_net": 1046810656768.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 32,
+      "chi_net": 986883358720.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 33,
+      "chi_net": 1030913654784.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 34,
+      "chi_net": 928014925824.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 35,
+      "chi_net": 985160286208.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 36,
+      "chi_net": 990641192960.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 37,
+      "chi_net": 876672516096.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 38,
+      "chi_net": 961953726464.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 39,
+      "chi_net": 1003945590784.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 40,
+      "chi_net": 1069370507264.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 41,
+      "chi_net": 991875235840.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 42,
+      "chi_net": 1012724531200.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 43,
+      "chi_net": 996951130112.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 44,
+      "chi_net": 958811668480.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 45,
+      "chi_net": 971503042560.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 46,
+      "chi_net": 953787023360.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 47,
+      "chi_net": 932069310464.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 48,
+      "chi_net": 1021085089792.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 49,
+      "chi_net": 919854317568.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 50,
+      "chi_net": 1054108286976.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 51,
+      "chi_net": 1026693005312.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 52,
+      "chi_net": 1045894791168.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 53,
+      "chi_net": 980081836032.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 54,
+      "chi_net": 996962009088.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 55,
+      "chi_net": 996410130432.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 56,
+      "chi_net": 984161910784.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 57,
+      "chi_net": 999421050880.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 58,
+      "chi_net": 1082958807040.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 59,
+      "chi_net": 951683776512.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 60,
+      "chi_net": 1104297721856.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 61,
+      "chi_net": 1031616790528.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 62,
+      "chi_net": 959273107456.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 63,
+      "chi_net": 1017410551808.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 64,
+      "chi_net": 1003673288704.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 65,
+      "chi_net": 1090529460224.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 66,
+      "chi_net": 1105147330560.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 67,
+      "chi_net": 988506161152.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 68,
+      "chi_net": 1111879843840.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 69,
+      "chi_net": 1069380534272.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 70,
+      "chi_net": 1003027890176.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 71,
+      "chi_net": 1082186268672.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 72,
+      "chi_net": 927296716800.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 73,
+      "chi_net": 1013546221568.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 74,
+      "chi_net": 944127868928.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 75,
+      "chi_net": 990016241664.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 76,
+      "chi_net": 922928283648.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 77,
+      "chi_net": 991622791168.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 78,
+      "chi_net": 919812046848.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 79,
+      "chi_net": 949048115200.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 80,
+      "chi_net": 1090762047488.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 81,
+      "chi_net": 974680817664.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 82,
+      "chi_net": 1071095087104.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 83,
+      "chi_net": 985758760960.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 84,
+      "chi_net": 969738944512.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 85,
+      "chi_net": 1042783666176.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 86,
+      "chi_net": 1004535742464.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 87,
+      "chi_net": 943388426240.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 88,
+      "chi_net": 917041119232.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 89,
+      "chi_net": 969120350208.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 90,
+      "chi_net": 1012150173696.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 91,
+      "chi_net": 1020796665856.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 92,
+      "chi_net": 976941940736.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 93,
+      "chi_net": 927755927552.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 94,
+      "chi_net": 1082925580288.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 95,
+      "chi_net": 985218416640.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 96,
+      "chi_net": 981173272576.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 97,
+      "chi_net": 989812490240.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 98,
+      "chi_net": 944880287744.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 2,
+      "seed": 99,
+      "chi_net": 1014148497408.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 0,
+      "chi_net": 1020131409920.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 1,
+      "chi_net": 1002603610112.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 2,
+      "chi_net": 974602174464.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 3,
+      "chi_net": 946678464512.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 4,
+      "chi_net": 1009355980800.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 5,
+      "chi_net": 973237846016.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 6,
+      "chi_net": 992445071360.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 7,
+      "chi_net": 966413778944.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 8,
+      "chi_net": 978548293632.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 9,
+      "chi_net": 1029260247040.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 10,
+      "chi_net": 972094963712.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 11,
+      "chi_net": 984956665856.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 12,
+      "chi_net": 1003245273088.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 13,
+      "chi_net": 1008209297408.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 14,
+      "chi_net": 966217105408.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 15,
+      "chi_net": 1049703743488.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 16,
+      "chi_net": 996777984000.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 17,
+      "chi_net": 989630889984.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 18,
+      "chi_net": 983504715776.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 19,
+      "chi_net": 975513911296.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 20,
+      "chi_net": 1009126408192.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 21,
+      "chi_net": 1044550385664.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 22,
+      "chi_net": 1068704464896.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 23,
+      "chi_net": 1015675158528.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 24,
+      "chi_net": 1021465329664.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 25,
+      "chi_net": 1014489743360.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 26,
+      "chi_net": 1002217996288.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 27,
+      "chi_net": 1049409683456.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 28,
+      "chi_net": 967975632896.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 29,
+      "chi_net": 976604823552.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 30,
+      "chi_net": 993435648000.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 31,
+      "chi_net": 1026170159104.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 32,
+      "chi_net": 954646659072.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 33,
+      "chi_net": 999330349056.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 34,
+      "chi_net": 986867302400.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 35,
+      "chi_net": 965268275200.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 36,
+      "chi_net": 983381835776.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 37,
+      "chi_net": 924201844736.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 38,
+      "chi_net": 984982749184.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 39,
+      "chi_net": 1000622718976.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 40,
+      "chi_net": 1048870977536.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 41,
+      "chi_net": 981825814528.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 42,
+      "chi_net": 1010331942912.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 43,
+      "chi_net": 999473217536.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 44,
+      "chi_net": 939215421440.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 45,
+      "chi_net": 935014432768.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 46,
+      "chi_net": 1042127781888.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 47,
+      "chi_net": 984080777216.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 48,
+      "chi_net": 1028063297536.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 49,
+      "chi_net": 944517873664.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 50,
+      "chi_net": 1058397814784.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 51,
+      "chi_net": 1056188399616.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 52,
+      "chi_net": 1030154485760.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 53,
+      "chi_net": 974629765120.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 54,
+      "chi_net": 1024715849728.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 55,
+      "chi_net": 993066483712.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 56,
+      "chi_net": 970771922944.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 57,
+      "chi_net": 993186742272.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 58,
+      "chi_net": 1073900945408.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 59,
+      "chi_net": 995219865600.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 60,
+      "chi_net": 997009063936.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 61,
+      "chi_net": 1002535845888.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 62,
+      "chi_net": 964660363264.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 63,
+      "chi_net": 1016393957376.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 64,
+      "chi_net": 990893047808.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 65,
+      "chi_net": 1039298330624.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 66,
+      "chi_net": 1044242890752.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 67,
+      "chi_net": 1038312603648.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 68,
+      "chi_net": 1055592415232.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 69,
+      "chi_net": 1016846221312.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 70,
+      "chi_net": 970346463232.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 71,
+      "chi_net": 1055098208256.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 72,
+      "chi_net": 985666355200.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 73,
+      "chi_net": 996788797440.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 74,
+      "chi_net": 951665754112.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 75,
+      "chi_net": 995460775936.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 76,
+      "chi_net": 954219560960.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 77,
+      "chi_net": 961577418752.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 78,
+      "chi_net": 948077789184.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 79,
+      "chi_net": 957858971648.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 80,
+      "chi_net": 1040771579904.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 81,
+      "chi_net": 974157250560.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 82,
+      "chi_net": 1021448880128.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 83,
+      "chi_net": 1006262616064.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 84,
+      "chi_net": 964268064768.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 85,
+      "chi_net": 1045308047360.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 86,
+      "chi_net": 976615702528.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 87,
+      "chi_net": 984337940480.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 88,
+      "chi_net": 969421488128.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 89,
+      "chi_net": 1010453053440.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 90,
+      "chi_net": 1066731962368.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 91,
+      "chi_net": 995579199488.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 92,
+      "chi_net": 970911711232.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 93,
+      "chi_net": 949299118080.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 94,
+      "chi_net": 1004802408448.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 95,
+      "chi_net": 1008333094912.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 96,
+      "chi_net": 1040923754496.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 97,
+      "chi_net": 1002279796736.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 98,
+      "chi_net": 982098706432.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 4,
+      "seed": 99,
+      "chi_net": 968343945216.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 0,
+      "chi_net": 998243500032.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 1,
+      "chi_net": 984951422976.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 2,
+      "chi_net": 1019353956352.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 3,
+      "chi_net": 954909458432.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 4,
+      "chi_net": 1035697192960.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 5,
+      "chi_net": 957589225472.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 6,
+      "chi_net": 1014805692416.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 7,
+      "chi_net": 981563342848.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 8,
+      "chi_net": 1013709340672.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 9,
+      "chi_net": 1000331935744.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 10,
+      "chi_net": 1006455226368.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 11,
+      "chi_net": 997836980224.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 12,
+      "chi_net": 1013329821696.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 13,
+      "chi_net": 994472034304.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 14,
+      "chi_net": 986120257536.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 15,
+      "chi_net": 1037771014144.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 16,
+      "chi_net": 972577439744.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 17,
+      "chi_net": 961665499136.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 18,
+      "chi_net": 971755749376.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 19,
+      "chi_net": 976716234752.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 20,
+      "chi_net": 976223862784.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 21,
+      "chi_net": 1046455123968.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 22,
+      "chi_net": 1057431224320.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 23,
+      "chi_net": 1008146841600.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 24,
+      "chi_net": 1009862901760.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 25,
+      "chi_net": 1023334744064.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 26,
+      "chi_net": 980848803840.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 27,
+      "chi_net": 1032095465472.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 28,
+      "chi_net": 996791484416.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 29,
+      "chi_net": 1011948584960.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 30,
+      "chi_net": 995075162112.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 31,
+      "chi_net": 1015820910592.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 32,
+      "chi_net": 980663402496.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 33,
+      "chi_net": 1006722023424.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 34,
+      "chi_net": 1003536121856.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 35,
+      "chi_net": 971977981952.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 36,
+      "chi_net": 1015476387840.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 37,
+      "chi_net": 965643599872.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 38,
+      "chi_net": 992024854528.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 39,
+      "chi_net": 1004996657152.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 40,
+      "chi_net": 1008971350016.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 41,
+      "chi_net": 958964891648.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 42,
+      "chi_net": 1019928707072.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 43,
+      "chi_net": 988322332672.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 44,
+      "chi_net": 954658324480.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 45,
+      "chi_net": 973508050944.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 46,
+      "chi_net": 1034063577088.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 47,
+      "chi_net": 989681418240.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 48,
+      "chi_net": 998188646400.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 49,
+      "chi_net": 974253129728.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 50,
+      "chi_net": 1012327055360.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 51,
+      "chi_net": 1028832690176.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 52,
+      "chi_net": 1051381334016.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 53,
+      "chi_net": 988156198912.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 54,
+      "chi_net": 989453221888.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 55,
+      "chi_net": 1024459210752.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 56,
+      "chi_net": 989282893824.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 57,
+      "chi_net": 988731801600.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 58,
+      "chi_net": 1039659761664.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 59,
+      "chi_net": 995385999360.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 60,
+      "chi_net": 1006252261376.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 61,
+      "chi_net": 990470209536.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 62,
+      "chi_net": 976023126016.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 63,
+      "chi_net": 1006568341504.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 64,
+      "chi_net": 1027042705408.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 65,
+      "chi_net": 1026549284864.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 66,
+      "chi_net": 1037811646464.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 67,
+      "chi_net": 1013355380736.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 68,
+      "chi_net": 1021995581440.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 69,
+      "chi_net": 997868044288.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 70,
+      "chi_net": 981805301760.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 71,
+      "chi_net": 1020901588992.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 72,
+      "chi_net": 1031885422592.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 73,
+      "chi_net": 972300353536.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 74,
+      "chi_net": 971617533952.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 75,
+      "chi_net": 980093239296.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 76,
+      "chi_net": 976008839168.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 77,
+      "chi_net": 976292085760.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 78,
+      "chi_net": 951432577024.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 79,
+      "chi_net": 970431070208.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 80,
+      "chi_net": 1025527906304.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 81,
+      "chi_net": 987139342336.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 82,
+      "chi_net": 1020743516160.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 83,
+      "chi_net": 1030839009280.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 84,
+      "chi_net": 965062623232.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 85,
+      "chi_net": 1008527147008.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 86,
+      "chi_net": 978109595648.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 87,
+      "chi_net": 998072713216.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 88,
+      "chi_net": 956833267712.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 89,
+      "chi_net": 991294914560.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 90,
+      "chi_net": 1063527514112.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 91,
+      "chi_net": 1007921594368.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 92,
+      "chi_net": 983207837696.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 93,
+      "chi_net": 959588925440.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 94,
+      "chi_net": 1038401077248.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 95,
+      "chi_net": 1005737279488.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 96,
+      "chi_net": 1029005115392.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 97,
+      "chi_net": 998893355008.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 98,
+      "chi_net": 1002149904384.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 8,
+      "seed": 99,
+      "chi_net": 970464493568.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 0,
+      "chi_net": 1006394802176.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 1,
+      "chi_net": 987967979520.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 2,
+      "chi_net": 1015965941760.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 3,
+      "chi_net": 984351834112.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 4,
+      "chi_net": 1011986006016.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 5,
+      "chi_net": 966072991744.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 6,
+      "chi_net": 1004755156992.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 7,
+      "chi_net": 993374699520.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 8,
+      "chi_net": 998852657152.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 9,
+      "chi_net": 1002435182592.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 10,
+      "chi_net": 1019328266240.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 11,
+      "chi_net": 1013493465088.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 12,
+      "chi_net": 1019471724544.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 13,
+      "chi_net": 988155215872.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 14,
+      "chi_net": 984379293696.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 15,
+      "chi_net": 1006429470720.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 16,
+      "chi_net": 988467560448.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 17,
+      "chi_net": 982699474944.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 18,
+      "chi_net": 963636101120.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 19,
+      "chi_net": 986336067584.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 20,
+      "chi_net": 981477490688.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 21,
+      "chi_net": 1016954290176.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 22,
+      "chi_net": 1015584063488.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 23,
+      "chi_net": 983205347328.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 24,
+      "chi_net": 1008414752768.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 25,
+      "chi_net": 1013205172224.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 26,
+      "chi_net": 991237832704.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 27,
+      "chi_net": 1026332622848.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 28,
+      "chi_net": 1006200946688.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 29,
+      "chi_net": 1010038603776.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 30,
+      "chi_net": 988447178752.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 31,
+      "chi_net": 985883279360.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 32,
+      "chi_net": 977984946176.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 33,
+      "chi_net": 1001575546880.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 34,
+      "chi_net": 994402566144.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 35,
+      "chi_net": 986780401664.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 36,
+      "chi_net": 999549894656.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 37,
+      "chi_net": 990101962752.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 38,
+      "chi_net": 992497106944.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 39,
+      "chi_net": 1008337616896.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 40,
+      "chi_net": 1003240095744.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 41,
+      "chi_net": 984784240640.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 42,
+      "chi_net": 1033960685568.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 43,
+      "chi_net": 995472703488.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 44,
+      "chi_net": 976891936768.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 45,
+      "chi_net": 982108798976.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 46,
+      "chi_net": 1015004135424.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 47,
+      "chi_net": 991913050112.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 48,
+      "chi_net": 1004002934784.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 49,
+      "chi_net": 973685915648.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 50,
+      "chi_net": 1007036923904.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 51,
+      "chi_net": 996709105664.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 52,
+      "chi_net": 1034653138944.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 53,
+      "chi_net": 999265009664.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 54,
+      "chi_net": 976888791040.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 55,
+      "chi_net": 1010334498816.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 56,
+      "chi_net": 1003306745856.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 57,
+      "chi_net": 1004112642048.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 58,
+      "chi_net": 1011458048000.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 59,
+      "chi_net": 996847583232.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 60,
+      "chi_net": 990863425536.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 61,
+      "chi_net": 996924325888.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 62,
+      "chi_net": 965485854720.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 63,
+      "chi_net": 1014753067008.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 64,
+      "chi_net": 994732670976.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 65,
+      "chi_net": 1001824780288.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 66,
+      "chi_net": 1028534894592.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 67,
+      "chi_net": 1001925378048.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 68,
+      "chi_net": 998200049664.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 69,
+      "chi_net": 993941585920.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 70,
+      "chi_net": 992582238208.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 71,
+      "chi_net": 994289582080.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 72,
+      "chi_net": 1026638086144.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 73,
+      "chi_net": 986988281856.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 74,
+      "chi_net": 980698398720.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 75,
+      "chi_net": 981600436224.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 76,
+      "chi_net": 972590940160.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 77,
+      "chi_net": 992687620096.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 78,
+      "chi_net": 966791528448.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 79,
+      "chi_net": 983463231488.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 80,
+      "chi_net": 1038088929280.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 81,
+      "chi_net": 1003678793728.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 82,
+      "chi_net": 1006159069184.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 83,
+      "chi_net": 1008783982592.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 84,
+      "chi_net": 976179429376.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 85,
+      "chi_net": 1006718353408.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 86,
+      "chi_net": 986385481728.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 87,
+      "chi_net": 998151094272.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 88,
+      "chi_net": 983457005568.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 89,
+      "chi_net": 1009851039744.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 90,
+      "chi_net": 1043870973952.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 91,
+      "chi_net": 1006060044288.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 92,
+      "chi_net": 1003526750208.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 93,
+      "chi_net": 990608818176.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 94,
+      "chi_net": 1017118523392.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 95,
+      "chi_net": 1013115715584.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 96,
+      "chi_net": 983537156096.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 97,
+      "chi_net": 1020091039744.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 98,
+      "chi_net": 997984436224.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 16,
+      "seed": 99,
+      "chi_net": 966112182272.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 0,
+      "chi_net": 1010044567552.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 1,
+      "chi_net": 998272073728.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 2,
+      "chi_net": 1006917124096.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 3,
+      "chi_net": 990769446912.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 4,
+      "chi_net": 1015473635328.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 5,
+      "chi_net": 981646442496.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 6,
+      "chi_net": 992449658880.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 7,
+      "chi_net": 992592723968.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 8,
+      "chi_net": 997893013504.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 9,
+      "chi_net": 986818936832.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 10,
+      "chi_net": 1005893386240.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 11,
+      "chi_net": 1000802222080.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 12,
+      "chi_net": 1011747454976.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 13,
+      "chi_net": 991137562624.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 14,
+      "chi_net": 986901839872.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 15,
+      "chi_net": 996114956288.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 16,
+      "chi_net": 992986005504.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 17,
+      "chi_net": 978310856704.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 18,
+      "chi_net": 986708770816.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 19,
+      "chi_net": 991200935936.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 20,
+      "chi_net": 1003659067392.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 21,
+      "chi_net": 999624867840.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 22,
+      "chi_net": 1008196976640.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 23,
+      "chi_net": 1006286536704.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 24,
+      "chi_net": 995200204800.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 25,
+      "chi_net": 996402921472.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 26,
+      "chi_net": 1003846238208.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 27,
+      "chi_net": 1028999348224.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 28,
+      "chi_net": 1000856223744.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 29,
+      "chi_net": 991153750016.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 30,
+      "chi_net": 994801614848.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 31,
+      "chi_net": 994223783936.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 32,
+      "chi_net": 982996090880.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 33,
+      "chi_net": 1013801811968.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 34,
+      "chi_net": 990111334400.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 35,
+      "chi_net": 994806333440.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 36,
+      "chi_net": 1001120071680.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 37,
+      "chi_net": 995083354112.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 38,
+      "chi_net": 992882917376.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 39,
+      "chi_net": 995776397312.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 40,
+      "chi_net": 999036682240.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 41,
+      "chi_net": 996577050624.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 42,
+      "chi_net": 1003696881664.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 43,
+      "chi_net": 1008922132480.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 44,
+      "chi_net": 995950723072.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 45,
+      "chi_net": 978828918784.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 46,
+      "chi_net": 1013627944960.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 47,
+      "chi_net": 989530685440.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 48,
+      "chi_net": 996700454912.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 49,
+      "chi_net": 976997842944.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 50,
+      "chi_net": 1005697957888.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 51,
+      "chi_net": 994334801920.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 52,
+      "chi_net": 1016940134400.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 53,
+      "chi_net": 1006158807040.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 54,
+      "chi_net": 993827291136.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 55,
+      "chi_net": 997901729792.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 56,
+      "chi_net": 1004301647872.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 57,
+      "chi_net": 989586522112.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 58,
+      "chi_net": 1007001075712.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 59,
+      "chi_net": 998407733248.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 60,
+      "chi_net": 1001190260736.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 61,
+      "chi_net": 999652392960.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 62,
+      "chi_net": 979110592512.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 63,
+      "chi_net": 1017128615936.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 64,
+      "chi_net": 1003923177472.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 65,
+      "chi_net": 1018953859072.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 66,
+      "chi_net": 1032028356608.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 67,
+      "chi_net": 997376851968.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 68,
+      "chi_net": 998043942912.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 69,
+      "chi_net": 996344463360.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 70,
+      "chi_net": 1005287702528.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 71,
+      "chi_net": 989695246336.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 72,
+      "chi_net": 1002835345408.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 73,
+      "chi_net": 973853687808.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 74,
+      "chi_net": 984779980800.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 75,
+      "chi_net": 999856996352.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 76,
+      "chi_net": 974594834432.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 77,
+      "chi_net": 990012702720.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 78,
+      "chi_net": 988599353344.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 79,
+      "chi_net": 979142246400.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 80,
+      "chi_net": 1008694919168.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 81,
+      "chi_net": 1001605562368.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 82,
+      "chi_net": 999301775360.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 83,
+      "chi_net": 995825418240.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 84,
+      "chi_net": 983305748480.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 85,
+      "chi_net": 1008085696512.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 86,
+      "chi_net": 995591323648.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 87,
+      "chi_net": 995597811712.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 88,
+      "chi_net": 991995297792.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 89,
+      "chi_net": 1012311326720.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 90,
+      "chi_net": 1035926175744.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 91,
+      "chi_net": 1000295694336.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 92,
+      "chi_net": 1007918120960.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 93,
+      "chi_net": 997336547328.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 94,
+      "chi_net": 1011844251648.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 95,
+      "chi_net": 1012269121536.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 96,
+      "chi_net": 993425227776.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 97,
+      "chi_net": 1007141912576.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 98,
+      "chi_net": 1011438059520.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 32,
+      "seed": 99,
+      "chi_net": 979607814144.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 0,
+      "chi_net": 1005585760256.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 1,
+      "chi_net": 999513980928.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 2,
+      "chi_net": 992936001536.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 3,
+      "chi_net": 993687633920.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 4,
+      "chi_net": 1003358126080.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 5,
+      "chi_net": 995150659584.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 6,
+      "chi_net": 995999023104.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 7,
+      "chi_net": 999031832576.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 8,
+      "chi_net": 994135572480.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 9,
+      "chi_net": 993952137216.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 10,
+      "chi_net": 997725503488.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 11,
+      "chi_net": 993627209728.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 12,
+      "chi_net": 1004613861376.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 13,
+      "chi_net": 992717111296.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 14,
+      "chi_net": 989509451776.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 15,
+      "chi_net": 989508141056.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 16,
+      "chi_net": 996581310464.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 17,
+      "chi_net": 988005466112.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 18,
+      "chi_net": 998119047168.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 19,
+      "chi_net": 993978220544.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 20,
+      "chi_net": 998526156800.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 21,
+      "chi_net": 994837004288.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 22,
+      "chi_net": 1003713527808.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 23,
+      "chi_net": 1004831113216.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 24,
+      "chi_net": 996205002752.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 25,
+      "chi_net": 993548304384.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 26,
+      "chi_net": 1011830947840.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 27,
+      "chi_net": 1012739538944.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 28,
+      "chi_net": 1002220552192.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 29,
+      "chi_net": 992379207680.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 30,
+      "chi_net": 1002339368960.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 31,
+      "chi_net": 992215760896.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 32,
+      "chi_net": 984706777088.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 33,
+      "chi_net": 993817722880.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 34,
+      "chi_net": 994134327296.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 35,
+      "chi_net": 991114821632.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 36,
+      "chi_net": 1000348319744.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 37,
+      "chi_net": 992000933888.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 38,
+      "chi_net": 996058202112.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 39,
+      "chi_net": 994763800576.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 40,
+      "chi_net": 988986736640.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 41,
+      "chi_net": 999790870528.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 42,
+      "chi_net": 988275015680.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 43,
+      "chi_net": 995907993600.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 44,
+      "chi_net": 993559838720.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 45,
+      "chi_net": 989990682624.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 46,
+      "chi_net": 1003227774976.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 47,
+      "chi_net": 983805591552.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 48,
+      "chi_net": 999534821376.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 49,
+      "chi_net": 989734502400.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 50,
+      "chi_net": 995419029504.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 51,
+      "chi_net": 993768833024.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 52,
+      "chi_net": 1015438311424.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 53,
+      "chi_net": 1009211998208.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 54,
+      "chi_net": 991352717312.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 55,
+      "chi_net": 999589806080.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 56,
+      "chi_net": 997940985856.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 57,
+      "chi_net": 991962267648.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 58,
+      "chi_net": 993306017792.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 59,
+      "chi_net": 1010120130560.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 60,
+      "chi_net": 1001926033408.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 61,
+      "chi_net": 998033719296.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 62,
+      "chi_net": 990565564416.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 63,
+      "chi_net": 1011418464256.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 64,
+      "chi_net": 1003640913920.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 65,
+      "chi_net": 1014552330240.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 66,
+      "chi_net": 1019621670912.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 67,
+      "chi_net": 998373523456.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 68,
+      "chi_net": 995360768000.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 69,
+      "chi_net": 998960791552.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 70,
+      "chi_net": 992239550464.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 71,
+      "chi_net": 1001385033728.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 72,
+      "chi_net": 1005971963904.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 73,
+      "chi_net": 988825583616.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 74,
+      "chi_net": 985226149888.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 75,
+      "chi_net": 1002286153728.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 76,
+      "chi_net": 987042545664.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 77,
+      "chi_net": 1002668687360.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 78,
+      "chi_net": 990787010560.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 79,
+      "chi_net": 987833171968.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 80,
+      "chi_net": 995703586816.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 81,
+      "chi_net": 989628596224.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 82,
+      "chi_net": 1000017362944.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 83,
+      "chi_net": 990195089408.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 84,
+      "chi_net": 981324791808.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 85,
+      "chi_net": 1006464335872.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 86,
+      "chi_net": 998392397824.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 87,
+      "chi_net": 1002911563776.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 88,
+      "chi_net": 999455850496.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 89,
+      "chi_net": 1004266979328.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 90,
+      "chi_net": 1014385278976.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 91,
+      "chi_net": 995545841664.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 92,
+      "chi_net": 1006588067840.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 93,
+      "chi_net": 997254430720.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 94,
+      "chi_net": 1007686320128.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 95,
+      "chi_net": 1009442553856.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 96,
+      "chi_net": 986719584256.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 97,
+      "chi_net": 1001886580736.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 98,
+      "chi_net": 997204361216.0
+    },
+    {
+      "method": "hutchinson",
+      "n_h": 64,
+      "seed": 99,
+      "chi_net": 985964150784.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 0,
+      "chi_net": 945149444096.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 1,
+      "chi_net": 891665711104.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 2,
+      "chi_net": 1073793138688.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 3,
+      "chi_net": 884579500032.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 4,
+      "chi_net": 1025373044736.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 5,
+      "chi_net": 947245219840.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 6,
+      "chi_net": 980172210176.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 7,
+      "chi_net": 995296149504.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 8,
+      "chi_net": 992024264704.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 9,
+      "chi_net": 948873920512.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 10,
+      "chi_net": 924968026112.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 11,
+      "chi_net": 922333085696.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 12,
+      "chi_net": 1124641406976.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 13,
+      "chi_net": 984124817408.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 14,
+      "chi_net": 969420308480.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 15,
+      "chi_net": 1061836554240.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 16,
+      "chi_net": 1066654826496.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 17,
+      "chi_net": 966183223296.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 18,
+      "chi_net": 1032392343552.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 19,
+      "chi_net": 932206215168.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 20,
+      "chi_net": 1110154412032.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 21,
+      "chi_net": 1213696966656.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 22,
+      "chi_net": 1101535248384.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 23,
+      "chi_net": 915908722688.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 24,
+      "chi_net": 1017240158208.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 25,
+      "chi_net": 1002402873344.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 26,
+      "chi_net": 1029837291520.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 27,
+      "chi_net": 970056007680.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 28,
+      "chi_net": 962312536064.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 29,
+      "chi_net": 944065150976.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 30,
+      "chi_net": 1019116257280.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 31,
+      "chi_net": 1012713914368.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 32,
+      "chi_net": 994586198016.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 33,
+      "chi_net": 974905802752.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 34,
+      "chi_net": 882297798656.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 35,
+      "chi_net": 956481536000.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 36,
+      "chi_net": 997891571712.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 37,
+      "chi_net": 824782880768.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 38,
+      "chi_net": 1006466105344.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 39,
+      "chi_net": 984370118656.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 40,
+      "chi_net": 1084320251904.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 41,
+      "chi_net": 1000757460992.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 42,
+      "chi_net": 974859272192.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 43,
+      "chi_net": 925693181952.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 44,
+      "chi_net": 894881431552.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 45,
+      "chi_net": 995904454656.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 46,
+      "chi_net": 933283889152.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 47,
+      "chi_net": 968349253632.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 48,
+      "chi_net": 1053069475840.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 49,
+      "chi_net": 929220460544.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 50,
+      "chi_net": 1090643099648.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 51,
+      "chi_net": 1004269928448.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 52,
+      "chi_net": 1096034025472.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 53,
+      "chi_net": 1042644664320.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 54,
+      "chi_net": 1058118303744.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 55,
+      "chi_net": 990229889024.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 56,
+      "chi_net": 1003215781888.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 57,
+      "chi_net": 1001807872000.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 58,
+      "chi_net": 1012587954176.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 59,
+      "chi_net": 911302000640.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 60,
+      "chi_net": 1161902424064.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 61,
+      "chi_net": 1061999673344.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 62,
+      "chi_net": 1013258190848.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 63,
+      "chi_net": 1006723792896.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 64,
+      "chi_net": 1084915384320.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 65,
+      "chi_net": 1184721797120.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 66,
+      "chi_net": 1057285603328.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 67,
+      "chi_net": 943807725568.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 68,
+      "chi_net": 1208034131968.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 69,
+      "chi_net": 1012439842816.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 70,
+      "chi_net": 979586777088.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 71,
+      "chi_net": 1090204794880.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 72,
+      "chi_net": 943950266368.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 73,
+      "chi_net": 1037956612096.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 74,
+      "chi_net": 1001403252736.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 75,
+      "chi_net": 1011356729344.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 76,
+      "chi_net": 924574744576.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 77,
+      "chi_net": 936475099136.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 78,
+      "chi_net": 900561174528.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 79,
+      "chi_net": 900081057792.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 80,
+      "chi_net": 991113052160.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 81,
+      "chi_net": 956973580288.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 82,
+      "chi_net": 1110341976064.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 83,
+      "chi_net": 1005917175808.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 84,
+      "chi_net": 882425790464.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 85,
+      "chi_net": 987958607872.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 86,
+      "chi_net": 1071424602112.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 87,
+      "chi_net": 990599118848.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 88,
+      "chi_net": 867352510464.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 89,
+      "chi_net": 959693586432.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 90,
+      "chi_net": 1017941327872.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 91,
+      "chi_net": 1010641797120.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 92,
+      "chi_net": 954397949952.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 93,
+      "chi_net": 909418889216.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 94,
+      "chi_net": 1154467758080.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 95,
+      "chi_net": 919543087104.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 96,
+      "chi_net": 1032530755584.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 97,
+      "chi_net": 956994420736.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 98,
+      "chi_net": 840320876544.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 1,
+      "seed": 99,
+      "chi_net": 1050707558400.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 0,
+      "chi_net": 964305027072.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 1,
+      "chi_net": 950472998912.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 2,
+      "chi_net": 1012840398848.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 3,
+      "chi_net": 938972610560.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 4,
+      "chi_net": 1056590659584.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 5,
+      "chi_net": 949332082688.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 6,
+      "chi_net": 987120730112.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 7,
+      "chi_net": 959769673728.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 8,
+      "chi_net": 988282224640.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 9,
+      "chi_net": 973792739328.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 10,
+      "chi_net": 980034322432.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 11,
+      "chi_net": 996261429248.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 12,
+      "chi_net": 1032119386112.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 13,
+      "chi_net": 1000003469312.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 14,
+      "chi_net": 928517062656.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 15,
+      "chi_net": 1038463860736.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 16,
+      "chi_net": 1011123421184.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 17,
+      "chi_net": 981769060352.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 18,
+      "chi_net": 967148371968.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 19,
+      "chi_net": 963395256320.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 20,
+      "chi_net": 1016931090432.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 21,
+      "chi_net": 1129097723904.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 22,
+      "chi_net": 1068492193792.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 23,
+      "chi_net": 994986033152.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 24,
+      "chi_net": 1044836843520.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 25,
+      "chi_net": 1004823248896.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 26,
+      "chi_net": 1030572081152.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 27,
+      "chi_net": 1060190420992.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 28,
+      "chi_net": 986600767488.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 29,
+      "chi_net": 932748984320.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 30,
+      "chi_net": 983890722816.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 31,
+      "chi_net": 1046781362176.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 32,
+      "chi_net": 986890567680.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 33,
+      "chi_net": 1030904348672.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 34,
+      "chi_net": 928014663680.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 35,
+      "chi_net": 985155371008.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 36,
+      "chi_net": 990657445888.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 37,
+      "chi_net": 876680445952.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 38,
+      "chi_net": 961936162816.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 39,
+      "chi_net": 1003939692544.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 40,
+      "chi_net": 1069394821120.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 41,
+      "chi_net": 991861997568.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 42,
+      "chi_net": 1012729380864.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 43,
+      "chi_net": 996950933504.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 44,
+      "chi_net": 958848827392.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 45,
+      "chi_net": 971483119616.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 46,
+      "chi_net": 953752748032.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 47,
+      "chi_net": 932071079936.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 48,
+      "chi_net": 1021073686528.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 49,
+      "chi_net": 919870898176.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 50,
+      "chi_net": 1054099243008.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 51,
+      "chi_net": 1026708144128.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 52,
+      "chi_net": 1045899771904.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 53,
+      "chi_net": 980029276160.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 54,
+      "chi_net": 996941692928.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 55,
+      "chi_net": 996412555264.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 56,
+      "chi_net": 984142512128.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 57,
+      "chi_net": 999349026816.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 58,
+      "chi_net": 1082963329024.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 59,
+      "chi_net": 951696359424.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 60,
+      "chi_net": 1104335339520.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 61,
+      "chi_net": 1031613382656.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 62,
+      "chi_net": 959277826048.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 63,
+      "chi_net": 1017423921152.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 64,
+      "chi_net": 1003673616384.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 65,
+      "chi_net": 1090513469440.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 66,
+      "chi_net": 1105058988032.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 67,
+      "chi_net": 988447965184.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 68,
+      "chi_net": 1111852580864.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 69,
+      "chi_net": 1069391151104.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 70,
+      "chi_net": 1003027628032.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 71,
+      "chi_net": 1082221854720.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 72,
+      "chi_net": 927263817728.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 73,
+      "chi_net": 1013547532288.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 74,
+      "chi_net": 944105390080.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 75,
+      "chi_net": 990020894720.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 76,
+      "chi_net": 922947420160.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 77,
+      "chi_net": 991605882880.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 78,
+      "chi_net": 919817945088.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 79,
+      "chi_net": 949073936384.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 80,
+      "chi_net": 1090800123904.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 81,
+      "chi_net": 974675902464.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 82,
+      "chi_net": 1071092400128.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 83,
+      "chi_net": 985735495680.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 84,
+      "chi_net": 969736585216.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 85,
+      "chi_net": 1042800967680.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 86,
+      "chi_net": 1004555599872.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 87,
+      "chi_net": 943390982144.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 88,
+      "chi_net": 917054029824.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 89,
+      "chi_net": 969108094976.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 90,
+      "chi_net": 1012108361728.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 91,
+      "chi_net": 1020770713600.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 92,
+      "chi_net": 976940957696.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 93,
+      "chi_net": 927727747072.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 94,
+      "chi_net": 1082957234176.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 95,
+      "chi_net": 985262784512.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 96,
+      "chi_net": 981138407424.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 97,
+      "chi_net": 989808951296.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 98,
+      "chi_net": 944902635520.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 2,
+      "seed": 99,
+      "chi_net": 1014166781952.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 0,
+      "chi_net": 1020111814656.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 1,
+      "chi_net": 1002612129792.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 2,
+      "chi_net": 974578647040.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 3,
+      "chi_net": 946706513920.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 4,
+      "chi_net": 1009321836544.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 5,
+      "chi_net": 973228867584.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 6,
+      "chi_net": 992447692800.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 7,
+      "chi_net": 966410764288.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 8,
+      "chi_net": 978562187264.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 9,
+      "chi_net": 1029253758976.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 10,
+      "chi_net": 972082642944.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 11,
+      "chi_net": 984956141568.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 12,
+      "chi_net": 1003254644736.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 13,
+      "chi_net": 1008237936640.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 14,
+      "chi_net": 966240108544.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 15,
+      "chi_net": 1049704792064.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 16,
+      "chi_net": 996788862976.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 17,
+      "chi_net": 989652320256.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 18,
+      "chi_net": 983503536128.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 19,
+      "chi_net": 975521579008.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 20,
+      "chi_net": 1009116315648.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 21,
+      "chi_net": 1044524957696.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 22,
+      "chi_net": 1068682117120.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 23,
+      "chi_net": 1015660216320.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 24,
+      "chi_net": 1021453467648.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 25,
+      "chi_net": 1014495772672.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 26,
+      "chi_net": 1002185555968.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 27,
+      "chi_net": 1049445990400.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 28,
+      "chi_net": 967985463296.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 29,
+      "chi_net": 976616292352.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 30,
+      "chi_net": 993430208512.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 31,
+      "chi_net": 1026182610944.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 32,
+      "chi_net": 954671169536.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 33,
+      "chi_net": 999346012160.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 34,
+      "chi_net": 986864680960.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 35,
+      "chi_net": 965260935168.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 36,
+      "chi_net": 983382622208.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 37,
+      "chi_net": 924204072960.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 38,
+      "chi_net": 984965054464.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 39,
+      "chi_net": 1000610004992.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 40,
+      "chi_net": 1048874450944.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 41,
+      "chi_net": 981804122112.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 42,
+      "chi_net": 1010335547392.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 43,
+      "chi_net": 999450869760.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 44,
+      "chi_net": 939233181696.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 45,
+      "chi_net": 935027867648.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 46,
+      "chi_net": 1042122145792.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 47,
+      "chi_net": 984079990784.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 48,
+      "chi_net": 1028064608256.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 49,
+      "chi_net": 944512172032.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 50,
+      "chi_net": 1058421473280.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 51,
+      "chi_net": 1056212582400.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 52,
+      "chi_net": 1030147997696.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 53,
+      "chi_net": 974607155200.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 54,
+      "chi_net": 1024700448768.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 55,
+      "chi_net": 993064452096.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 56,
+      "chi_net": 970770546688.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 57,
+      "chi_net": 993159806976.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 58,
+      "chi_net": 1073913462784.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 59,
+      "chi_net": 995206823936.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 60,
+      "chi_net": 997024792576.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 61,
+      "chi_net": 1002533421056.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 62,
+      "chi_net": 964654858240.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 63,
+      "chi_net": 1016396578816.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 64,
+      "chi_net": 990891933696.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 65,
+      "chi_net": 1039305474048.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 66,
+      "chi_net": 1044201209856.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 67,
+      "chi_net": 1038278000640.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 68,
+      "chi_net": 1055578128384.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 69,
+      "chi_net": 1016852447232.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 70,
+      "chi_net": 970342858752.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 71,
+      "chi_net": 1055121080320.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 72,
+      "chi_net": 985643810816.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 73,
+      "chi_net": 996781129728.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 74,
+      "chi_net": 951656382464.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 75,
+      "chi_net": 995473096704.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 76,
+      "chi_net": 954231619584.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 77,
+      "chi_net": 961565163520.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 78,
+      "chi_net": 948088471552.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 79,
+      "chi_net": 957880008704.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 80,
+      "chi_net": 1040780492800.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 81,
+      "chi_net": 974152728576.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 82,
+      "chi_net": 1021470113792.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 83,
+      "chi_net": 1006268645376.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 84,
+      "chi_net": 964270489600.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 85,
+      "chi_net": 1045310144512.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 86,
+      "chi_net": 976634052608.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 87,
+      "chi_net": 984351113216.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 88,
+      "chi_net": 969430794240.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 89,
+      "chi_net": 1010444140544.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 90,
+      "chi_net": 1066698080256.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 91,
+      "chi_net": 995566419968.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 92,
+      "chi_net": 970918461440.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 93,
+      "chi_net": 949285486592.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 94,
+      "chi_net": 1004812369920.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 95,
+      "chi_net": 1008363110400.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 96,
+      "chi_net": 1040896425984.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 97,
+      "chi_net": 1002278879232.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 98,
+      "chi_net": 982100934656.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 4,
+      "seed": 99,
+      "chi_net": 968357707776.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 0,
+      "chi_net": 998233931776.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 1,
+      "chi_net": 984950308864.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 2,
+      "chi_net": 1019320664064.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 3,
+      "chi_net": 954918109184.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 4,
+      "chi_net": 1035677925376.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 5,
+      "chi_net": 957570088960.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 6,
+      "chi_net": 1014806085632.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 7,
+      "chi_net": 981562425344.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 8,
+      "chi_net": 1013722382336.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 9,
+      "chi_net": 1000326627328.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 10,
+      "chi_net": 1006449590272.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 11,
+      "chi_net": 997837373440.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 12,
+      "chi_net": 1013323857920.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 13,
+      "chi_net": 994487894016.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 14,
+      "chi_net": 986131529728.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 15,
+      "chi_net": 1037769834496.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 16,
+      "chi_net": 972579471360.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 17,
+      "chi_net": 961674870784.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 18,
+      "chi_net": 971755487232.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 19,
+      "chi_net": 976712826880.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 20,
+      "chi_net": 976212721664.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 21,
+      "chi_net": 1046453551104.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 22,
+      "chi_net": 1057402847232.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 23,
+      "chi_net": 1008135241728.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 24,
+      "chi_net": 1009862705152.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 25,
+      "chi_net": 1023347851264.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 26,
+      "chi_net": 980842184704.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 27,
+      "chi_net": 1032122662912.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 28,
+      "chi_net": 996780867584.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 29,
+      "chi_net": 1011956056064.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 30,
+      "chi_net": 995075555328.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 31,
+      "chi_net": 1015819796480.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 32,
+      "chi_net": 980667662336.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 33,
+      "chi_net": 1006744043520.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 34,
+      "chi_net": 1003533828096.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 35,
+      "chi_net": 971973853184.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 36,
+      "chi_net": 1015474421760.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 37,
+      "chi_net": 965657624576.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 38,
+      "chi_net": 992015220736.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 39,
+      "chi_net": 1004986040320.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 40,
+      "chi_net": 1008972595200.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 41,
+      "chi_net": 958949228544.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 42,
+      "chi_net": 1019926413312.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 43,
+      "chi_net": 988302606336.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 44,
+      "chi_net": 954672545792.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 45,
+      "chi_net": 973511589888.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 46,
+      "chi_net": 1034077011968.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 47,
+      "chi_net": 989694132224.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 48,
+      "chi_net": 998192054272.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 49,
+      "chi_net": 974255226880.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 50,
+      "chi_net": 1012333608960.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 51,
+      "chi_net": 1028851367936.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 52,
+      "chi_net": 1051373928448.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 53,
+      "chi_net": 988140666880.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 54,
+      "chi_net": 989437034496.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 55,
+      "chi_net": 1024463667200.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 56,
+      "chi_net": 989285580800.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 57,
+      "chi_net": 988708339712.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 58,
+      "chi_net": 1039668674560.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 59,
+      "chi_net": 995375972352.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 60,
+      "chi_net": 1006258487296.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 61,
+      "chi_net": 990467653632.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 62,
+      "chi_net": 976023519232.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 63,
+      "chi_net": 1006571552768.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 64,
+      "chi_net": 1027039690752.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 65,
+      "chi_net": 1026566848512.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 66,
+      "chi_net": 1037778550784.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 67,
+      "chi_net": 1013341290496.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 68,
+      "chi_net": 1021981491200.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 69,
+      "chi_net": 997855657984.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 70,
+      "chi_net": 981797896192.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 71,
+      "chi_net": 1020907880448.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 72,
+      "chi_net": 1031875919872.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 73,
+      "chi_net": 972297338880.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 74,
+      "chi_net": 971610849280.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 75,
+      "chi_net": 980098088960.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 76,
+      "chi_net": 976022208512.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 77,
+      "chi_net": 976282910720.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 78,
+      "chi_net": 951431004160.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 79,
+      "chi_net": 970433363968.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 80,
+      "chi_net": 1025519255552.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 81,
+      "chi_net": 987119353856.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 82,
+      "chi_net": 1020757147648.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 83,
+      "chi_net": 1030845825024.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 84,
+      "chi_net": 965056528384.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 85,
+      "chi_net": 1008523018240.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 86,
+      "chi_net": 978121195520.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 87,
+      "chi_net": 998078218240.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 88,
+      "chi_net": 956837920768.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 89,
+      "chi_net": 991283249152.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 90,
+      "chi_net": 1063513817088.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 91,
+      "chi_net": 1007930834944.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 92,
+      "chi_net": 983217537024.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 93,
+      "chi_net": 959574704128.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 94,
+      "chi_net": 1038403633152.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 95,
+      "chi_net": 1005752483840.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 96,
+      "chi_net": 1028999151616.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 97,
+      "chi_net": 998893355008.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 98,
+      "chi_net": 1002142826496.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 8,
+      "seed": 99,
+      "chi_net": 970468294656.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 0,
+      "chi_net": 1006388707328.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 1,
+      "chi_net": 987963326464.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 2,
+      "chi_net": 1015934222336.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 3,
+      "chi_net": 984356487168.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 4,
+      "chi_net": 1011975651328.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 5,
+      "chi_net": 966056935424.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 6,
+      "chi_net": 1004756729856.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 7,
+      "chi_net": 993373323264.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 8,
+      "chi_net": 998868254720.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 9,
+      "chi_net": 1002438656000.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 10,
+      "chi_net": 1019313782784.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 11,
+      "chi_net": 1013491892224.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 12,
+      "chi_net": 1019456061440.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 13,
+      "chi_net": 988174483456.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 14,
+      "chi_net": 984392925184.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 15,
+      "chi_net": 1006430912512.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 16,
+      "chi_net": 988471689216.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 17,
+      "chi_net": 982697967616.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 18,
+      "chi_net": 963628302336.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 19,
+      "chi_net": 986333249536.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 20,
+      "chi_net": 981471789056.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 21,
+      "chi_net": 1016951603200.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 22,
+      "chi_net": 1015563091968.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 23,
+      "chi_net": 983202660352.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 24,
+      "chi_net": 1008417243136.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 25,
+      "chi_net": 1013210742784.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 26,
+      "chi_net": 991235080192.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 27,
+      "chi_net": 1026351824896.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 28,
+      "chi_net": 1006193344512.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 29,
+      "chi_net": 1010024841216.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 30,
+      "chi_net": 988446392320.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 31,
+      "chi_net": 985886949376.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 32,
+      "chi_net": 977989140480.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 33,
+      "chi_net": 1001581838336.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 34,
+      "chi_net": 994406367232.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 35,
+      "chi_net": 986788921344.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 36,
+      "chi_net": 999536721920.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 37,
+      "chi_net": 990100455424.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 38,
+      "chi_net": 992495403008.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 39,
+      "chi_net": 1008325689344.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 40,
+      "chi_net": 1003233476608.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 41,
+      "chi_net": 984777293824.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 42,
+      "chi_net": 1033956294656.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 43,
+      "chi_net": 995452649472.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 44,
+      "chi_net": 976905437184.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 45,
+      "chi_net": 982108798976.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 46,
+      "chi_net": 1015000793088.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 47,
+      "chi_net": 991911149568.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 48,
+      "chi_net": 1004017745920.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 49,
+      "chi_net": 973685850112.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 50,
+      "chi_net": 1007043674112.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 51,
+      "chi_net": 996726341632.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 52,
+      "chi_net": 1034642522112.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 53,
+      "chi_net": 999257341952.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 54,
+      "chi_net": 976878370816.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 55,
+      "chi_net": 1010334105600.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 56,
+      "chi_net": 1003301765120.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 57,
+      "chi_net": 1004096520192.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 58,
+      "chi_net": 1011459096576.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 59,
+      "chi_net": 996842274816.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 60,
+      "chi_net": 990866767872.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 61,
+      "chi_net": 996915412992.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 62,
+      "chi_net": 965489197056.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 63,
+      "chi_net": 1014752346112.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 64,
+      "chi_net": 994731032576.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 65,
+      "chi_net": 1001834872832.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 66,
+      "chi_net": 1028517199872.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 67,
+      "chi_net": 1001918693376.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 68,
+      "chi_net": 998197362688.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 69,
+      "chi_net": 993940602880.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 70,
+      "chi_net": 992576929792.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 71,
+      "chi_net": 994283552768.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 72,
+      "chi_net": 1026638348288.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 73,
+      "chi_net": 986993459200.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 74,
+      "chi_net": 980694663168.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 75,
+      "chi_net": 981608169472.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 76,
+      "chi_net": 972583665664.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 77,
+      "chi_net": 992674709504.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 78,
+      "chi_net": 966796115968.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 79,
+      "chi_net": 983474438144.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 80,
+      "chi_net": 1038070382592.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 81,
+      "chi_net": 1003670732800.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 82,
+      "chi_net": 1006156054528.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 83,
+      "chi_net": 1008783982592.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 84,
+      "chi_net": 976175955968.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 85,
+      "chi_net": 1006715076608.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 86,
+      "chi_net": 986389348352.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 87,
+      "chi_net": 998147424256.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 88,
+      "chi_net": 983470243840.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 89,
+      "chi_net": 1009840226304.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 90,
+      "chi_net": 1043876741120.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 91,
+      "chi_net": 1006068629504.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 92,
+      "chi_net": 1003539595264.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 93,
+      "chi_net": 990596890624.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 94,
+      "chi_net": 1017118982144.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 95,
+      "chi_net": 1013126135808.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 96,
+      "chi_net": 983532175360.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 97,
+      "chi_net": 1020094775296.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 98,
+      "chi_net": 997979652096.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 16,
+      "seed": 99,
+      "chi_net": 966117883904.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 0,
+      "chi_net": 1010037030912.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 1,
+      "chi_net": 998266568704.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 2,
+      "chi_net": 1006906310656.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 3,
+      "chi_net": 990773182464.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 4,
+      "chi_net": 1015466622976.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 5,
+      "chi_net": 981633269760.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 6,
+      "chi_net": 992448151552.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 7,
+      "chi_net": 992594296832.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 8,
+      "chi_net": 997900484608.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 9,
+      "chi_net": 986815922176.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 10,
+      "chi_net": 1005889257472.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 11,
+      "chi_net": 1000803794944.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 12,
+      "chi_net": 1011744833536.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 13,
+      "chi_net": 991149293568.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 14,
+      "chi_net": 986909638656.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 15,
+      "chi_net": 996110696448.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 16,
+      "chi_net": 992988037120.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 17,
+      "chi_net": 978310463488.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 18,
+      "chi_net": 986705887232.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 19,
+      "chi_net": 991201525760.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 20,
+      "chi_net": 1003653365760.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 21,
+      "chi_net": 999619362816.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 22,
+      "chi_net": 1008189833216.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 23,
+      "chi_net": 1006281031680.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 24,
+      "chi_net": 995203284992.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 25,
+      "chi_net": 996410523648.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 26,
+      "chi_net": 1003844927488.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 27,
+      "chi_net": 1029008785408.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 28,
+      "chi_net": 1000859369472.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 29,
+      "chi_net": 991143460864.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 30,
+      "chi_net": 994797223936.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 31,
+      "chi_net": 994224963584.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 32,
+      "chi_net": 983000940544.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 33,
+      "chi_net": 1013806923776.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 34,
+      "chi_net": 990113431552.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 35,
+      "chi_net": 994811641856.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 36,
+      "chi_net": 1001121841152.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 37,
+      "chi_net": 995081519104.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 38,
+      "chi_net": 992873938944.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 39,
+      "chi_net": 995771088896.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 40,
+      "chi_net": 999041662976.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 41,
+      "chi_net": 996570955776.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 42,
+      "chi_net": 1003698192384.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 43,
+      "chi_net": 1008906862592.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 44,
+      "chi_net": 995959635968.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 45,
+      "chi_net": 978833571840.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 46,
+      "chi_net": 1013626830848.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 47,
+      "chi_net": 989534158848.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 48,
+      "chi_net": 996701896704.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 49,
+      "chi_net": 976996794368.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 50,
+      "chi_net": 1005697433600.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 51,
+      "chi_net": 994341945344.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 52,
+      "chi_net": 1016934039552.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 53,
+      "chi_net": 1006158282752.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 54,
+      "chi_net": 993821458432.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 55,
+      "chi_net": 997906972672.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 56,
+      "chi_net": 1004296601600.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 57,
+      "chi_net": 989579051008.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 58,
+      "chi_net": 1007004680192.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 59,
+      "chi_net": 998404390912.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 60,
+      "chi_net": 1001191047168.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 61,
+      "chi_net": 999647608832.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 62,
+      "chi_net": 979112361984.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 63,
+      "chi_net": 1017125863424.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 64,
+      "chi_net": 1003933859840.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 65,
+      "chi_net": 1018957332480.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 66,
+      "chi_net": 1032018329600.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 67,
+      "chi_net": 997376196608.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 68,
+      "chi_net": 998039683072.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 69,
+      "chi_net": 996346298368.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 70,
+      "chi_net": 1005300088832.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 71,
+      "chi_net": 989693739008.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 72,
+      "chi_net": 1002840064000.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 73,
+      "chi_net": 973859323904.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 74,
+      "chi_net": 984782929920.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 75,
+      "chi_net": 999863877632.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 76,
+      "chi_net": 974592933888.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 77,
+      "chi_net": 990014406656.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 78,
+      "chi_net": 988602957824.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 79,
+      "chi_net": 979154632704.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 80,
+      "chi_net": 1008685481984.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 81,
+      "chi_net": 1001595863040.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 82,
+      "chi_net": 999308918784.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 83,
+      "chi_net": 995826204672.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 84,
+      "chi_net": 983300833280.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 85,
+      "chi_net": 1008086876160.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 86,
+      "chi_net": 995591192576.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 87,
+      "chi_net": 995597549568.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 88,
+      "chi_net": 992003751936.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 89,
+      "chi_net": 1012302282752.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 90,
+      "chi_net": 1035941445632.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 91,
+      "chi_net": 1000302116864.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 92,
+      "chi_net": 1007929982976.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 93,
+      "chi_net": 997332221952.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 94,
+      "chi_net": 1011846545408.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 95,
+      "chi_net": 1012271742976.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 96,
+      "chi_net": 993420378112.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 97,
+      "chi_net": 1007149252608.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 98,
+      "chi_net": 1011444678656.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 32,
+      "seed": 99,
+      "chi_net": 979611484160.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 0,
+      "chi_net": 1005584252928.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 1,
+      "chi_net": 999507492864.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 2,
+      "chi_net": 992930758656.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 3,
+      "chi_net": 993688158208.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 4,
+      "chi_net": 1003353210880.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 5,
+      "chi_net": 995141746688.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 6,
+      "chi_net": 995990175744.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 7,
+      "chi_net": 999035633664.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 8,
+      "chi_net": 994141667328.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 9,
+      "chi_net": 993948794880.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 10,
+      "chi_net": 997724127232.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 11,
+      "chi_net": 993629110272.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 12,
+      "chi_net": 1004612419584.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 13,
+      "chi_net": 992720388096.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 14,
+      "chi_net": 989513515008.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 15,
+      "chi_net": 989506306048.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 16,
+      "chi_net": 996578230272.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 17,
+      "chi_net": 988008284160.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 18,
+      "chi_net": 998121996288.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 19,
+      "chi_net": 993978810368.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 20,
+      "chi_net": 998521372672.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 21,
+      "chi_net": 994835824640.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 22,
+      "chi_net": 1003708743680.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 23,
+      "chi_net": 1004826001408.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 24,
+      "chi_net": 996211032064.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 25,
+      "chi_net": 993550860288.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 26,
+      "chi_net": 1011834683392.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 27,
+      "chi_net": 1012743733248.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 28,
+      "chi_net": 1002216488960.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 29,
+      "chi_net": 992377241600.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 30,
+      "chi_net": 1002336419840.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 31,
+      "chi_net": 992215367680.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 32,
+      "chi_net": 984711626752.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 33,
+      "chi_net": 993819361280.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 34,
+      "chi_net": 994133803008.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 35,
+      "chi_net": 991114100736.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 36,
+      "chi_net": 1000350613504.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 37,
+      "chi_net": 992001654784.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 38,
+      "chi_net": 996057874432.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 39,
+      "chi_net": 994762817536.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 40,
+      "chi_net": 988991193088.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 41,
+      "chi_net": 999793098752.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 42,
+      "chi_net": 988275539968.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 43,
+      "chi_net": 995898294272.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 44,
+      "chi_net": 993562722304.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 45,
+      "chi_net": 989993500672.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 46,
+      "chi_net": 1003222925312.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 47,
+      "chi_net": 983803428864.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 48,
+      "chi_net": 999535935488.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 49,
+      "chi_net": 989736730624.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 50,
+      "chi_net": 995421257728.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 51,
+      "chi_net": 993774600192.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 52,
+      "chi_net": 1015437459456.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 53,
+      "chi_net": 1009214226432.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 54,
+      "chi_net": 991349833728.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 55,
+      "chi_net": 999597015040.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 56,
+      "chi_net": 997938495488.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 57,
+      "chi_net": 991957286912.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 58,
+      "chi_net": 993306148864.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 59,
+      "chi_net": 1010116132864.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 60,
+      "chi_net": 1001921511424.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 61,
+      "chi_net": 998031163392.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 62,
+      "chi_net": 990566154240.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 63,
+      "chi_net": 1011414138880.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 64,
+      "chi_net": 1003650088960.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 65,
+      "chi_net": 1014554361856.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 66,
+      "chi_net": 1019620687872.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 67,
+      "chi_net": 998371885056.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 68,
+      "chi_net": 995359719424.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 69,
+      "chi_net": 998958891008.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 70,
+      "chi_net": 992248922112.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 71,
+      "chi_net": 1001390407680.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 72,
+      "chi_net": 1005976092672.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 73,
+      "chi_net": 988830695424.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 74,
+      "chi_net": 985223069696.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 75,
+      "chi_net": 1002294345728.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 76,
+      "chi_net": 987034943488.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 77,
+      "chi_net": 1002664820736.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 78,
+      "chi_net": 990785437696.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 79,
+      "chi_net": 987838087168.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 80,
+      "chi_net": 995696246784.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 81,
+      "chi_net": 989621583872.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 82,
+      "chi_net": 1000018739200.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 83,
+      "chi_net": 990195613696.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 84,
+      "chi_net": 981322170368.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 85,
+      "chi_net": 1006473379840.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 86,
+      "chi_net": 998394757120.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 87,
+      "chi_net": 1002912219136.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 88,
+      "chi_net": 999461093376.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 89,
+      "chi_net": 1004261605376.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 90,
+      "chi_net": 1014394519552.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 91,
+      "chi_net": 995552264192.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 92,
+      "chi_net": 1006594490368.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 93,
+      "chi_net": 997256003584.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 94,
+      "chi_net": 1007690711040.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 95,
+      "chi_net": 1009443930112.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 96,
+      "chi_net": 986713489408.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 97,
+      "chi_net": 1001886187520.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 98,
+      "chi_net": 997207834624.0
+    },
+    {
+      "method": "per_sequence_cv",
+      "n_h": 64,
+      "seed": 99,
+      "chi_net": 985969786880.0
+    }
+  ]
+}
