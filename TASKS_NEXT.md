@@ -267,6 +267,72 @@ After the user picks, implement, test, and document the choice in
 
 Commit: `task 4: parquet sink re-open behavior (option A|B)`.
 
+### Task 9 — `per_sequence_cv` O(P)-memory reformulation (added 2026-06-15)
+
+**DONE 2026-06-15.** The default path is now O(P) (output-space projection,
+no per-sample grad storage); the O(B*P) storing path + the cross-sample
+alignment matrix + the memory pre-check all live behind
+`compute_alignment_matrix=True`. Offloading was deliberately NOT implemented
+(see "Related" below — still its own future task). Verified: O(P)↔storing
+exact-equivalence and hutchinson↔per_seq_cv convergence unit tests, plus the
+perspic cross-validation tier; ruff + mypy-strict clean.
+
+**Tier 1 priority. Claim verified numerically this session** — see
+`examples/benchmark/_verify_per_seq_cv_reformulation.py` (subagent check on the
+TinyTransformer fixture: chi_net rel diff **1.34e-8**, per-probe `grad_v_perp`
+vector rel diff **2.6e-7** — an *exact* algebraic identity, not an
+approximation).
+
+**The problem.** `PerSequenceControlVariateEstimator` caches **B per-sample
+parameter-gradient vectors** `g_b` (each size `P = n_params`, fp32) → peak
+memory **O(B·P)**. This is the binding constraint at scale: the memory
+pre-check refuses it for 1B+ models (e.g. pythia-1.4b, B=16 → ~90 GB of cache),
+and it's what blocks the 9B/DPO target on the 40 GB A100s. The single-GPU
+benchmark shows it directly: hutchinson peak is flat (~4.6 GB on 160m) while
+per_seq_cv climbs linearly in B (10.8 → 15.8 → 26.4 GB at B=4/8/16). See
+`examples/benchmark/results_pythia-160m_plot.png`.
+
+**The fix.** The control-variate correction is
+`Σ_b coef_b·g_b = Σ_b coef_b·Jᵀu_b = Jᵀ(Σ_b coef_b·u_b) = Jᵀ(P v)`, where `P`
+projects the probe `v` onto the per-sample loss directions **in output space**.
+Therefore `grad_v_perp = Jᵀv − Jᵀ(Pv) = Jᵀ((I−P)v)`. So:
+1. Per probe, form `w = (I−P)v` in **output space** (per-sample subtract the
+   component along `û_b`; cost O(S·V) per sample, *not* O(P)) and take **one**
+   backward of `(logits·w).sum()` → `grad_v_perp` directly. No stored `g_b`.
+2. The exact term `Σ_b ‖g_b‖²/‖u_b‖²` still needs the B per-sample backwards,
+   but only their scalar squared norms — compute `‖g_b‖²`, accumulate, `del g_b`.
+   Backward *count* is unchanged (`B + n_h`); memory drops **O(B·P) → O(P)**,
+   matching hutchinson.
+
+**Caveat — the one thing it gives up.** The cross-sample alignment matrix bonus
+(`extras["alignment_matrix"]`, `C_{bb'} = ⟨g_b, g_{b'}⟩`) genuinely needs the
+stored `g_b`. Keep it behind the existing `compute_alignment_matrix` flag:
+default to the O(P) path; only materialize/store `g_b` when the alignment matrix
+is explicitly requested (and even then, consider streaming them to CPU — see the
+related item below).
+
+**Related (broader theme, scope separately):** the same "stop holding full-`P`
+vectors on the GPU" issue affects `delta_loss` — the analyzer builds a fp32
+flat gradient of size `P` (`vatis/analyzer.py::_compute_self_pair`) and caches
+one per eval batch for cross-pairs, all on-device. For a 9B model that's 36 GB
+*each*, which (with the model) overflows a 40 GB card and forces multi-batch /
+DPO-diagnostic runs to OOM. CPU-offloading those vectors (host has ~1 TB) is the
+companion change that, together with this task, is the actual path to running
+vatis on a 9B model + DPO dataset here. Worth its own task once this lands.
+
+**Cost estimate:** ~40–60 lines in `per_seq_cv.py` + a regression test (promote
+the verification script to a unit test asserting the O(P) path equals the
+current path within 1e-5 on the toy fixture). ~half a day.
+
+**Acceptance:**
+- New O(P) path returns chi_net equal to the current implementation within
+  Hutchinson-free fp tolerance (rel < 1e-5) on the toy fixture, probe-for-probe.
+- Peak number of P-sized vectors alive is 1 (assert, not B).
+- Alignment matrix still correct when `compute_alignment_matrix=True`.
+- `tests/cross_validation/test_vs_perspic.py` still passes (per_seq_cv path).
+
+Commit: `task 9: O(P)-memory per_sequence_cv via output-space projection`.
+
 ## Tier 2 — feature work (do after Tier 1 is green)
 
 ### Task 5 — `OpacusEstimator` full implementation

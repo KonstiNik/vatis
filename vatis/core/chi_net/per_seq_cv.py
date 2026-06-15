@@ -54,15 +54,28 @@ free (one matmul over the per-sample grad matrix). It is exactly the eNTK
 projected onto the per-sample loss directions, sample-resolved. We surface
 it via ``ChiNetResult.extras["alignment_matrix"]``.
 
-Memory caveat
-=============
+Memory
+======
 
-This estimator stores ``B`` per-sample parameter-space gradient vectors at
-once. For an 8B model with B=32 that is ~32 * 16 GB = 512 GB — not feasible.
-The auto-selection rule in the analyzer only picks per_seq_cv for B <= 32,
-but the user is still responsible for noticing that for very large models
-the memory cost becomes prohibitive. For 1B-class models and below this is
-totally fine.
+There are two code paths, selected by ``compute_alignment_matrix``:
+
+- **Default (``compute_alignment_matrix=False``): O(P) memory.** The correction
+  ``sum_b coef_b g_b = sum_b coef_b J^T u_b = J^T (P v)`` is the parameter-space
+  image of the output-space projection ``P v``. So we form ``w = (I - P) v`` in
+  OUTPUT space (cost O(S*V) per sample, cheap) and take a single backward of
+  ``J^T w`` to get ``grad_v_perp`` directly — no per-sample parameter gradients
+  are stored. Peak memory is one gradient at a time, like ``hutchinson``. This
+  is exact (an algebraic identity, not an approximation) and is the default.
+
+- **``compute_alignment_matrix=True``: O(B*P) memory.** Stores the ``B``
+  per-sample gradient vectors ``g_b`` to build the cross-sample alignment
+  matrix (see "Bonus observable"). For an 8B model with B=32 that is
+  ~32 * 32 GB = 1 TB — not feasible; the memory pre-check refuses such configs.
+  Only request this path when you actually need the alignment matrix and the
+  model is small enough.
+
+The backward COUNT (``B + n_h``) is identical for both paths; only the memory
+differs.
 """
 
 from __future__ import annotations
@@ -99,8 +112,13 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
         n_hutchinson: number of Hutchinson probes per micro-batch (after the
             B per-sample backwards).
         distribution: ``"rademacher"`` (default) or ``"gaussian"``.
-        compute_alignment_matrix: if True (default), surface the cross-sample
-            alignment matrix in ``result.extras["alignment_matrix"]``.
+        compute_alignment_matrix: if True, store the ``B`` per-sample gradient
+            vectors and surface the cross-sample alignment matrix in
+            ``result.extras["alignment_matrix"]`` — this costs **O(B*P)**
+            memory and triggers the memory pre-check. Default ``False``: use
+            the **O(P)-memory** path (output-space projection, no per-sample
+            grad storage), which produces an identical ``chi_net`` but no
+            alignment matrix. See the module docstring "Memory" section.
     """
 
     name = "per_sequence_cv"
@@ -110,7 +128,7 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
         *,
         n_hutchinson: int = 32,
         distribution: ProbeDistribution = "rademacher",
-        compute_alignment_matrix: bool = True,
+        compute_alignment_matrix: bool = False,
         memory_fraction: float = _DEFAULT_MEMORY_FRACTION,
     ) -> None:
         if n_hutchinson < 1:
@@ -198,25 +216,27 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
         generator: torch.Generator | None = None,
     ) -> ChiNetResult:
         device = next(model.parameters()).device
-        # Memory pre-check: per_sequence_cv stores ``B`` flat parameter-space
-        # gradient vectors at once. For large models this dominates memory.
-        # We fail fast here rather than partway through the chi_net loop.
-        b_total = batch_size(batch)
-        n_params = sum(p.numel() for p in params)
-        self.check_memory_feasible(
-            b_total,
-            n_params,
-            device=device,
-            memory_fraction=self.memory_fraction,
-        )
+        store_grads = self.compute_alignment_matrix
+        # The memory pre-check only applies to the alignment-matrix path: it is
+        # the only one that caches ``B`` per-sample gradient vectors (O(B*P)).
+        # The default O(P) path holds at most one gradient at a time, so any
+        # batch size is feasible and we skip the check entirely.
+        if store_grads:
+            b_total = batch_size(batch)
+            n_params = sum(p.numel() for p in params)
+            self.check_memory_feasible(
+                b_total,
+                n_params,
+                device=device,
+                memory_fraction=self.memory_fraction,
+            )
 
         chi_net_acc = torch.zeros((), dtype=torch.float64, device=device)
         n_valid_total = 0
         n_backwards = 0
 
-        # Per-sample grads collected across micro-batches, indexed by global
-        # sample id (in batch order). Each entry is a flat fp32 vector on
-        # ``device``. Used for the alignment matrix bonus.
+        # Per-sample grads collected across micro-batches (only populated when
+        # the alignment matrix is requested). Each entry is a flat fp32 vector.
         per_sample_grads: list[torch.Tensor] = []
 
         for _start, _stop, micro in iter_micro_batches(batch, micro_batch_size):
@@ -237,8 +257,11 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
             )
             u_full = u_full_with_grad.detach()
 
-            # Step 2: B per-sample backwards. For sample b, build a
-            # grad_outputs tensor that is u_full only at sample b's slice.
+            # Step 2: B per-sample backwards. These give the exact
+            # loss-direction term Sum_b ||g_b||^2 / ||u_b||^2. We only retain
+            # the full g_b vectors when the alignment matrix is requested;
+            # otherwise we accumulate the scalar contribution and discard each
+            # g_b (O(P) memory — one parameter-gradient alive at a time).
             g_b_flat_list: list[torch.Tensor] = []
             u_b_norm_sq_list: list[float] = []
             exact_loss_direction = torch.zeros((), dtype=torch.float64, device=device)
@@ -257,17 +280,21 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
                     allow_unused=True,
                 )
                 n_backwards += 1
-                g_b_flat = _flatten_grads(grads_b, params, device=device)
-                g_b_flat_list.append(g_b_flat)
 
                 u_b_sq = float((u_full[b].to(dtype=torch.float64) ** 2).sum().item())
                 u_b_norm_sq_list.append(u_b_sq)
 
-                if u_b_sq > 0.0:
-                    g_b_sq = (g_b_flat.to(dtype=torch.float64) ** 2).sum()
-                    exact_loss_direction = exact_loss_direction + g_b_sq / u_b_sq
+                if store_grads:
+                    g_b_flat = _flatten_grads(grads_b, params, device=device)
+                    g_b_flat_list.append(g_b_flat)
+                    if u_b_sq > 0.0:
+                        g_b_sq = (g_b_flat.to(dtype=torch.float64) ** 2).sum()
+                        exact_loss_direction = exact_loss_direction + g_b_sq / u_b_sq
+                elif u_b_sq > 0.0:
+                    # Accumulate ||g_b||^2 directly without materializing g_b.
+                    exact_loss_direction = exact_loss_direction + _sum_sq(grads_b, device) / u_b_sq
 
-            # Step 3: Hutchinson loop with control variate.
+            # Step 3: Hutchinson loop with the loss-direction control variate.
             hutch_acc = torch.zeros((), dtype=torch.float64, device=device)
             for h in range(self.n_hutchinson):
                 v = make_probe(
@@ -278,36 +305,61 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
                     generator=generator,
                 )
                 v = mask_probe(v, vmask)
-
-                projected = (logits * v.to(dtype=logits.dtype)).sum()
                 # Use retain_graph until the very last backward of this
                 # micro-batch, so we can free the forward graph then.
                 last_backward = h == self.n_hutchinson - 1
-                grads_v = torch.autograd.grad(
-                    projected,
-                    params,
-                    retain_graph=not last_backward,
-                    create_graph=False,
-                    allow_unused=True,
-                )
-                n_backwards += 1
-                grad_v_flat = _flatten_grads(grads_v, params, device=device)
 
-                # Build the per-sample correction in parameter space:
-                # correction = sum_b alpha_b * g_b / ||u_b||
-                # where alpha_b = <v[b], u_hat_b> = <v[b], u_b> / ||u_b||
-                # so alpha_b / ||u_b|| = <v[b], u_b> / ||u_b||^2.
-                correction = torch.zeros_like(grad_v_flat)
-                for b in range(m):
-                    u_b_sq = u_b_norm_sq_list[b]
-                    if u_b_sq <= 0.0:
-                        continue
-                    inner = (v[b].to(dtype=torch.float64) * u_full[b].to(dtype=torch.float64)).sum()
-                    coef = float(inner.item()) / u_b_sq
-                    correction = correction + coef * g_b_flat_list[b]
-
-                grad_v_perp = grad_v_flat - correction
-                hutch_acc = hutch_acc + (grad_v_perp.to(dtype=torch.float64) ** 2).sum()
+                if store_grads:
+                    # Parameter-space correction using the stored g_b:
+                    #   grad_v_perp = J^T v - sum_b coef_b g_b,
+                    #   coef_b = <v[b], u_b> / ||u_b||^2.
+                    projected = (logits * v.to(dtype=logits.dtype)).sum()
+                    grads_v = torch.autograd.grad(
+                        projected,
+                        params,
+                        retain_graph=not last_backward,
+                        create_graph=False,
+                        allow_unused=True,
+                    )
+                    n_backwards += 1
+                    grad_v_flat = _flatten_grads(grads_v, params, device=device)
+                    correction = torch.zeros_like(grad_v_flat)
+                    for b in range(m):
+                        u_b_sq = u_b_norm_sq_list[b]
+                        if u_b_sq <= 0.0:
+                            continue
+                        inner = (
+                            v[b].to(dtype=torch.float64) * u_full[b].to(dtype=torch.float64)
+                        ).sum()
+                        coef = float(inner.item()) / u_b_sq
+                        correction = correction + coef * g_b_flat_list[b]
+                    grad_v_perp = grad_v_flat - correction
+                    hutch_acc = hutch_acc + (grad_v_perp.to(dtype=torch.float64) ** 2).sum()
+                else:
+                    # O(P) path: project the probe in OUTPUT space,
+                    # w = (I - P) v, then a single backward yields
+                    # J^T w = grad_v_perp directly. This is the identity
+                    #   sum_b coef_b g_b = sum_b coef_b J^T u_b = J^T (P v),
+                    # so J^T v - sum_b coef_b g_b = J^T ((I - P) v).
+                    # No per-sample parameter gradients are materialized.
+                    w = v.to(dtype=torch.float64)
+                    for b in range(m):
+                        u_b_sq = u_b_norm_sq_list[b]
+                        if u_b_sq <= 0.0:
+                            continue
+                        ub = u_full[b].to(dtype=torch.float64)
+                        coef = float((w[b] * ub).sum().item()) / u_b_sq
+                        w[b] = w[b] - coef * ub
+                    grads_v = torch.autograd.grad(
+                        outputs=logits,
+                        inputs=params,
+                        grad_outputs=w.to(dtype=logits.dtype),
+                        retain_graph=not last_backward,
+                        create_graph=False,
+                        allow_unused=True,
+                    )
+                    n_backwards += 1
+                    hutch_acc = hutch_acc + _sum_sq(grads_v, device)
 
             chi_net_micro = (hutch_acc / float(self.n_hutchinson)) + exact_loss_direction
             chi_net_acc = chi_net_acc + chi_net_micro
@@ -318,7 +370,7 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
             else:
                 n_valid_total += int(vmask.sum().item())
 
-            if self.compute_alignment_matrix:
+            if store_grads:
                 # Save per-sample grads for the global alignment matrix; live
                 # on device for now (caller may move to CPU).
                 per_sample_grads.extend(g_b_flat_list)
@@ -333,7 +385,7 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
             "n_hutchinson": self.n_hutchinson,
             "distribution": self.distribution,
         }
-        if self.compute_alignment_matrix and per_sample_grads:
+        if store_grads and per_sample_grads:
             grad_matrix = torch.stack(per_sample_grads, dim=0)  # (B_total, P)
             alignment = grad_matrix @ grad_matrix.T  # (B_total, B_total)
             extras["alignment_matrix"] = alignment.detach().to(dtype=torch.float32, device="cpu")
@@ -351,6 +403,23 @@ def _micro_batch_size(micro: Any) -> int:
     from vatis.data.collate import batch_size
 
     return batch_size(micro)
+
+
+def _sum_sq(
+    grads: tuple[torch.Tensor | None, ...] | list[torch.Tensor | None],
+    device: torch.device,
+) -> torch.Tensor:
+    """Return ``sum_p ||grad_p||^2`` as a 0-dim fp64 tensor, without flattening.
+
+    Used by the O(P)-memory path so it never materializes a full ``P``-length
+    gradient vector: it consumes the per-parameter grad tuple straight from
+    ``autograd.grad`` and reduces to a scalar.
+    """
+    total = torch.zeros((), dtype=torch.float64, device=device)
+    for g in grads:
+        if g is not None:
+            total = total + (g.to(dtype=torch.float64) ** 2).sum()
+    return total
 
 
 def _flatten_grads(

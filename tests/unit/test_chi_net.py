@@ -187,7 +187,9 @@ def test_per_seq_cv_records_alignment_matrix() -> None:
     model, batch = _build_small_lm()
     g = torch.Generator(device="cpu")
     g.manual_seed(0)
-    est = PerSequenceControlVariateEstimator(n_hutchinson=4)
+    # The alignment matrix is an opt-in feature of the O(B*P) storing path;
+    # the default O(P) path does not produce it.
+    est = PerSequenceControlVariateEstimator(n_hutchinson=4, compute_alignment_matrix=True)
     res = est.compute(
         model,
         batch,
@@ -273,12 +275,15 @@ def test_per_seq_cv_memory_check_passes_for_sensible_config() -> None:
 
 def test_per_seq_cv_memory_check_fires_in_compute() -> None:
     """The estimator's compute() should also raise (not just the static
-    helper) — this is the path the analyzer hits.
+    helper) on the storing path — that is the only path that caches B
+    per-sample gradients, so it is the only one the memory check guards.
     """
     model, batch = _build_small_lm()
-    # memory_fraction=0 forces the check to always fire (any positive
-    # estimated bytes exceeds 0% of available).
-    est = PerSequenceControlVariateEstimator(n_hutchinson=2, memory_fraction=1e-30)
+    # memory_fraction tiny forces the check to fire (any positive estimated
+    # bytes exceeds it). The check only runs when compute_alignment_matrix=True.
+    est = PerSequenceControlVariateEstimator(
+        n_hutchinson=2, memory_fraction=1e-30, compute_alignment_matrix=True
+    )
     with pytest.raises(ValueError, match="per_sequence_cv would need"):
         est.compute(
             model,
@@ -291,11 +296,12 @@ def test_per_seq_cv_memory_check_fires_in_compute() -> None:
         )
 
 
-def test_per_seq_cv_memory_check_does_not_fire_in_compute_for_toy() -> None:
-    """The toy fixture must always pass the default memory check — otherwise
-    the existing convergence test would fail."""
+def test_per_seq_cv_default_path_skips_memory_check() -> None:
+    """The default O(P) path stores no per-sample grads, so the memory
+    pre-check must NOT fire even with an absurdly tight memory_fraction —
+    any batch size is feasible on that path."""
     model, batch = _build_small_lm()
-    est = PerSequenceControlVariateEstimator(n_hutchinson=2)
+    est = PerSequenceControlVariateEstimator(n_hutchinson=2, memory_fraction=1e-30)
     res = est.compute(
         model,
         batch,
@@ -531,3 +537,77 @@ def test_per_seq_cv_lower_variance_than_hutchinson_at_same_n() -> None:
     assert c_mean <= h_mean * 1.1, (
         f"per_seq_cv mean abs err {c_mean:.4f} not better than hutchinson {h_mean:.4f}"
     )
+
+
+def test_per_seq_cv_op_path_matches_storing_path() -> None:
+    """The default O(P) output-space-projection path must give the SAME chi_net
+    as the O(B*P) storing path — it is an exact algebraic identity
+    (``J^T v - sum_b coef_b g_b == J^T ((I - P) v)``), not an approximation.
+
+    Both runs use the same probe seed, so the agreement is probe-for-probe
+    (much tighter than mere convergence in expectation).
+    """
+    model, batch = _build_small_lm()
+    params = list(model.parameters())
+
+    def run(store: bool) -> float:
+        g = torch.Generator(device="cpu")
+        g.manual_seed(2024)
+        est = PerSequenceControlVariateEstimator(n_hutchinson=16, compute_alignment_matrix=store)
+        res = est.compute(
+            model,
+            batch,
+            _fwd,
+            loss_fn=causal_lm_loss,
+            valid_mask_fn=causal_lm_valid_mask,
+            params=params,
+            micro_batch_size=2,
+            generator=g,
+        )
+        return float(res.chi_net)
+
+    op = run(store=False)  # default O(P) path
+    stored = run(store=True)  # O(B*P) storing path
+    rel = abs(op - stored) / max(abs(stored), 1e-30)
+    assert rel < 1e-5, f"O(P) path != storing path: {op} vs {stored} (rel {rel:.2e})"
+
+
+def test_per_seq_cv_and_hutchinson_converge_to_same() -> None:
+    """Hutchinson and the default (O(P)) per_sequence_cv must converge to the
+    SAME value — the exact trace — at high n_hutchinson.
+
+    Both are unbiased, so averaging over several seeds drives each to the exact
+    ``Tr(M)`` and to each other. This is the head-to-head "are the two methods
+    really estimating the same quantity" check.
+    """
+    model, batch = _build_small_lm()
+    exact = _exact_chi_net(model, batch)
+    n_h = 512
+    n_seeds = 6
+
+    def mean_chi_net(make_est: object) -> float:
+        vals = []
+        for seed in range(n_seeds):
+            g = torch.Generator(device="cpu")
+            g.manual_seed(seed * 101 + 3)
+            res = make_est().compute(  # type: ignore[operator]
+                model,
+                batch,
+                _fwd,
+                loss_fn=causal_lm_loss,
+                valid_mask_fn=causal_lm_valid_mask,
+                params=list(model.parameters()),
+                micro_batch_size=2,
+                generator=g,
+            )
+            vals.append(float(res.chi_net))
+        return sum(vals) / len(vals)
+
+    h = mean_chi_net(lambda: HutchinsonEstimator(n_hutchinson=n_h))
+    cv = mean_chi_net(lambda: PerSequenceControlVariateEstimator(n_hutchinson=n_h))
+
+    # Each unbiased estimator converges to the exact trace...
+    assert abs(h - exact) / exact < 0.03, f"hutchinson mean {h} vs exact {exact}"
+    assert abs(cv - exact) / exact < 0.03, f"per_seq_cv mean {cv} vs exact {exact}"
+    # ...and therefore to each other.
+    assert abs(h - cv) / exact < 0.03, f"hutchinson {h} vs per_seq_cv {cv}"
