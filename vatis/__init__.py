@@ -1,4 +1,4 @@
-"""vatis — compute LNA observables on pretrained model checkpoints.
+"""vatis — compute LNP observables on pretrained model checkpoints.
 
 Public API:
     analyze: one-shot convenience function.

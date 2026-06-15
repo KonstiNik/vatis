@@ -1,6 +1,6 @@
 # vatis
 
-Compute LNA observables (`chi_loss`, `chi_net`, `chi_pos`) on **pretrained model checkpoints**, scaled across multiple GPUs via DDP. Sister package to `perspic`, which does the same thing during Lightning training. vatis is for the regime where you can't pretrain yourself and instead probe published checkpoints (Pythia, OLMo, …).
+Compute LNP observables (`chi_loss`, `chi_net`, `chi_pos`) on **pretrained model checkpoints**, scaled across multiple GPUs via DDP. Sister package to `perspic`, which does the same thing during Lightning training. vatis is for the regime where you can't pretrain yourself and instead probe published checkpoints (Pythia, OLMo, …).
 
 ## Agent quick start
 
@@ -15,7 +15,7 @@ If you contradict a paragraph in this file with the code you write, **edit the p
 
 ## Core idea (math)
 
-For a loss `L = (1/N) Σᵢ ℓᵢ` over `N` "samples" (= valid tokens for an LM), the LNA decomposition factors the linearized loss change:
+For a loss `L = (1/N) Σᵢ ℓᵢ` over `N` "samples" (= valid tokens for an LM), the LNP decomposition factors the linearized loss change:
 
 ```
 δL(A, B) = χ_loss · χ_net · χ_pos
@@ -28,7 +28,7 @@ with
 - `χ_pos = δL / (χ_loss · χ_net)` — recovered indirectly, no eNTK eigendecomposition.
 - `δL(A, B) = ⟨∇_θ L^A, ∇_θ L^B⟩` — two ordinary backwards plus a dot product.
 
-The full derivation lives in `background_info.tex` (LNA-decomposition for mini-batch training). Read it before touching the math.
+The full derivation lives in `background_info.tex`. Read it before touching the math. (Note: the `.tex` still calls this the "LNA-decomposition"; the rename to LNP there is pending.)
 
 ### How `χ_loss` and `δL` are computed (cheap, fixed cost)
 
@@ -333,7 +333,7 @@ The split matters because compute is expensive (~20 s warm / ~50 s cold for the 
 A few patterns the example also demonstrates:
 
 - **Real text, not random integers, for any observable that gets discussed.** The chi_net term is the squared Frobenius norm of the parameter Jacobian *evaluated at the input*; off-distribution random tokens put the evaluation at a meaningless point in input-space. Tokenized real text (Pride and Prejudice prose + a Python module in the example) puts the evaluation back on the model's training manifold. Synthetic data is fine for shape-only benchmarks (`examples/_benchmark.py` is correctly using random integers because it's measuring wallclock and memory only) but anything that reports an observable value needs real data.
-- **Cross-pair observables for the LNA-relevant story.** `cross_pairs=[(A, B)]` adds `δL(A, B)` and `chi_pos(A, B)` rows to the parquet at zero extra backward cost (the gradients are already cached from the self-pair work). The cross observables are the most informative LNA quantities — they tell you whether learning on A helps or hurts B (positive `δL(A, B)` → transfer, negative → interference). The deployment example uses `(prose, code)` and shows the cross `δL` going from `+3.25` at step1 → `−18` at step143000 — i.e. prose and code gradients become anti-aligned during training, the negative-`chi_pos` regime from `background_info.tex §A.2`.
+- **Cross-pair observables for the LNP-relevant story.** `cross_pairs=[(A, B)]` adds `δL(A, B)` and `chi_pos(A, B)` rows to the parquet at zero extra backward cost (the gradients are already cached from the self-pair work). The cross observables are the most informative LNP quantities — they tell you whether learning on A helps or hurts B (positive `δL(A, B)` → transfer, negative → interference). The deployment example uses `(prose, code)` and shows the cross `δL` going from `+3.25` at step1 → `−18` at step143000 — i.e. prose and code gradients become anti-aligned during training, the negative-`chi_pos` regime from `background_info.tex §A.2`.
 - **Log-spaced early checkpoints.** Pythia ships log-spaced revisions (`step0`, `step1`, `step2`, ..., `step512`) before the every-1000-steps main phase. The early phase reveals dynamics that are invisible from `step1000` onward — for `pythia-14m` the example surfaces a `chi_net` U-shape at step64 and a `chi_loss` "warmup cliff" where the model literally doesn't improve in the first 64 SGD steps. **Always include early checkpoints when sweeping a Pythia-like model**; the cost is ~4 extra checkpoint loads.
 
 ## Dependencies
@@ -492,7 +492,7 @@ Tasks (in commit order):
 
 Three **post-task follow-ups** on the deployment example, prompted by user discussion after task 8:
 
-1. **Real-text eval batches** — replaced random-integer batches with tokenized prose (Pride and Prejudice) and tokenized code (a Python module). The chi_net term is Jacobian-of-the-model-evaluated-at-the-input; off-distribution random tokens make the trajectory uninterpretable. Real text puts the evaluation back on Pythia's training manifold. Also added `cross_pairs=[("prose", "code")]` for the LNA-relevant cross-distribution gradient correlation.
+1. **Real-text eval batches** — replaced random-integer batches with tokenized prose (Pride and Prejudice) and tokenized code (a Python module). The chi_net term is Jacobian-of-the-model-evaluated-at-the-input; off-distribution random tokens make the trajectory uninterpretable. Real text puts the evaluation back on Pythia's training manifold. Also added `cross_pairs=[("prose", "code")]` for the LNP-relevant cross-distribution gradient correlation.
 2. **Log-spaced early checkpoints** — added `step1, step8, step64, step512` to the sweep alongside the existing `step1000` → `step143000` main phase. Revealed three findings invisible from `step1000` onward: `chi_net` U-shape at step64 (parameter Jacobian *shrinks* in the first ~100 steps before growing), `chi_loss` warmup cliff (no measurable learning in the first 64 steps), non-monotonic cross `δL` (drops, rebounds, then declines through zero).
 3. **Analysis script** — `examples/analyze_results.py`, a small post-processing script that reads `results.parquet` and computes the normalized cross-batch gradient correlation `cos(g_A, g_B)`. Demonstrates the compute/analysis split (compute is expensive, analysis is cheap) and that the parquet schema is the contract — the script has zero vatis imports.
 

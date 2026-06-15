@@ -4,7 +4,7 @@ This module is a thin wrapper that:
     - calls ``transformers.AutoModelForCausalLM.from_pretrained(name, revision=...)``
     - returns a small ``HFModelBundle`` containing the model, the loss
       function, the forward function, and a valid-mask function — exactly
-      the four pieces the analyzer needs to drive an LNA computation.
+      the four pieces the analyzer needs to drive an LNP computation.
 
 Why a bundle? Because vatis treats the model as opaque. The analyzer needs
 to know how to (a) call the model on a batch and get logits, (b) compute the

@@ -46,7 +46,7 @@ def count_valid(mask: torch.Tensor) -> int:
 
 def normalization_factor(n_valid_a: int, n_valid_b: int) -> float:
     """Return ``sqrt(N_A * N_B)`` — the batch-size factor used in the
-    normalized LNA components.
+    normalized LNP components.
 
     Per the derivation in ``background_info.tex`` §A.2:
 
