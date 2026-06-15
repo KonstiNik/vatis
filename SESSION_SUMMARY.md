@@ -662,3 +662,65 @@ was overridden by direct user instruction multiple times in-session.
 The host filesystem boundary — keep everything inside
 `/tikhome/knikolaou/PycharmProjects/vatis/` — is still respected: nothing
 outside the project tree was written or modified.
+
+## v1.2 continued — UX, per_seq_cv O(P), analyzer memory fix, real-GPU DDP (2026-06-15)
+
+Worked on a fresh checkout at `/data/horse/ws/koni010i-dpo_sft_transition/vatis`
+(the old `/tikhome/...` path above is stale). Focus: onboarding UX, an estimator
+memory reformulation, a real `delta_loss` memory bug, and finally verifying the
+DDP path on actual GPUs. All committed; unit + perspic cross-validation green
+throughout. Unit tests 50 → 52.
+
+### What changed
+- **README + naming.** Rewrote `README.md` as a low-read/high-info onboarding doc
+  (what-you-get table, two-track uv setup, output, multi-GPU, estimator choice).
+  Renamed the decomposition **LNA → LNP** (Loss-Network-Position) in `CLAUDE.md`
+  and the package docstrings; `background_info.tex` + `examples/` still say LNA
+  (deliberately deferred).
+- **per_seq_cv memory-check test** made host-independent (it asserted 128 GB is
+  "always too big" — false on a 1 TB-RAM login node; now monkeypatches the
+  reported available memory). Commit `fbc92d6`.
+- **per_seq_cv O(P)-memory reformulation** (Task 9, commit `57ad012`). The default
+  path now forms `(I-P)v` in output space + one backward instead of caching B
+  per-sample gradient vectors: O(B·P) → O(P). The cross-sample alignment matrix
+  and the memory pre-check are now behind `compute_alignment_matrix=True`.
+  Verified exact (rel 1e-8) and covered by new equivalence/convergence unit tests.
+  Empirical note: at LM scale per_seq_cv ≡ hutchinson (chi_pos ≈ 7e-8 → the loss
+  direction sits in the spectral tail, so the control variate deflates a
+  ~zero-eigenvalue subspace and removes ~no variance). Its only LM-scale value is
+  the alignment matrix — which is why making the O(P) path the cheap default is
+  the right call. (The 1/√n estimator-variance law was confirmed once enough seeds
+  were used; the early "off the curve" wiggle was finite-seed noise.)
+- **analyzer `delta_loss` chunked-fp64 fix** (commit `9c8cbff`). `delta_loss`
+  squared the full-P flat gradient via `.to(float64)`, materializing a P·8-byte
+  temporary (~10.5 GiB at 1.4B params; ~21 GiB for the cross-pair dot) that OOM'd
+  a 40 GB A100. Replaced with chunked-fp64 reductions (`_sum_sq_fp64`/`_dot_fp64`):
+  identical fp64 accumulation, peak extra ~0.3 GiB. pythia-1.4b analyze peak
+  26.4 → 15.9 GiB.
+- **Multi-GPU DDP verified on real A100s** (Tier 1 Task 3 — previously only a
+  2-rank CPU loopback). On 4× A100-SXM4-40GB, pythia-1.4b: strong scaling **3.86×**
+  (96% eff), multi-GPU == single-GPU (chi_loss/delta_loss exact, chi_net/chi_pos
+  within Hutchinson noise), per-GPU peak memory **flat** (~16.6 GiB) across W —
+  DDP replicates the model and shards data, not memory. Done as a benchmark, not
+  yet a gated `pytest -m integration` test.
+- **`examples/benchmark/` suite** (commit `380b7d7`): `single_gpu/` (wall +
+  peak-mem sweep), `ddp_scaling/` (strong/weak scaling + correctness + 3-panel
+  figure), `accuracy/` (chi_net variance vs n_hutchinson), and a shared real-text
+  batch builder. The ad-hoc diagnostics scripts used during the investigation were
+  dropped (findings captured here + in tests).
+
+### Hardware reality
+The cluster's `alpha` A100s are **40 GB** (A100-SXM4-40GB), not 80 GB. After the
+fp64 fix, vatis's single-GPU model ceiling is ~3–4B (≈ model 2 B/param + fp32
+flat-grad 4 B/param + transients). **DDP does not raise this ceiling** (model +
+flat gradient are replicated per rank); it scales throughput. Reaching the 9B/DPO
+target needs the per-parameter δL change below.
+
+### Open follow-ups (also in TASKS_NEXT.md)
+1. **Per-parameter δL** — compute `delta_loss` without the full-P fp32 flat-grad
+   cache (5.3 GiB at 1.4B), the way the chi_net estimators already reduce
+   per-parameter. Raises the model ceiling toward 9B; cost is giving up cross-pair
+   gradient-cache reuse.
+2. **DPO / custom `loss_fn` for `chi_loss`** (Tier 2 Task 6) — the DPO-spectral-filter
+   use case. The cheap `R_dir` cosine needs only `delta_loss` (already works with
+   any `loss_fn`); `R_spec`/`chi_pos` need a correct non-CE `chi_loss`.

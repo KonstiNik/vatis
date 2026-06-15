@@ -198,6 +198,18 @@ Commit: `task 2: add GitHub Actions CI for ruff, mypy, and unit tests`.
 
 ### Task 3 — Multi-GPU DDP smoke test on real GPUs
 
+**Substantially DONE 2026-06-15 (as a benchmark, not yet a gated pytest test).**
+Verified on 4× A100-SXM4-40GB via `examples/benchmark/ddp_scaling/` on
+pythia-1.4b: multi-GPU == single-GPU (chi_loss/delta_loss exact, chi_net/chi_pos
+within Hutchinson noise — the "Correctness" section of `DDP_SCALING_RESULTS.md`),
+strong scaling 3.86× on 4 GPUs. The DDP all-reduce algebra is now validated on
+real GPUs, closing this gap. **Remaining (optional):** promote it into a gated
+`tests/integration/test_ddp_real_gpus.py` (`@pytest.mark.integration` +
+`requires_multi_gpu`) as the task originally specified, so it lives in the suite
+rather than only as a benchmark. Cluster notes for whoever does it: partition
+`alpha`, `--gres=gpu:N` (not `gpu:A100:N`), `--nodes=1`, ≤6 cpus/GPU, and
+`unset CUDA_VISIBLE_DEVICES` in the job so torchrun assigns one GPU per rank.
+
 The DDP path is tested on a 2-rank CPU loopback only
 (`tests/integration/test_ddp_loopback.py`). It has never run on
 actual GPUs. **This is gated on GPU availability** — if the session
@@ -311,14 +323,19 @@ default to the O(P) path; only materialize/store `g_b` when the alignment matrix
 is explicitly requested (and even then, consider streaming them to CPU — see the
 related item below).
 
-**Related (broader theme, scope separately):** the same "stop holding full-`P`
-vectors on the GPU" issue affects `delta_loss` — the analyzer builds a fp32
-flat gradient of size `P` (`vatis/analyzer.py::_compute_self_pair`) and caches
-one per eval batch for cross-pairs, all on-device. For a 9B model that's 36 GB
-*each*, which (with the model) overflows a 40 GB card and forces multi-batch /
-DPO-diagnostic runs to OOM. CPU-offloading those vectors (host has ~1 TB) is the
-companion change that, together with this task, is the actual path to running
-vatis on a 9B model + DPO dataset here. Worth its own task once this lands.
+**Related (broader theme):** the same "stop holding full-`P` vectors on the GPU"
+issue affects `delta_loss`. **Partly addressed 2026-06-15 (commit `9c8cbff`):**
+the analyzer used to square/dot those full-`P` vectors via `.to(float64)`,
+materializing a P·8-byte fp64 *copy* (~10.5 GiB at 1.4B; ~21 GiB for the
+cross-pair dot) — that's fixed with chunked-fp64 reductions, and 1.4b now runs
+(peak ~16 GiB on a 40 GB card). **Still open (own task — the path to 9B):** the
+fp32 flat gradient itself (`P·4` = 5.3 GiB at 1.4B, 36 GiB at 9B; built in
+`_compute_self_pair` and cached per eval batch for cross-pairs, all on-device)
+is the remaining wall. Two options: (a) compute `delta_loss` *per parameter*
+(no full-`P` flat vector at all, like the chi_net estimators) — gives up
+cross-pair gradient-cache reuse; or (b) CPU-offload the cached flat grads (host
+has ~1 TB). Either, plus the DPO `loss_fn` work (Tier 2 Task 6), is what
+unblocks 9B + DPO on the 40 GB A100s.
 
 **Cost estimate:** ~40–60 lines in `per_seq_cv.py` + a regression test (promote
 the verification script to a unit test asserting the O(P) path equals the
