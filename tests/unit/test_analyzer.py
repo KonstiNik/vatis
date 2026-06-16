@@ -347,3 +347,44 @@ def test_parquet_sink_streaming_flush(tmp_path: Path) -> None:
     )
     table = pq.read_table(out)
     assert table.num_rows == 12
+
+
+def test_cross_grad_storage_gpu_cpu_equivalent() -> None:
+    """Cross-pair observables must match whether the cached gradients are held
+    on-device (``"gpu"``) or offloaded to host RAM (``"cpu"``).
+
+    The offload is a value-preserving device copy plus a device-agnostic
+    ``_dot_fp64``, so forcing either storage on the same seeded run must agree.
+    (On a CPU model both keep the gradient on the CPU, so this guards the
+    plumbing — the resolver honouring the override, the ``.to('cpu')`` cache
+    write, and the dot — rather than an actual cross-device transfer.)
+    """
+    batch_a = make_tiny_lm_batch(batch_size=4, seed=0)
+    batch_b = make_tiny_lm_batch(batch_size=4, seed=1)
+
+    def run(storage: str) -> dict[tuple[str, str, str], float]:
+        results = analyze(
+            model=_build_lm_bundle(),  # fresh model, fixed seed → identical weights
+            revisions=["step0"],
+            eval_batches={"a": batch_a, "b": batch_b},
+            cross_pairs=[("a", "b")],
+            cross_grad_storage=storage,
+            n_hutchinson=8,
+            micro_batch_size=2,
+            seed=0,
+            sink=None,
+        )
+        return {(r.batch_a, r.batch_b, r.observable): r.value for r in results[0].rows}
+
+    gpu = run("gpu")
+    cpu = run("cpu")
+    assert gpu.keys() == cpu.keys()
+    for key in gpu:
+        assert gpu[key] == pytest.approx(cpu[key], rel=1e-12, abs=1e-12), key
+    # And the cross pair was actually emitted (not silently skipped).
+    assert ("a", "b", "delta_loss") in gpu
+
+
+def test_invalid_cross_grad_storage_raises() -> None:
+    with pytest.raises(ValueError, match=r"cross_grad_storage must be"):
+        Analyzer(eval_batches={"v": make_tiny_lm_batch(batch_size=2)}, cross_grad_storage="disk")
