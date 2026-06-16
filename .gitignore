@@ -1,0 +1,46 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Tooling caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Local run config (see run_config.py / .env.example) and agent scaffolding
+.env
+.claude/
+BLOCKED.md
+
+# uv lock metadata is checked in; this catches stray files only
+.uv-cache/
+
+# NFS lock files
+.nfs*
+
+# Benchmark run artifacts (logs + regenerable scratch output dirs)
+*.log
+examples/benchmark/*/out/
