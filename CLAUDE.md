@@ -6,10 +6,9 @@ Compute LNP observables (`chi_loss`, `chi_net`, `chi_pos`) on **pretrained model
 
 If you're an agent walking into this repo, read in this order:
 
-1. **`SESSION_SUMMARY.md`** — authoritative state of the repo right now: what's built, what works, what's known broken, what was last touched. This is the file that bridges sessions.
-2. **`TASKS_NEXT.md`** — prioritized work order for the current development phase. Contains hard constraints, the git workflow, and per-task instructions. **Do not start work without reading this file** — it's the contract for what the current session is about.
-3. **`## Working conventions`, `## Conventions`, and `## Known issues` below** — read before running anything that touches files outside the project tree, modifies git history, or installs packages. The "Known issues" section names the latent bugs you should not be surprised by.
-4. **The rest of this file** — the durable reference for math, architecture, scope. The "v1 build history" and "v1.1 hardening pass" sections at the bottom describe past phases; read them for context but don't try to re-execute the implementation order — that work is done.
+1. **`MAINTAINING.md`** — the branch model (`dev` = working branch + full history + research; `main` = curated public release with an unrelated/orphan history) and the release/promotion workflow. **Read this before any git work** — the `dev`/`main` invariants are easy to break.
+2. **`## Working conventions`, `## Conventions`, and `## Known issues` below** — read before running anything that touches files outside the project tree, modifies git history, or installs packages. The "Known issues" section names the latent bugs you should not be surprised by.
+3. **The rest of this file** — the durable reference for math, architecture, scope. The "v1 build history" and "v1.1 hardening pass" sections at the bottom describe past phases; read them for context but don't try to re-execute the implementation order — that work is done.
 
 If you contradict a paragraph in this file with the code you write, **edit the paragraph in the same commit**. Don't leave stale text. The "v1.1 hardening pass" learned this the hard way and ended up with a `CLAUDE.md.proposed` sibling file that sat dormant for an entire session.
 
@@ -87,7 +86,7 @@ When the model contains only opacus-supported layers and has no parameter tying,
 
 Cost: `~n_h` backwards, where `n_h` is `~10–32`. Requires layer-compatibility check at startup; falls back with a clear error message if the model has tied embeddings (Pythia!), unsupported layers, or in-place ops that can't be neutralized.
 
-**Status:** stub only in v1 and v1.1 — `vatis/core/chi_net/opacus.py` raises `NotImplementedError`. Originally listed as "v1.1 work" but the v1.1 hardening pass focused on trust and demonstrability instead of features. Full implementation is now Tier 2 in `TASKS_NEXT.md` (v1.2). When implemented, follow the pattern from `perspic/calculator/samplewise_opacus.py`.
+**Status:** stub only in v1 and v1.1 — `vatis/core/chi_net/opacus.py` raises `NotImplementedError`. Originally listed as "v1.1 work" but the v1.1 hardening pass focused on trust and demonstrability instead of features. Full implementation is not yet done. When implemented, follow the pattern from `perspic/calculator/samplewise_opacus.py`.
 
 #### Auto-selection rule
 
@@ -165,7 +164,7 @@ There is **one** observable, computed at token granularity, normalized by the nu
 - **In:** HuggingFace causal-LM checkpoints (Pythia, OLMo, GPT-NeoX class). Tokenized data already in model-ready form. DDP across user-specified `num_gpus`. Two `χ_net` estimators (`hutchinson`, `per_sequence_cv`) with auto-selection. Parquet result sink (canonical) plus optional W&B and TensorBoard. CLI via `python -m vatis run …` that wraps `torchrun`. End-to-end deployment example on `pythia-14m` with cross-pair observables (added in v1.1).
 - **Out (current):** Tokenization (the example tokenizes inline; vatis core does not provide a tokenizer). Checkpoint discovery / sweep scheduling. FSDP. Tensor / pipeline parallelism. `OpacusEstimator` (stub only — full implementation deferred to v1.2). Custom non-CE losses for `chi_loss` (deferred to v1.2). Per-sample variance observables beyond the cross-sample alignment matrix. Models that don't fit on one GPU.
 
-Adding any of these later should be straightforward because the core (`vatis/core/`) is decoupled from model loading, data plumbing, and parallelism. The v1.2 work order in `TASKS_NEXT.md` lists the specific items that have been triaged for the next phase.
+Adding any of these later should be straightforward because the core (`vatis/core/`) is decoupled from model loading, data plumbing, and parallelism. Those items are tracked as future work.
 
 ## Architecture
 
@@ -311,7 +310,7 @@ vatis ships with the standard HF causal-LM CE loss. **v1 only supports the close
 
 The bundle's `valid_mask_fn` and the `labels=-100` (`ignore_index`) sentinel are **intersected** inside the `chi_loss` accumulator: positions excluded by either are excluded from both the numerator and the `n_valid` denominator, so the two paths are guaranteed to count the same set. (Fixed in v1.2 task 1; before that, the numerator used only `labels != -100` while the denominator used `vmask.sum()`, so chi_loss was silently wrong whenever the two masks disagreed.)
 
-The v1.1 hardening pass deleted the partially-implemented autograd fallback (`chi_loss_from_autograd`) precisely to avoid silent wrong-answer modes — better to fail loudly on a documented restriction than to ship a half-working path. **Custom loss support is deferred to v1.2** (see `TASKS_NEXT.md`); the building blocks are simple (one extra `torch.autograd.grad(loss, logits)` plus a masked squared sum) but plumbing them through the analyzer cleanly is its own task.
+The v1.1 hardening pass deleted the partially-implemented autograd fallback (`chi_loss_from_autograd`) precisely to avoid silent wrong-answer modes — better to fail loudly on a documented restriction than to ship a half-working path. **Custom loss support is deferred to v1.2**; the building blocks are simple (one extra `torch.autograd.grad(loss, logits)` plus a masked squared sum) but plumbing them through the analyzer cleanly is its own task.
 
 ### Precision
 
@@ -447,12 +446,12 @@ The `settings.local.json` allow list bounds *some* of what you can do, but **mos
 
 ## Known issues
 
-Latent bugs and quirks that an agent walking into the repo should be aware of. The detailed write-ups and the work to fix them live in `TASKS_NEXT.md`; this section is just an index.
+Latent bugs and quirks that an agent walking into the repo should be aware of.
 
-- **`ParquetSink` truncates on re-open within the same path** — calling `analyze()` twice with `sink="path.parquet"` overwrites the file each time. The deployment example sidesteps this via the single-`analyze()`-with-multiple-revisions pattern, but it's an obvious footgun for any user who loops manually. Either fix or document explicitly. Tier 1 in `TASKS_NEXT.md`.
-- **Multi-GPU DDP path is unverified on real GPUs** — only the 2-rank CPU loopback test exercises it. No real-GPU integration test exists. Tier 1 in `TASKS_NEXT.md`.
-- **Custom (non-CE) `loss_fn` is not really supported** — `delta_loss` will use whatever `loss_fn` you pass, but `chi_loss` always uses the closed-form CE shortcut. Mixing the two produces wrong observables. The autograd fallback was deleted in v1.1 task 6 to avoid silent wrong-answer modes. Real support is the v1.2 feature work. Tier 2 in `TASKS_NEXT.md`.
-- **`OpacusEstimator` is still a stub** — the original v1 spec called this v1.1 work; v1.1 was hardening instead. It's now Tier 2 in `TASKS_NEXT.md`.
+- **`ParquetSink` truncates on re-open within the same path** — calling `analyze()` twice with `sink="path.parquet"` overwrites the file each time. The deployment example sidesteps this via the single-`analyze()`-with-multiple-revisions pattern, but it's an obvious footgun for any user who loops manually. Either fix or document explicitly.
+- **Multi-GPU DDP path is unverified on real GPUs** — only the 2-rank CPU loopback test exercises it. No real-GPU integration test exists.
+- **Custom (non-CE) `loss_fn` is not really supported** — `delta_loss` will use whatever `loss_fn` you pass, but `chi_loss` always uses the closed-form CE shortcut. Mixing the two produces wrong observables. The autograd fallback was deleted in v1.1 task 6 to avoid silent wrong-answer modes. Real support is the v1.2 feature work.
+- **`OpacusEstimator` is still a stub** — the original v1 spec called this v1.1 work; v1.1 was hardening instead. It remains open.
 
 ## v1 build history (historical)
 
