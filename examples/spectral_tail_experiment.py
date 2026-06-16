@@ -26,30 +26,33 @@ repetition.
 
 Run with::
 
-    HF_HOME=/data/knikolaou/huggingface .venv/bin/python examples/spectral_tail_experiment.py
-    HF_HOME=/data/knikolaou/huggingface .venv/bin/python examples/spectral_tail_experiment.py --model EleutherAI/pythia-70m
+    .venv/bin/python examples/spectral_tail_experiment.py
+    .venv/bin/python examples/spectral_tail_experiment.py --model EleutherAI/pythia-70m
 
 Run both models and then produce a cross-scale comparison::
 
-    HF_HOME=/data/knikolaou/huggingface .venv/bin/python examples/spectral_tail_experiment.py --compare
+    .venv/bin/python examples/spectral_tail_experiment.py --compare
 
-Outputs are written to ``examples/spectral_tail/``.
+Set ``HF_HOME`` (in your shell or the repo-root ``.env``) to relocate the
+model cache; see ``run_config.py``. Outputs are written to
+``examples/spectral_tail/``.
 """
 
 from __future__ import annotations
 
-import os
-
-os.environ.setdefault("HF_HOME", "/data/knikolaou/huggingface")
-os.environ.setdefault("TRANSFORMERS_CACHE", "/data/knikolaou/huggingface")
-os.environ.setdefault("HF_DATASETS_CACHE", "/data/knikolaou/huggingface")
-
-import argparse
-import time
+import sys
 from pathlib import Path
 
-import torch
-from _helpers import tokenize_into_lm_batch
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from run_config import configure_hf_cache  # noqa: E402
+
+configure_hf_cache()
+
+import argparse  # noqa: E402
+import time  # noqa: E402
+
+import torch  # noqa: E402
+from _helpers import tokenize_into_lm_batch  # noqa: E402
 from transformers import AutoTokenizer
 
 from vatis import analyze

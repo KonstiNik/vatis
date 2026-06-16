@@ -1,4 +1,4 @@
-"""Stub for the opacus-based chi_net estimator. Full implementation is v1.1.
+"""Stub for the opacus-based chi_net estimator. Not yet implemented.
 
 The opacus path uses opacus's ``GradSampleModule`` + ghost clipping to compute
 per-sample gradient norms in a single backward, packing ``M`` samples per

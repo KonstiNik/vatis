@@ -28,7 +28,7 @@ with
 - `χ_pos = δL / (χ_loss · χ_net)` — recovered indirectly, no eNTK eigendecomposition.
 - `δL(A, B) = ⟨∇_θ L^A, ∇_θ L^B⟩` — two ordinary backwards plus a dot product.
 
-The full derivation lives in `background_info.tex`. Read it before touching the math. (Note: the `.tex` still calls this the "LNA-decomposition"; the rename to LNP there is pending.)
+The full derivation is in the paper, [arXiv:2605.31244](https://arxiv.org/abs/2605.31244). Read it before touching the math.
 
 ### How `χ_loss` and `δL` are computed (cheap, fixed cost)
 
@@ -77,7 +77,7 @@ These are used as a **control variate** for the Hutchinson estimate of `Tr(M_b)`
 
 Cost per (ckpt, batch): `n_h + B` backwards. Linear in `B`, so this method becomes unattractive for `B > ~64`.
 
-**Bonus output:** the cross-sample alignment matrix `C_{bb'} = ⟨g_b, g_{b'}⟩` is written to the sink as an additional observable. It's exactly the eNTK projected onto the loss direction, sample-resolved. Useful for sample-level variance / interference analysis (the negative-`χ_pos` regime per `background_info.tex §A.2`).
+**Bonus output:** the cross-sample alignment matrix `C_{bb'} = ⟨g_b, g_{b'}⟩` is available opt-in via `compute_alignment_matrix=True` (returned in `ChiNetResult.extras`; the analyzer does **not** enable it or write it to the sink by default). It's exactly the eNTK projected onto the loss direction, sample-resolved. Useful for sample-level variance / interference analysis (the negative-`χ_pos` regime; see the paper, arXiv:2605.31244 §A.2).
 
 **When to use:** moderate `B` (≤ 32), or when the user wants the per-sample alignment matrix.
 
@@ -152,7 +152,7 @@ For the deployment example as committed (`per_sequence_cv`, n=32, B=8, S=128, 13
 There is **one** observable, computed at token granularity, normalized by the number of valid (non-pad, non-ignored) tokens. The per-sequence vs per-token dichotomy is a normalization choice, not a different quantity:
 
 - `χ_loss` and `χ_net` are sums over `(b, s, v)` regardless. Frobenius norms of Jacobians decompose additively across output dims.
-- The `√|A|·|B|` factors from `background_info.tex §A.2` are batch-size normalization. We use **valid token counts**, not sequence counts. Track `n_valid_A`, `n_valid_B` per call.
+- The `√|A|·|B|` factors from the paper (arXiv:2605.31244 §A.2) are batch-size normalization. We use **valid token counts**, not sequence counts. Track `n_valid_A`, `n_valid_B` per call.
 - Normalized observables (default output):
   ```
   χ̃_loss = √(N_A · N_B) · χ_loss
@@ -182,7 +182,7 @@ vatis/
 │   ├── probes.py          # Rademacher / Gaussian probe vector generation, masking
 │   └── normalization.py   # valid-token counting, √(N_A·N_B) factors
 ├── models/
-│   ├── __init__.py        # load_model(spec) dispatch (registry-ready, single impl for now)
+│   ├── __init__.py        # exports load_hf_model (single impl; registry-ready)
 │   └── hf.py              # load_hf_model(name, revision) → nn.Module + loss_fn
 ├── data/
 │   ├── batches.py         # EvalBatchSpec: "fixed" | "resample" | "callable"
@@ -208,13 +208,12 @@ examples/
 ├── _helpers.py                    # shared: tokenize_into_lm_batch, step_from_revision
 ├── pythia_sweep.py                # canonical example: 13 pythia-14m revisions × prose + code
 ├── analyze_results.py             # post-processing of results.parquet — derived observables
-├── BENCHMARK.md                   # benchmark sweep table + budget arithmetic
-├── _probe.py                      # one-shot probe used to size the example
-├── _benchmark.py                  # 18-row benchmark sweep used to fill BENCHMARK.md
+├── BENCHMARK.md                   # deployment-example findings & sizing
 ├── pythia_sweep/                  # outputs from pythia_sweep.py + analyze_results.py
 │   ├── results.parquet
 │   ├── chi_loss.png, chi_net.png, delta_loss.png, chi_pos.png
 │   └── cos_similarity.png
+├── benchmark/                     # A100 perf suite: single_gpu / ddp_scaling / accuracy (see benchmark/README.md)
 ├── spectral_tail_experiment.py    # research: spectral tail overlap (4 probes, 5 model scales)
 ├── spectral_tail_evaluate.py      # evaluation plots (--compute flag for FLOPs x-axis)
 └── spectral_tail/                 # outputs + README with hypothesis and findings
@@ -261,7 +260,7 @@ from vatis.data import EvalBatchSpec
 
 EvalBatchSpec.fixed(batch)            # frozen tensor or dict, reused at every checkpoint
 EvalBatchSpec.resample(dataloader)    # next(iter(loader)) at each checkpoint
-EvalBatchSpec.callable(fn)            # fn(checkpoint_id) -> batch
+EvalBatchSpec.from_callable(fn)       # fn(checkpoint_id) -> batch
 ```
 
 The `eval_batches` argument to `analyze()` is just `dict[str, EvalBatchSpec | Tensor | DataLoader | Callable]` — bare values are auto-wrapped. Multiple named eval batches are computed at every checkpoint and emitted as separate rows in the sink. This is the central feature: comparing observables across eval distributions at the same checkpoint is the primary use case.
@@ -332,8 +331,8 @@ The split matters because compute is expensive (~20 s warm / ~50 s cold for the 
 
 A few patterns the example also demonstrates:
 
-- **Real text, not random integers, for any observable that gets discussed.** The chi_net term is the squared Frobenius norm of the parameter Jacobian *evaluated at the input*; off-distribution random tokens put the evaluation at a meaningless point in input-space. Tokenized real text (Pride and Prejudice prose + a Python module in the example) puts the evaluation back on the model's training manifold. Synthetic data is fine for shape-only benchmarks (`examples/_benchmark.py` is correctly using random integers because it's measuring wallclock and memory only) but anything that reports an observable value needs real data.
-- **Cross-pair observables for the LNP-relevant story.** `cross_pairs=[(A, B)]` adds `δL(A, B)` and `chi_pos(A, B)` rows to the parquet at zero extra backward cost (the gradients are already cached from the self-pair work). The cross observables are the most informative LNP quantities — they tell you whether learning on A helps or hurts B (positive `δL(A, B)` → transfer, negative → interference). The deployment example uses `(prose, code)` and shows the cross `δL` going from `+3.25` at step1 → `−18` at step143000 — i.e. prose and code gradients become anti-aligned during training, the negative-`chi_pos` regime from `background_info.tex §A.2`.
+- **Real text, not random integers, for any observable that gets discussed.** The chi_net term is the squared Frobenius norm of the parameter Jacobian *evaluated at the input*; off-distribution random tokens put the evaluation at a meaningless point in input-space. Tokenized real text (Pride and Prejudice prose + a Python module in the example) puts the evaluation back on the model's training manifold. Synthetic data is fine for shape-only benchmarks (the sweeps under `examples/benchmark/` correctly use random integers because they measure wallclock and memory only) but anything that reports an observable value needs real data.
+- **Cross-pair observables for the LNP-relevant story.** `cross_pairs=[(A, B)]` adds `δL(A, B)` and `chi_pos(A, B)` rows to the parquet at zero extra backward cost (the gradients are already cached from the self-pair work). The cross observables are the most informative LNP quantities — they tell you whether learning on A helps or hurts B (positive `δL(A, B)` → transfer, negative → interference). The deployment example uses `(prose, code)` and shows the cross `δL` going from `+3.25` at step1 → `−18` at step143000 — i.e. prose and code gradients become anti-aligned during training, the negative-`chi_pos` regime from the paper (arXiv:2605.31244 §A.2).
 - **Log-spaced early checkpoints.** Pythia ships log-spaced revisions (`step0`, `step1`, `step2`, ..., `step512`) before the every-1000-steps main phase. The early phase reveals dynamics that are invisible from `step1000` onward — for `pythia-14m` the example surfaces a `chi_net` U-shape at step64 and a `chi_loss` "warmup cliff" where the model literally doesn't improve in the first 64 SGD steps. **Always include early checkpoints when sweeping a Pythia-like model**; the cost is ~4 extra checkpoint loads.
 
 ## Dependencies
@@ -343,7 +342,7 @@ Hard:
 - `transformers >= 4.40`
 - `pyarrow` (parquet sink)
 - `numpy`
-- `matplotlib >= 3.10` — only used by the deployment example (`examples/pythia_sweep.py`, `examples/analyze_results.py`). vatis core does not import matplotlib.
+- `matplotlib >= 3.10` and `tqdm` — only used by the scripts under `examples/`; vatis core imports neither. Shipped as the `examples` extra (`vatis[examples]`), not a hard dependency.
 
 Soft (extras):
 - `wandb` → `vatis[wandb]`
@@ -358,7 +357,7 @@ Soft (extras):
 - **Python:** `>= 3.11`.
 - **Lint + format:** `ruff` (for both — `ruff check` and `ruff format`). Black-compatible style. Drop-in for black, much faster, one tool.
 - **Types:** `mypy --strict` on `vatis/`. Tests are unchecked.
-- **Tests:** 85 total (50 unit + 31 cross-validation + 4 integration). Run via `.venv/bin/python -m pytest tests`. CI runs the unit tier only.
+- **Tests:** ~90 collected (52 unit + 34 cross-validation cases from 12 parametrized defs + 4 integration). Run via `.venv/bin/python -m pytest tests`. CI runs the unit tier only.
   - `tests/unit/` (50 tests) — runs in CI. Uses a hand-built ~1M-param toy transformer (defined in `tests/fixtures/tiny_transformer.py`). Tests math correctness: Hutchinson convergence to the exact trace as `n → ∞`, `χ_loss` closed-form correctness on the supported CE shapes, `δL` symmetry, normalization invariants, the chi_pos combinator, the per-seq-CV memory pre-check, and the analyzer's contract assertions. v1.1 added exact-NTK ground-truth tests for `chi_pos` and `δL(A, B)` via an explicit per-token Jacobian builder (`_build_full_jacobian_and_u` in `tests/unit/test_chi_net.py`) — this is the most rigorous correctness reference because it bypasses Hutchinson entirely. v1.2 task 1 added a regression test for the `valid_mask_fn`/`chi_loss` intersection fix.
   - `tests/integration/` (4 tests) — gated behind `pytest -m integration`, **skipped in CI**, runnable locally. Uses `EleutherAI/pythia-14m` (smallest published Pythia) to verify the full HF loading + DDP path on real checkpoints. The DDP test is currently a 2-rank CPU loopback only — **the multi-GPU DDP path has never been validated on real GPUs**. Adding a real-GPU DDP test is on the v1.2 work order.
   - `tests/cross_validation/` (31 tests) — gated behind `pytest -m cross_validation`, **skipped in CI** (requires perspic in the environment), runnable locally. **Cross-validates every observable against perspic** as the ground-truth reference implementation — both self-pair and cross-pair. The protocol:
@@ -390,7 +389,7 @@ Soft (extras):
     | `grad_norm_squared` | `delta_loss` |
 
     **Any disagreement larger than the Hutchinson noise floor is a bug in vatis** (perspic is the reference). If a change you make requires loosening one of these tolerances to pass, that's a red flag — investigate before loosening.
-- **CI:** GitHub Actions workflow at `.github/workflows/ci.yml`. Single matrix entry `python-3.11`, runs `ruff check`, `ruff format --check`, `mypy`, `pytest -m "not integration and not cross_validation"` against `uv sync --extra dev`. Triggers on push to any branch and PRs to `master`. Added in v1.2 task 2.
+- **CI:** GitHub Actions workflow at `.github/workflows/ci.yml`. Single matrix entry `python-3.11`, runs `ruff check`, `ruff format --check`, `mypy`, `pytest -m "not integration and not cross_validation"` against `uv sync --extra dev`. Triggers on push to any branch and PRs to `main`.
 
 ## Working conventions (for the agent building this)
 
@@ -403,7 +402,7 @@ Soft (extras):
 The `settings.local.json` allow list bounds *some* of what you can do, but **most safety is behavioral, not technical.** Read this section before making any change that touches things outside the vatis project tree.
 
 **Technically enforced (the system will block you):**
-- `Write` and `Edit` tool calls are restricted to `/tikhome/knikolaou/PycharmProjects/vatis/**`. You cannot use these tools to modify files outside the project.
+- `Write` and `Edit` tool calls are restricted to `<project-root>/**`. You cannot use these tools to modify files outside the project.
 - Recursive `rm -r` / `rm -rf` is **not** in the allow list. Only flat `rm -- <files>` is allowed. Recursive deletes will prompt and stall in unattended mode.
 - `git push`, `git reset --hard`, `git rebase`, `git checkout` of branches, `git branch -D`, `git clean`, anything that writes to remotes or rewrites history — **not allowed**. Only read commands and safe writes (`add`, `commit`, `restore`, `stash`) are.
 - `sed`, `awk`, `find`, `source` — **removed from the allow list** because they each provided escape hatches around the file-write restriction. Use `Edit` for edits, `Glob`/`Grep` for searching, and never `source` arbitrary scripts.
@@ -416,7 +415,7 @@ The `settings.local.json` allow list bounds *some* of what you can do, but **mos
 - **Don't modify `settings.local.json` to grant yourself permissions you weren't given.** The allow list is the user's contract. If you need a permission you don't have, log it to `BLOCKED.md` and stop.
 - **Don't modify files in `~/.ssh`, `~/.gitconfig`, `~/.aws`, `~/.config`, or any dotfile in `$HOME`.** Even though you technically *could* via Python, you must not.
 
-**The real safety boundary is the host filesystem.** Treat anything outside `/tikhome/knikolaou/PycharmProjects/vatis/` as off-limits, regardless of which tool would let you reach it. The only exceptions are read-only operations (which are explicitly allowed everywhere via `Read(/**)` etc.) and the HuggingFace cache (which transformers will populate at `~/.cache/huggingface/` as a side effect of `from_pretrained` — that's expected and fine).
+**The real safety boundary is the host filesystem.** Treat anything outside `<project-root>/` as off-limits, regardless of which tool would let you reach it. The only exceptions are read-only operations (which are explicitly allowed everywhere via `Read(/**)` etc.) and the HuggingFace cache (which transformers will populate at `~/.cache/huggingface/` as a side effect of `from_pretrained` — that's expected and fine).
 
 **When in doubt, log to `BLOCKED.md` and skip.** It's always better to leave a step undone with a clear note than to take a risky workaround.
 - **Unattended-mode behavior (graceful fallback when blocked).** This project is built to run autonomously when the user is not around. If a tool call gets denied by the permission system:
@@ -440,7 +439,7 @@ The `settings.local.json` allow list bounds *some* of what you can do, but **mos
 | --- | --- | --- |
 | `χ_loss` | `chi_loss` | `‖∇_f L‖²` |
 | `χ_net` | `chi_net` | `‖∇_θ f‖_F² = Tr(Θ)` |
-| `χ_pos` | `chi_pos` | `δL / (χ_loss · χ_net)` — "spectral position". **Naming note:** in vatis this is `chi_pos`. The same quantity is called `chi_align` (and sometimes `chi_coup`) in perspic and in `background_info.tex`. When cross-validating against perspic (see "Testing" below), map `perspic.chi_align ↔ vatis.chi_pos` and `perspic.chi_coup ↔ vatis.chi_pos`. |
+| `χ_pos` | `chi_pos` | `δL / (χ_loss · χ_net)` — "spectral position". **Naming note:** in vatis this is `chi_pos`. The same quantity is called `chi_align` (and sometimes `chi_coup`) in perspic and in the paper. When cross-validating against perspic (see "Testing" below), map `perspic.chi_align ↔ vatis.chi_pos` and `perspic.chi_coup ↔ vatis.chi_pos`. |
 | `δL` | `delta_loss` | `⟨∇_θ L^A, ∇_θ L^B⟩` |
 | `Θ` | (not stored) | empirical NTK; never materialized |
 | `N_A`, `N_B` | `n_valid_a`, `n_valid_b` | valid (non-pad) token counts in batches A and B |

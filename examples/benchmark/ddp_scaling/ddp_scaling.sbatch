@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=vatis-ddp-scaling
-#SBATCH --partition=alpha
-#SBATCH --account=p_neurasearch
+# Partition / account come from .env via examples/benchmark/submit.sh
+# (SBATCH_PARTITION / SBATCH_ACCOUNT); override on the CLI to change per-submit.
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=24
 #SBATCH --mem=96G
 #SBATCH --time=00:40:00
-#SBATCH --output=/data/horse/ws/koni010i-dpo_sft_transition/vatis/examples/benchmark/ddp_scaling/ddp_scaling.log
+#SBATCH --output=ddp_scaling_%j.log
 
 set -euo pipefail
 
-REPO=/data/horse/ws/koni010i-dpo_sft_transition/vatis
+# Submit from the repo root: sbatch examples/benchmark/ddp_scaling/ddp_scaling.sbatch
+REPO="${SLURM_SUBMIT_DIR:-$PWD}"
 cd "$REPO"
 
-export HF_HOME=/data/horse/ws/koni010i-dpo_sft_transition/hf_cache
-export TRANSFORMERS_CACHE=$HF_HOME
-export HF_DATASETS_CACHE=$HF_HOME
+# HF cache: set HF_HOME in your shell or the repo-root .env (see run_config.py);
+# the worker reads it. Offline mode assumes the cache is already populated — run
+# examples/benchmark/_build_eval_batch.py on a login node first.
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export OMP_NUM_THREADS=6

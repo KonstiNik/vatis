@@ -5,31 +5,41 @@ build-backend = "hatchling.build"
 [project]
 name = "vatis"
 version = "0.1.0"
-description = "Compute LNA observables (chi_loss, chi_net, chi_pos) on pretrained model checkpoints, scaled across multiple GPUs via DDP."
+description = "Compute LNP observables (chi_loss, chi_net, chi_pos) on pretrained model checkpoints, scaled across multiple GPUs via DDP."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
-authors = [{ name = "vatis authors" }]
+authors = [{ name = "Konstantin Nikolaou" }]
 dependencies = [
     # Pinned to <2.11 because torch 2.11 silently broke the resident
-    # torchvision 0.23 build during a `uv add matplotlib` resolve in the
-    # v1.1 hardening pass. The minimum is still 2.2 per the original spec.
+    # torchvision 0.23 build during a `uv add matplotlib` resolve. The
+    # minimum is still 2.2.
     "torch>=2.2,<2.11",
     "transformers>=4.40",
     "pyarrow>=14",
     "numpy>=1.24",
-    "matplotlib>=3.10",
 ]
 
 [project.optional-dependencies]
 wandb = ["wandb>=0.16"]
 tensorboard = ["tensorboard>=2.15"]
+# Needed only to run the scripts under examples/ (the package never imports
+# matplotlib/tqdm): `uv pip install ".[examples]"`.
+examples = [
+    "matplotlib>=3.10",
+    "tqdm>=4.66",
+]
 dev = [
     "pytest>=8.0",
     "pytest-timeout>=2.2",
     "ruff>=0.5",
     "mypy>=1.10",
 ]
+
+[project.urls]
+Homepage = "https://github.com/KonstiNik/vatis"
+Repository = "https://github.com/KonstiNik/vatis"
+Issues = "https://github.com/KonstiNik/vatis/issues"
 
 [project.scripts]
 vatis = "vatis.cli:main"
@@ -73,8 +83,6 @@ plugins = []
 module = [
     "transformers",
     "transformers.*",
-    "pyarrow",
-    "pyarrow.*",
     "wandb",
     "wandb.*",
     "tensorboard.*",
@@ -84,11 +92,20 @@ module = [
 ]
 ignore_missing_imports = true
 
+# pyarrow ships py.typed in newer releases but its functions are largely
+# untyped, which trips `no-untyped-call` under --strict. Treat it as Any so the
+# check is robust across pyarrow versions (the lock pins an older one).
+[[tool.mypy.overrides]]
+module = ["pyarrow", "pyarrow.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
     "integration: end-to-end tests using real HF checkpoints (skipped in CI)",
     "cross_validation: tests that compare vatis observables against perspic (skipped in CI)",
+    "gpu: tests that require a CUDA device (auto-skipped when none is available)",
     "slow: tests that take more than a few seconds",
 ]
 addopts = "-q --strict-markers"

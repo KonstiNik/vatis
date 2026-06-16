@@ -1,24 +1,22 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=vatis-bench-160m
-#SBATCH --partition=alpha
-#SBATCH --account=p_neurasearch
+# Partition / account come from .env via examples/benchmark/submit.sh
+# (SBATCH_PARTITION / SBATCH_ACCOUNT); override on the CLI to change per-submit.
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=6
 #SBATCH --mem=32G
 #SBATCH --time=00:30:00
-#SBATCH --output=/data/horse/ws/koni010i-dpo_sft_transition/vatis/examples/benchmark/single_gpu/single_gpu_sweep_160m.log
+#SBATCH --output=single_gpu_sweep_%j.log
 
 set -euo pipefail
 
-REPO=/data/horse/ws/koni010i-dpo_sft_transition/vatis
+# Submit from the repo root: sbatch examples/benchmark/single_gpu/single_gpu_sweep.sbatch
+REPO="${SLURM_SUBMIT_DIR:-$PWD}"
 cd "$REPO"
 
-# Use the workspace HF cache (pre-populated on the login node) and stay offline
-# in case the compute node has no internet.
-export HF_HOME=/data/horse/ws/koni010i-dpo_sft_transition/hf_cache
-export TRANSFORMERS_CACHE=$HF_HOME
-export HF_DATASETS_CACHE=$HF_HOME
+# HF cache: set HF_HOME in your shell or the repo-root .env (see run_config.py).
+# Offline mode assumes the cache is already populated on the compute node.
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 

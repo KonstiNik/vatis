@@ -10,24 +10,26 @@ Prints a markdown table and writes the same table to ``--out``.
 
 Run (single GPU)::
 
-    HF_HOME=/data/horse/ws/koni010i-dpo_sft_transition/hf_cache \\
-        .venv/bin/python examples/benchmark/single_gpu_sweep.py \\
+    .venv/bin/python examples/benchmark/single_gpu/single_gpu_sweep.py \\
         --model EleutherAI/pythia-160m --revision step3000
+
+Set ``HF_HOME`` (in your shell or the repo-root ``.env``) to relocate the
+model cache; see ``run_config.py``.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import sys
+from pathlib import Path
 
-# Default the HF cache to the workspace scratch (NOT a home dir, NOT someone
-# else's cache). Overridable by exporting HF_HOME before launch.
-_DEFAULT_HF_HOME = "/data/horse/ws/koni010i-dpo_sft_transition/hf_cache"
-os.environ.setdefault("HF_HOME", _DEFAULT_HF_HOME)
-os.environ.setdefault("TRANSFORMERS_CACHE", os.environ["HF_HOME"])
-os.environ.setdefault("HF_DATASETS_CACHE", os.environ["HF_HOME"])
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from run_config import configure_hf_cache  # noqa: E402
 
-import time
+configure_hf_cache()
+
+import time  # noqa: E402
 
 import torch
 
@@ -110,7 +112,7 @@ def main() -> None:
         f"- seq_len: {args.seq_len}, dtype: fp32, seed: {SEED}",
         f"- model_load_s: {load_s:.1f}",
         "",
-        "| method | n_h | B | wall_s | peak_mb | chi_loss | chi_net | delta_loss | chi_pos |",
+        "| method | n_h | B | wall_s | peak_mb | chi_loss_normalized | chi_net_normalized | delta_loss | chi_pos |",
         "|---|---|---|---|---|---|---|---|---|",
     ]
     lines = list(header)

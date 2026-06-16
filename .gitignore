@@ -30,6 +30,11 @@ htmlcov/
 *.swo
 .DS_Store
 
+# Local run config (see run_config.py / .env.example) and agent scaffolding
+.env
+.claude/
+BLOCKED.md
+
 # uv lock metadata is checked in; this catches stray files only
 .uv-cache/
 

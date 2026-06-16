@@ -37,7 +37,10 @@ per-checkpoint download/load, not the chi_net computation.
 
 Run with::
 
-    HF_HOME=/data/knikolaou/huggingface .venv/bin/python examples/pythia_sweep.py
+    .venv/bin/python examples/pythia_sweep.py
+
+Set ``HF_HOME`` (in your shell or the repo-root ``.env``) to relocate the
+model cache off your home filesystem; see ``run_config.py``.
 
 Outputs are written next to this script:
 
@@ -50,16 +53,17 @@ Outputs are written next to this script:
 
 from __future__ import annotations
 
-import os
+import sys
+from pathlib import Path
 
 # Pin the HF cache before transformers / vatis are imported. This keeps
 # the home filesystem from filling up with checkpoint shards.
-os.environ.setdefault("HF_HOME", "/data/knikolaou/huggingface")
-os.environ.setdefault("TRANSFORMERS_CACHE", "/data/knikolaou/huggingface")
-os.environ.setdefault("HF_DATASETS_CACHE", "/data/knikolaou/huggingface")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from run_config import configure_hf_cache  # noqa: E402
 
-import time
-from pathlib import Path
+configure_hf_cache()
+
+import time  # noqa: E402
 
 import matplotlib
 

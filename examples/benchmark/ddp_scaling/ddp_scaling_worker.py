@@ -29,6 +29,10 @@ _REPO = Path(__file__).resolve().parents[3]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
+from run_config import configure_hf_cache  # noqa: E402
+
+configure_hf_cache()
+
 from vatis import analyze  # noqa: E402
 from vatis.distributed.ddp import (  # noqa: E402
     get_rank,

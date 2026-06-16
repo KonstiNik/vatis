@@ -10,18 +10,21 @@ is short enough that sequences repeat to fill B*S tokens, which is fine for a
 timing/scaling benchmark (content doesn't change wallclock) while keeping the
 reported observables on the model's training manifold.
 
-    HF_HOME=/data/horse/ws/koni010i-dpo_sft_transition/hf_cache \\
-        .venv/bin/python examples/benchmark/_build_eval_batch.py
+    .venv/bin/python examples/benchmark/_build_eval_batch.py
+
+Set ``HF_HOME`` (in your shell or the repo-root ``.env``) to relocate the
+model cache; see ``run_config.py``.
 """
 
 from __future__ import annotations
 
-import os
+import sys
 from pathlib import Path
 
-_DEFAULT_HF_HOME = "/data/horse/ws/koni010i-dpo_sft_transition/hf_cache"
-os.environ.setdefault("HF_HOME", _DEFAULT_HF_HOME)
-os.environ.setdefault("TRANSFORMERS_CACHE", os.environ["HF_HOME"])
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from run_config import configure_hf_cache  # noqa: E402
+
+configure_hf_cache()
 
 import torch  # noqa: E402
 from transformers import AutoTokenizer  # noqa: E402

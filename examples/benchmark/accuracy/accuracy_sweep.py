@@ -6,22 +6,24 @@ governed by variance, which should fall like ~1/sqrt(n_h). per_sequence_cv's
 control variate should give LOWER variance than plain hutchinson at the same
 n_h. Writes per-(method, n_h, seed) chi_net values to JSON for plotting.
 
-    HF_HOME=/data/horse/ws/koni010i-dpo_sft_transition/hf_cache \\
-        .venv/bin/python examples/benchmark/accuracy_sweep.py \\
+    .venv/bin/python examples/benchmark/accuracy/accuracy_sweep.py \\
         --model EleutherAI/pythia-160m --revision step3000
+
+Set ``HF_HOME`` (in your shell or the repo-root ``.env``) to relocate the
+model cache; see ``run_config.py``.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
+import sys
 from pathlib import Path
 
-_DEFAULT_HF_HOME = "/data/horse/ws/koni010i-dpo_sft_transition/hf_cache"
-os.environ.setdefault("HF_HOME", _DEFAULT_HF_HOME)
-os.environ.setdefault("TRANSFORMERS_CACHE", os.environ["HF_HOME"])
-os.environ.setdefault("HF_DATASETS_CACHE", os.environ["HF_HOME"])
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from run_config import configure_hf_cache  # noqa: E402
+
+configure_hf_cache()
 
 import torch  # noqa: E402
 from tqdm import tqdm  # noqa: E402

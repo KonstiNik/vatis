@@ -1,20 +1,19 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=vatis-accuracy
-#SBATCH --partition=alpha
-#SBATCH --account=p_neurasearch
+# Partition / account come from .env via examples/benchmark/submit.sh
+# (SBATCH_PARTITION / SBATCH_ACCOUNT); override on the CLI to change per-submit.
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=6
 #SBATCH --mem=32G
 #SBATCH --time=00:45:00
-#SBATCH --output=/data/horse/ws/koni010i-dpo_sft_transition/vatis/examples/benchmark/accuracy/accuracy_sweep.log
+#SBATCH --output=accuracy_sweep_%j.log
 
 set -euo pipefail
-REPO=/data/horse/ws/koni010i-dpo_sft_transition/vatis
+# Submit from the repo root: sbatch examples/benchmark/accuracy/accuracy_sweep.sbatch
+REPO="${SLURM_SUBMIT_DIR:-$PWD}"
 cd "$REPO"
-export HF_HOME=/data/horse/ws/koni010i-dpo_sft_transition/hf_cache
-export TRANSFORMERS_CACHE=$HF_HOME
-export HF_DATASETS_CACHE=$HF_HOME
+# HF cache: set HF_HOME in your shell or the repo-root .env (see run_config.py).
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 
