@@ -160,6 +160,7 @@ def load_hf_model(
     dtype: str = "bf16",
     device: torch.device | str = "cpu",
     trust_remote_code: bool = False,
+    attn_implementation: str | None = None,
 ) -> ModelBundle:
     """Load an HF causal LM by name + revision and wrap it in a ModelBundle.
 
@@ -171,6 +172,14 @@ def load_hf_model(
             Gradients are always accumulated in fp32 by the analyzer.
         device: target device for the model.
         trust_remote_code: passed through to ``from_pretrained``.
+        attn_implementation: optional ``from_pretrained`` attention backend,
+            e.g. ``"sdpa"`` or ``"flash_attention_2"``. These give **O(S)**
+            activation memory (they recompute attention in the backward) versus
+            ``"eager"``'s **O(S²)** materialized scores — the difference between
+            fitting and OOMing at long sequence lengths on a large model.
+            ``None`` (default) keeps the model's own default. Note: flash/sdpa
+            kernels use a different reduction order than eager, so observables
+            can shift at the ~1e-5 level (below the Hutchinson noise floor).
 
     Returns:
         A ModelBundle ready to feed to ``Analyzer``.
@@ -188,6 +197,7 @@ def load_hf_model(
         revision=revision,
         torch_dtype=torch_dtype,
         trust_remote_code=trust_remote_code,
+        attn_implementation=attn_implementation,
     )
     model.to(device=device)
     model.eval()
