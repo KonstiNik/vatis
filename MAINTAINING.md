@@ -7,7 +7,7 @@ be promoted to `main`. (Public contributor guidance lives in `CONTRIBUTING.md`.)
 
 | branch | role | contents |
 |---|---|---|
-| **`dev`** | source of truth + working branch | full history, the package, tests, **all** examples incl. research (`spectral_tail/`, `dpo_spectral_filter/`), and maintainer docs (`CLAUDE.md`, `MAINTAINING.md`, `CLEANUP_PLAN.md`) |
+| **`dev`** | source of truth + working branch | full history, the package, tests, **all** examples incl. research (`spectral_tail/`, `dpo_spectral_filter/`), and maintainer docs (`CLAUDE.md`, `MAINTAINING.md`) |
 | **`main`** | the published public release | a **curated subset** of `dev`: package, tests, public examples + A100 benchmarks, `docs/SPEC.md`, README/CONTRIBUTING/CHANGELOG/LICENSE, configs |
 
 `main` was created as an **orphan** branch (a clean single-commit history with no
@@ -106,7 +106,7 @@ Then bring the content over — **two options**:
   ```bash
   git cherry-pick -n <commit>
   git restore --staged --worktree \
-      CLAUDE.md MAINTAINING.md CLEANUP_PLAN.md \
+      CLAUDE.md MAINTAINING.md \
       examples/spectral_tail examples/spectral_tail_experiment.py \
       examples/spectral_tail_evaluate.py examples/dpo_spectral_filter
   git commit
@@ -127,7 +127,7 @@ git checkout main && git merge promote/<x> && git push origin main
 ```
 
 ### Never promote (dev-only)
-`CLAUDE.md`, `MAINTAINING.md`, `CLEANUP_PLAN.md`, `examples/spectral_tail*`,
+`CLAUDE.md`, `MAINTAINING.md`, `examples/spectral_tail*`,
 `examples/dpo_spectral_filter/`, and anything else research/scaffolding. When in
 doubt, check what `main` currently tracks: `git ls-tree -r --name-only main`.
 
