@@ -124,6 +124,12 @@ def main() -> None:
     parser.add_argument("--micro-batch-size", type=int, default=1)
     parser.add_argument("--n-hutchinson", type=int, default=8)
     parser.add_argument("--methods", nargs="+", default=["hutchinson", "per_sequence_cv"])
+    parser.add_argument(
+        "--attn-implementation",
+        default=None,
+        help="attention-backend passthrough (None = model default). NOTE: for "
+        "OLMo3, sdpa still materializes scores (O(S^2)), same as eager.",
+    )
     args = parser.parse_args()
 
     if not torch.cuda.is_available():
@@ -134,10 +140,15 @@ def main() -> None:
     total_gb = torch.cuda.get_device_properties(0).total_memory / _GB
     print(f"# mem_profile — {model_name}")
     print(f"device: {torch.cuda.get_device_name(0)}  total={total_gb:.1f} GB")
-    print(f"micro_batch_size={args.micro_batch_size}, n_hutchinson={args.n_hutchinson}\n")
+    print(
+        f"micro_batch_size={args.micro_batch_size}, n_hutchinson={args.n_hutchinson}, "
+        f"attn_implementation={args.attn_implementation}\n"
+    )
 
     reset_peak()
-    bundle = load_hf_model(model_name, dtype="bf16", device=device)
+    bundle = load_hf_model(
+        model_name, dtype="bf16", device=device, attn_implementation=args.attn_implementation
+    )
     p = sum(x.numel() for x in bundle.params)
     weights_gb = gpu_now_gb()
     print(f"n_params={p:,}")
@@ -181,7 +192,10 @@ def main() -> None:
         f.write(
             f"- n_params: {p:,}; weights {weights_gb:.1f} GB; flat_grad fp32 {p * 4 / _GB:.1f} GB\n"
         )
-        f.write(f"- micro_batch_size={args.micro_batch_size}, n_hutchinson={args.n_hutchinson}\n\n")
+        f.write(
+            f"- micro_batch_size={args.micro_batch_size}, n_hutchinson={args.n_hutchinson}, "
+            f"attn_implementation={args.attn_implementation}\n\n"
+        )
         f.write(header + "\n|---|---|---|---|---|---|---|\n")
         f.write("\n".join(rows) + "\n")
     print(f"\nwrote {out}")

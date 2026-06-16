@@ -9,8 +9,7 @@ only) — and computes the LNP decomposition with vatis:
 
 - ``chi_pos`` — the **spectral position** of the SFT loss gradient, in [0, 1].
   Near 1 = the gradient exploits the bulk (well-resolved, dominant eigenmodes);
-  near 0 = it lives in the tail (weak, fine-grained directions). This is the
-  quantity the ``dpo_spectral_filter`` program is built around.
+  near 0 = it lives in the tail (weak, fine-grained directions).
 - ``chi_loss`` / ``chi_net`` (and their normalized forms), ``delta_loss``.
 - the **cross pair** ``(english, code)``: ``delta_loss`` and ``chi_pos`` between
   the two batches' gradients — do an SFT step on English and one on code help or
@@ -95,10 +94,25 @@ def main() -> None:
     parser.add_argument(
         "--no-cross-pairs",
         action="store_true",
-        help="skip the (english, code) cross pair. The analyzer retains each "
-        "self-pair's full gradient for the cross dot product; for a 7B model "
-        "that ~15-29 GB buffer is the dominant memory cost (parameter-bound, "
-        "not seq-len-bound). Dropping it frees room — and lets seq_len grow.",
+        help="skip the (english, code) cross pair. With --cross-grad-storage "
+        "auto the cross pair fits even on a 7B model (the cached gradients "
+        "offload to host RAM and the dot runs on CPU), so this is opt-out.",
+    )
+    parser.add_argument(
+        "--cross-grad-storage",
+        default="auto",
+        choices=["auto", "gpu", "cpu"],
+        help="where cached cross-pair gradients live. 'auto' (default) offloads "
+        "to host RAM for large models so the cross dot fits, keeps small models "
+        "on-device; 'gpu'/'cpu' force it. See vatis.Analyzer.",
+    )
+    parser.add_argument(
+        "--attn-implementation",
+        default=None,
+        help="optional attention-backend passthrough to from_pretrained "
+        "(e.g. 'sdpa', 'flash_attention_2', 'eager'). Default None = the model's "
+        "own default (sdpa for OLMo3). NOTE: for OLMo3 sdpa does NOT reduce the "
+        "O(S^2) attention memory, so it does not raise the seq_len ceiling here.",
     )
     args = parser.parse_args()
 
@@ -124,10 +138,11 @@ def main() -> None:
     cross_pairs = [] if args.no_cross_pairs else CROSS_PAIRS
 
     print(f"olmo SFT analysis — model={model_name}")
-    print(f"  device={device}, dtype={dtype}, seq_len={seq_len}")
+    print(f"  device={device}, dtype={dtype}, seq_len={seq_len}, attn={args.attn_implementation}")
     print(
         f"  chi_net_method={args.chi_net_method}, n_hutchinson={args.n_hutchinson}, "
-        f"micro_batch_size={args.micro_batch_size}, cross_pairs={cross_pairs}"
+        f"micro_batch_size={args.micro_batch_size}, cross_pairs={cross_pairs}, "
+        f"cross_grad_storage={args.cross_grad_storage}"
     )
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -151,7 +166,12 @@ def main() -> None:
     with tracker:
         with tracker.measure("load_model"):
             t0 = time.perf_counter()
-            bundle = load_hf_model(model_name, dtype=dtype, device=device)
+            bundle = load_hf_model(
+                model_name,
+                dtype=dtype,
+                device=device,
+                attn_implementation=args.attn_implementation,
+            )
             n_params = sum(p.numel() for p in bundle.params)
             print(f"  loaded {n_params:,} params in {time.perf_counter() - t0:.1f}s")
 
@@ -161,6 +181,7 @@ def main() -> None:
                 revisions=["sft"],  # single checkpoint; label only
                 eval_batches=eval_batches,
                 cross_pairs=cross_pairs,
+                cross_grad_storage=args.cross_grad_storage,
                 chi_net_method=args.chi_net_method,
                 n_hutchinson=args.n_hutchinson,
                 micro_batch_size=args.micro_batch_size,
