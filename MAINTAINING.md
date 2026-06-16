@@ -46,6 +46,45 @@ List / remove: `git worktree list` · `git worktree remove ../vatis-main`
    `vatis/...` and `examples/spectral_tail/...` is painful to promote.
 3. Open a PR into `dev`. CI runs (it triggers on push to any branch). Merge.
 
+## Collaborating (multiple contributors)
+
+The repo is public, and contributors may do **research** *and* land **package
+features**. Those have different destinations, so the division of labour is:
+
+- **Contributors are `dev` contributors.** Everyone branches off `dev` and opens
+  PRs into `dev` — never develops on `main`.
+  - `feat/<x>` → a package feature (touches `vatis/`, `tests/`). These get
+    promoted to `main` later.
+  - `exp/<x>` / `research/<x>` → research (touches the `examples/` research
+    dirs). These stay on `dev` forever.
+- **The maintainer owns `main`.** Promoting features to the public release and
+  cutting tags is a maintainer step (see below); contributors don't touch `main`.
+
+**The rule to communicate up front:** keep package-feature changes and research
+changes in **separate commits / separate PRs**. Features are cherry-picked onto
+`main`; research never is. A commit that mixes `vatis/...` with
+`examples/dpo_spectral_filter/...` has to be hand-split before it can be
+promoted — separate commits make promotion a clean `git cherry-pick`.
+
+**GitHub setup (maintainer):**
+- Add contributors as collaborators (write access) — simpler than fork-and-PR
+  for a small trusted team.
+- **Protect `main`**: require PRs, block direct pushes, require maintainer
+  review. This is the guardrail that stops research ever reaching the public
+  release by accident.
+- Optionally protect `dev`: require a PR + green CI before merge.
+
+**Per-machine setup (each contributor, once):** `git clone`, `git checkout dev`,
+copy `.env.example` → `.env` (their `HF_HOME` / `SBATCH_*`), create a `.venv`
+(`uv venv && uv pip install -e ".[dev]"`). Worktrees, `.env`, and `.venv` are
+local-only — not cloned (see "Working-directory layout" above).
+
+**Privacy caveat:** `dev` is public, so research pushed there is publicly
+visible immediately. Work that must stay unpublished (e.g. until a paper) does
+**not** belong on `dev` — keep it in a private repo/fork and bring back only the
+shareable parts. If multi-contributor research outgrows this model, split into
+two repos (public tool + private research); see "Long-term note".
+
 ## Promoting public changes to `main`
 
 Work in the `main` worktree so `dev` is never disturbed:
