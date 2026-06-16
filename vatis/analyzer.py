@@ -250,18 +250,27 @@ class Analyzer:
         for p in bundle.params:
             p.requires_grad_(True)
 
-        # Self pairs first; we cache the per-batch grads (parameter-vector flat)
-        # so the cross pairs can re-use them via dot product.
+        # Self pairs first. We cache a batch's full parameter-space gradient
+        # ONLY if some cross pair will consume it via the dot product. Caching it
+        # unconditionally keeps a P-sized vector resident (e.g. ~29 GB fp32 for a
+        # 7B model) while subsequent batches run their own backward — for large
+        # models that retained gradient is enough to OOM even when no cross pair
+        # was requested. So we cache selectively and drop the local reference
+        # otherwise, freeing it before the next batch's backward.
+        cross_names = {n for pair in self.cross_pairs for n in pair if pair[0] != pair[1]}
         per_batch_grad_cache: dict[str, torch.Tensor] = {}
         per_batch_n_valid: dict[str, int] = {}
 
         for name, spec in self.eval_batches.items():
             self_result, g_full = self._compute_self_pair(bundle, ckpt_id, revision, name, spec)
             result.rows.extend(self_result)
-            # The cached gradient lives on the model device; sized P (params).
-            if g_full is not None:
-                per_batch_grad_cache[name] = g_full
             per_batch_n_valid[name] = self._last_n_valid
+            if g_full is not None and name in cross_names:
+                # Sized P (params); lives on the model device for the dot product.
+                per_batch_grad_cache[name] = g_full
+            # Drop the local reference; if it wasn't cached above it is freed now,
+            # so it can't pile up across batches (the large-model OOM footgun).
+            g_full = None
 
         # Cross pairs (if any) — only delta_loss + chi_pos.
         for a, b in self.cross_pairs:
