@@ -173,13 +173,17 @@ def load_hf_model(
         device: target device for the model.
         trust_remote_code: passed through to ``from_pretrained``.
         attn_implementation: optional ``from_pretrained`` attention backend,
-            e.g. ``"sdpa"`` or ``"flash_attention_2"``. These give **O(S)**
-            activation memory (they recompute attention in the backward) versus
-            ``"eager"``'s **O(S²)** materialized scores — the difference between
-            fitting and OOMing at long sequence lengths on a large model.
-            ``None`` (default) keeps the model's own default. Note: flash/sdpa
-            kernels use a different reduction order than eager, so observables
-            can shift at the ~1e-5 level (below the Hutchinson noise floor).
+            e.g. ``"sdpa"``, ``"flash_attention_2"``, or ``"eager"``. ``None``
+            (default) keeps the model's own default. A memory-efficient backend
+            *can* turn the attention activation memory from ``"eager"``'s O(S²)
+            (materialized scores) into O(S), which is the difference between
+            fitting and OOMing at long sequence lengths — **but only if the
+            model's attention module actually routes through it**. Some
+            architectures still materialize scores under ``"sdpa"`` (e.g. OLMo3
+            in this project's testing), so don't assume it lowers the seq-len
+            ceiling without measuring. Note: flash/sdpa kernels use a different
+            reduction order than eager, so observables can shift at the ~1e-5
+            level (below the Hutchinson noise floor).
 
     Returns:
         A ModelBundle ready to feed to ``Analyzer``.
