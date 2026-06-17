@@ -20,7 +20,7 @@ from tests.fixtures.tiny_transformer import (
     mlp_valid_mask,
 )
 from vatis import analyze
-from vatis.analyzer import ALL_OBSERVABLES, Analyzer
+from vatis.analyzer import ALL_OBSERVABLES, Analyzer, _should_offload_cross_grads
 from vatis.models.hf import ModelBundle
 from vatis.sinks.parquet import ParquetSink
 
@@ -347,3 +347,125 @@ def test_parquet_sink_streaming_flush(tmp_path: Path) -> None:
     )
     table = pq.read_table(out)
     assert table.num_rows == 12
+
+
+def test_cross_grad_storage_gpu_cpu_equivalent() -> None:
+    """Cross-pair observables must match whether the cached gradients are held
+    on-device (``"gpu"``) or offloaded to host RAM (``"cpu"``).
+
+    The offload is a value-preserving device copy plus a device-agnostic
+    ``_dot_fp64``, so forcing either storage on the same seeded run must agree.
+    (On a CPU model both keep the gradient on the CPU, so this guards the
+    plumbing — the resolver honouring the override, the ``.to('cpu')`` cache
+    write, and the dot — rather than an actual cross-device transfer.)
+    """
+    batch_a = make_tiny_lm_batch(batch_size=4, seed=0)
+    batch_b = make_tiny_lm_batch(batch_size=4, seed=1)
+
+    def run(storage: str) -> dict[tuple[str, str, str], float]:
+        results = analyze(
+            model=_build_lm_bundle(),  # fresh model, fixed seed → identical weights
+            revisions=["step0"],
+            eval_batches={"a": batch_a, "b": batch_b},
+            cross_pairs=[("a", "b")],
+            cross_grad_storage=storage,
+            n_hutchinson=8,
+            micro_batch_size=2,
+            seed=0,
+            sink=None,
+        )
+        return {(r.batch_a, r.batch_b, r.observable): r.value for r in results[0].rows}
+
+    gpu = run("gpu")
+    cpu = run("cpu")
+    assert gpu.keys() == cpu.keys()
+    for key in gpu:
+        assert gpu[key] == pytest.approx(cpu[key], rel=1e-12, abs=1e-12), key
+    # And the cross pair was actually emitted (not silently skipped).
+    assert ("a", "b", "delta_loss") in gpu
+
+
+def test_invalid_cross_grad_storage_raises() -> None:
+    with pytest.raises(ValueError, match=r"cross_grad_storage must be"):
+        Analyzer(eval_batches={"v": make_tiny_lm_batch(batch_size=2)}, cross_grad_storage="disk")
+
+
+def test_should_offload_cross_grads_heuristic() -> None:
+    """The auto offload decision: large models offload, small stay on-GPU."""
+    gib93 = 99_900_000_000  # ~93 GiB H100
+    # 7B bf16, two cross batches → one self-pair (~weights + 8·P) plus the other
+    # batch's fp32 gradient (4·P) overflows the card → offload.
+    assert _should_offload_cross_grads(
+        n_params=7_300_000_000,
+        weights_bytes=14_600_000_000,
+        n_cross_batches=2,
+        total_device_bytes=gib93,
+    )
+    # A 160M model on the same card fits comfortably → stay on-GPU.
+    assert not _should_offload_cross_grads(
+        n_params=160_000_000,
+        weights_bytes=320_000_000,
+        n_cross_batches=2,
+        total_device_bytes=gib93,
+    )
+    # Fewer than two cross batches → nothing to offload, regardless of size.
+    assert not _should_offload_cross_grads(
+        n_params=7_300_000_000,
+        weights_bytes=14_600_000_000,
+        n_cross_batches=1,
+        total_device_bytes=gib93,
+    )
+    # Boundary: with P=1e9, weights=2e9, n=2 the footprint is weights + 12·P =
+    # 14e9 bytes, compared against 0.85·total. The decision must flip right
+    # around total = 14e9 / 0.85 ≈ 16.47e9 — this catches a wrong factor that
+    # the 45× large-vs-small gap above would not.
+    common = dict(n_params=1_000_000_000, weights_bytes=2_000_000_000, n_cross_batches=2)
+    assert _should_offload_cross_grads(**common, total_device_bytes=16_000_000_000)  # 14 > 13.6
+    assert not _should_offload_cross_grads(
+        **common, total_device_bytes=17_000_000_000
+    )  # 14 < 14.45
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="real GPU→CPU offload needs CUDA")
+def test_cross_grad_storage_offload_equivalent_on_cuda() -> None:
+    """On a CUDA device, the cross observables must be identical whether the
+    cached gradients stay on the GPU (``"gpu"``) or are offloaded to host RAM
+    (``"cpu"``) — a genuine device-boundary copy plus a CPU-side dot. The
+    CPU-model test above cannot exercise this (both paths keep the gradient on
+    the CPU); this is the one that actually validates the offload.
+    """
+    batch_a = make_tiny_lm_batch(batch_size=4, seed=0)
+    batch_b = make_tiny_lm_batch(batch_size=4, seed=1)
+
+    def run(storage: str) -> dict[tuple[str, str, str], float]:
+        torch.manual_seed(0)  # identical weights each call
+        model = TinyTransformer().eval().cuda()
+        for p in model.parameters():
+            p.requires_grad_(True)
+        bundle = ModelBundle(
+            model=model,
+            params=list(model.parameters()),
+            forward_fn=lambda m, b: m(b["input_ids"]),
+            loss_fn=causal_lm_loss,
+            valid_mask_fn=causal_lm_valid_mask,
+            identifier="toy@step0",
+        )
+        results = analyze(
+            model=bundle,
+            revisions=["step0"],
+            eval_batches={"a": batch_a, "b": batch_b},
+            cross_pairs=[("a", "b")],
+            cross_grad_storage=storage,
+            n_hutchinson=8,
+            micro_batch_size=2,
+            seed=0,
+            device="cuda",
+            sink=None,
+        )
+        return {(r.batch_a, r.batch_b, r.observable): r.value for r in results[0].rows}
+
+    gpu = run("gpu")
+    cpu = run("cpu")
+    assert gpu.keys() == cpu.keys()
+    for key in gpu:
+        assert gpu[key] == pytest.approx(cpu[key], rel=1e-6, abs=1e-6), key
