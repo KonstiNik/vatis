@@ -44,3 +44,11 @@ BLOCKED.md
 # Benchmark run artifacts (logs + regenerable scratch output dirs)
 *.log
 examples/benchmark/*/out/
+
+# OLMo SFT example: regenerable run artifacts (recreate by running the scripts).
+# The committed plots (*.png) are kept on dev as reference figures; everything
+# below is selection/telemetry output and stays out of version control.
+examples/olmo_sft_analysis/samples.json
+examples/olmo_sft_analysis/results.parquet
+examples/olmo_sft_analysis/resources.json
+examples/olmo_sft_analysis/mem_profile.md
