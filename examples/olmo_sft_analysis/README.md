@@ -119,6 +119,5 @@ per-phase peak `torch.cuda` memory + GPU engine activity sampled via
   becomes affordable (lower-variance `chi_net`).
 - `--no-cross-pairs` skips the cross observables; `--cross-grad-storage gpu|cpu`
   overrides the auto memory decision.
-- A custom DPO loss (toward the [`../dpo_spectral_filter`](../dpo_spectral_filter/README.md)
-  diagnostics) is not wired in — vatis v1 only supports the closed-form CE path
-  for `chi_loss`. This example stays within that path.
+- The example uses the standard cross-entropy SFT loss — vatis v1 supports the
+  closed-form CE path for `chi_loss`; custom losses are future work.

@@ -133,6 +133,17 @@ def tokenize_chat_sft_sample(
         labels = torch.cat([labels, torch.full((pad,), -100, dtype=torch.long)])
         attention_mask = torch.cat([attention_mask, torch.zeros(pad, dtype=torch.long)])
 
+    # Fail loudly rather than silently contribute a sequence with no supervised
+    # tokens: if the prompt is at least seq_len long, truncation drops the whole
+    # completion and every label is -100. The caller must pick a seq_len larger
+    # than the prompt (prefetch.py enforces this via --max-prompt-frac, but a
+    # smaller --seq-len at analysis time can re-open the gap).
+    if int((labels != -100).sum()) == 0:
+        raise ValueError(
+            f"no completion tokens survive truncation to seq_len={seq_len} "
+            f"(prompt_len={prompt_len}); increase seq_len or drop this sample."
+        )
+
     return {"input_ids": ids, "attention_mask": attention_mask, "labels": labels}
 
 

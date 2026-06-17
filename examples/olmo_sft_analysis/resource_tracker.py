@@ -248,10 +248,15 @@ class ResourceTracker:
         torch.cuda.synchronize(self.device)
         if self._dcgm_available() and self._start_dcgm():
             self.sampler = "dcgm"
-        else:
+        elif self._poll_smi() is not None:
+            # nvidia-smi answered a probe → use it. (Without this probe a node
+            # with neither dcgmi nor nvidia-smi would silently report
+            # sampler="nvidia-smi" with zero samples.)
             self.sampler = "nvidia-smi"
             self._thread = threading.Thread(target=self._run_smi_sampler, daemon=True)
             self._thread.start()
+        else:
+            self.sampler = "none"  # no GPU sampler available; torch peak still tracked
         return self
 
     def __exit__(self, *exc: object) -> None:

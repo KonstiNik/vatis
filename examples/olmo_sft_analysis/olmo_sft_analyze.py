@@ -88,7 +88,13 @@ def main() -> None:
     )
     parser.add_argument("--n-hutchinson", type=int, default=32)
     parser.add_argument("--micro-batch-size", type=int, default=1)
-    parser.add_argument("--chi-net-method", default="per_sequence_cv")
+    parser.add_argument(
+        "--chi-net-method",
+        default="hutchinson",
+        help="chi_net estimator. Default 'hutchinson' (one backward per probe) is "
+        "what fits a 7B model; 'per_sequence_cv' is lower-variance but OOMs at 7B "
+        "(use it only for smaller models). See the README config section.",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--sampler-interval-s", type=float, default=0.25)
     parser.add_argument(
