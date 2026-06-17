@@ -119,6 +119,15 @@ class Analyzer:
         cross_pairs: optional list of ``(name_a, name_b)`` tuples to compute
             ``delta_loss(A, B)`` (and the corresponding ``chi_pos``) for.
             Self pairs ``(name, name)`` are always computed.
+        cross_grad_storage: where a batch's cached full gradient lives while the
+            cross-pair dot product is computed — ``"gpu"``, ``"cpu"``, or
+            ``"auto"`` (default). The cross dot needs both batches' P-sized
+            gradients; for large models keeping them on the GPU alongside a
+            later batch's backward can OOM. ``"cpu"`` offloads them to host RAM
+            (the dot then runs on the CPU); ``"gpu"`` keeps them on-device
+            (fast, no transfer); ``"auto"`` offloads only when an on-GPU cache
+            would not leave room for a self-pair backward. Only matters when
+            ``cross_pairs`` is non-empty.
         sink: a :class:`ResultSink`, a path str (auto-wraps to
             :class:`ParquetSink`), or a list of sinks.
         seed: base seed used to derive Hutchinson probes; the analyzer mixes
@@ -142,6 +151,7 @@ class Analyzer:
         hutchinson_distribution: str = "rademacher",
         micro_batch_size: int = 1,
         cross_pairs: list[tuple[str, str]] | None = None,
+        cross_grad_storage: str = "auto",
         sink: ResultSink | str | list[ResultSink] | None = None,
         seed: int = 0,
         device: torch.device | str = "cpu",
@@ -161,6 +171,11 @@ class Analyzer:
         self.hutchinson_distribution = hutchinson_distribution
         self.micro_batch_size = micro_batch_size
         self.cross_pairs = list(cross_pairs or [])
+        if cross_grad_storage not in ("auto", "gpu", "cpu"):
+            raise ValueError(
+                f"cross_grad_storage must be 'auto', 'gpu', or 'cpu'; got {cross_grad_storage!r}"
+            )
+        self.cross_grad_storage = cross_grad_storage
         self.seed = seed
         self.device = torch.device(device)
         self.dtype = dtype
@@ -198,6 +213,38 @@ class Analyzer:
                     raise TypeError(f"unsupported sink entry type: {type(s).__name__}")
             return out
         raise TypeError(f"unsupported sink type: {type(sink).__name__}")
+
+    def _resolve_cross_grad_storage(self, bundle: ModelBundle) -> str:
+        """Decide where cached cross-pair gradients live: ``"gpu"`` or ``"cpu"``.
+
+        Explicit ``"gpu"``/``"cpu"`` pass through. ``"auto"`` offloads to host
+        RAM only when keeping the cached fp32 gradient(s) on the GPU would not
+        leave room for a self-pair's backward. For a 7B model the cached
+        gradient (~29 GB) plus one self-pair's footprint (~weights + 8·P)
+        overflows an 80–90 GB card, so ``"auto"`` offloads; small models stay
+        GPU-resident (no transfer, no numeric change — important for the
+        perspic cross-validation tests).
+
+        The estimate is intentionally conservative (a 0.85 fraction over an
+        optimistic ``8·P`` self-pair floor); if ``"gpu"`` still OOMs on a
+        borderline model, pass ``cross_grad_storage="cpu"`` explicitly.
+        """
+        if self.cross_grad_storage in ("gpu", "cpu"):
+            return self.cross_grad_storage
+        device = self.device
+        if device.type != "cuda" or not torch.cuda.is_available():
+            return "gpu"  # no host-offload target that would help
+        cross_names = {n for pair in self.cross_pairs for n in pair if pair[0] != pair[1]}
+        n_params = sum(p.numel() for p in bundle.params)
+        weights_bytes = sum(p.numel() * p.element_size() for p in bundle.params)
+        total = torch.cuda.get_device_properties(device).total_memory
+        offload = _should_offload_cross_grads(
+            n_params=n_params,
+            weights_bytes=weights_bytes,
+            n_cross_batches=len(cross_names),
+            total_device_bytes=total,
+        )
+        return "cpu" if offload else "gpu"
 
     # ------------------------------------------------------------------ runs
 
@@ -250,18 +297,31 @@ class Analyzer:
         for p in bundle.params:
             p.requires_grad_(True)
 
-        # Self pairs first; we cache the per-batch grads (parameter-vector flat)
-        # so the cross pairs can re-use them via dot product.
+        # Self pairs first. We cache a batch's full parameter-space gradient
+        # ONLY if some cross pair will consume it via the dot product. Caching it
+        # unconditionally keeps a P-sized vector resident (e.g. ~29 GB fp32 for a
+        # 7B model) while subsequent batches run their own backward — for large
+        # models that retained gradient is enough to OOM even when no cross pair
+        # was requested. So we cache selectively and drop the local reference
+        # otherwise, freeing it before the next batch's backward.
+        cross_names = {n for pair in self.cross_pairs for n in pair if pair[0] != pair[1]}
+        grad_storage = self._resolve_cross_grad_storage(bundle) if cross_names else "gpu"
         per_batch_grad_cache: dict[str, torch.Tensor] = {}
         per_batch_n_valid: dict[str, int] = {}
 
         for name, spec in self.eval_batches.items():
             self_result, g_full = self._compute_self_pair(bundle, ckpt_id, revision, name, spec)
             result.rows.extend(self_result)
-            # The cached gradient lives on the model device; sized P (params).
-            if g_full is not None:
-                per_batch_grad_cache[name] = g_full
             per_batch_n_valid[name] = self._last_n_valid
+            if g_full is not None and name in cross_names:
+                # Cache for the cross-pair dot. Offload to host RAM when keeping
+                # it on the GPU would crowd out a later batch's backward (large
+                # models); otherwise keep it on-device. The cross dot
+                # (``_dot_fp64``) runs on whichever device the gradients live on.
+                per_batch_grad_cache[name] = g_full.to("cpu") if grad_storage == "cpu" else g_full
+            # Drop the local (GPU) reference; if it wasn't cached on-device above
+            # it is freed now, so gradients can't pile up across batches.
+            g_full = None
 
         # Cross pairs (if any) — only delta_loss + chi_pos.
         for a, b in self.cross_pairs:
@@ -617,6 +677,35 @@ class Analyzer:
 # ------------------------------------------------------------- helpers
 
 
+def _should_offload_cross_grads(
+    *,
+    n_params: int,
+    weights_bytes: int,
+    n_cross_batches: int,
+    total_device_bytes: int,
+    fraction: float = 0.85,
+) -> bool:
+    """Whether cached cross-pair gradients should be offloaded to host RAM.
+
+    Pure size arithmetic (no device access) so it is unit-testable. The cross
+    dot needs ``n_cross_batches`` gradients; while one batch runs its backward
+    the others' fp32 gradients (``4·P`` bytes each) sit resident alongside that
+    backward's footprint — weights + the fp32 flat-grad result + a transient
+    grad tuple + autograd/cuBLAS workspace, estimated as ``weights + 8·P``
+    (measured ~``weights + 9.5·P`` for a 7B bf16 model; ``8·P`` is a deliberately
+    optimistic floor, paired with the conservative ``fraction``). Offload when
+    that total would exceed ``fraction`` of device memory.
+
+    Returns ``False`` for ``n_cross_batches < 2`` — no cross dot holds two
+    gradients at once, so there is nothing to offload.
+    """
+    if n_cross_batches < 2:
+        return False
+    self_pair_bytes = weights_bytes + 8 * n_params
+    coexisting_cached = (n_cross_batches - 1) * 4 * n_params
+    return (self_pair_bytes + coexisting_cached) > fraction * total_device_bytes
+
+
 def _zero_param_vector(params: list[torch.nn.Parameter], device: torch.device) -> torch.Tensor:
     sizes = [p.numel() for p in params]
     if not sizes:
@@ -721,6 +810,7 @@ def analyze(
     hutchinson_distribution: str = "rademacher",
     micro_batch_size: int = 1,
     cross_pairs: list[tuple[str, str]] | None = None,
+    cross_grad_storage: str = "auto",
     sink: ResultSink | str | list[ResultSink] | None = None,
     seed: int = 0,
     device: torch.device | str = "cpu",
@@ -746,6 +836,7 @@ def analyze(
         hutchinson_distribution=hutchinson_distribution,
         micro_batch_size=micro_batch_size,
         cross_pairs=cross_pairs,
+        cross_grad_storage=cross_grad_storage,
         sink=sink,
         seed=seed,
         device=device,

@@ -1,9 +1,8 @@
 # vatis
 
-Compute **LNP observables** — `chi_loss`, `chi_net`, `chi_pos` — on **pretrained
-HF checkpoints** (Pythia, OLMo, GPT-NeoX), scaled across GPUs with DDP. Sister
-package to `perspic`, which computes the same quantities *during* Lightning
-training; vatis is for when you can only probe published weights.
+Compute  **Spectral Position** — and LNP observables `chi_loss`, `chi_net`, `chi_pos` — on **pretrained HF checkpoints** (Pythia, OLMo, GPT-NeoX), scaled across GPUs with DDP. Sister
+package to [perspic](https://github.com/zincware/perspic), which computes the same quantities *during* Lightning
+training; vatis is for when you want to probe existing checkpoints.
 
 The LNP decomposition factors the linearized loss change into three terms —
 **L**oss, **N**etwork, **P**osition:
@@ -57,13 +56,10 @@ uv pip install -e /path/to/perspic
 pytest tests/cross_validation -m cross_validation -q
 ```
 
-GPU-only tests are marked `@pytest.mark.gpu` and auto-skip when no CUDA device
-is present, so the unit tier above runs anywhere (and is the tier CI runs).
+The unit tier above is CPU-only, runs anywhere, and is the tier CI runs.
 
 To run the example/benchmark scripts (they need matplotlib + tqdm, which the
 package itself does not): `uv pip install ".[examples]"`.
-
-Optional logging backends: `uv pip install ".[wandb]"` or `".[tensorboard]"`.
 
 ## Quick start
 
@@ -75,9 +71,15 @@ analyze(
     revisions=["step1000", "step8000", "step143000"],
     eval_batches={"prose": prose_batch, "code": code_batch},
     cross_pairs=[("prose", "code")],   # adds δL(prose,code) + chi_pos, no extra backward
+    cross_grad_storage="auto",         # offload cross-pair grads to host RAM on large models
     sink="results.parquet",
 )
 ```
+
+`cross_grad_storage="auto"` (the default) lets cross-pair analysis scale to
+models whose two full gradients won't co-reside on the GPU: it offloads the
+cached gradients to host RAM and runs the dot on the CPU, while small models
+stay fully on-device.
 
 Runnable end-to-end (downloads pythia-14m, ~20 s warm):
 
@@ -85,6 +87,11 @@ Runnable end-to-end (downloads pythia-14m, ~20 s warm):
 python examples/pythia_sweep.py        # compute  → results.parquet + plots
 python examples/analyze_results.py     # analyze  → derived plots (zero vatis imports)
 ```
+
+For a **production-scale** demonstration — the full LNP decomposition on a real
+7B SFT checkpoint (`Olmo-3-7B-Think-SFT`) over real chat data, with
+code-vs-English cross-pair analysis and wall-time / memory / GPU-activity
+tracking — see [`examples/olmo_sft_analysis/`](examples/olmo_sft_analysis/README.md).
 
 Models download to the HuggingFace cache (`~/.cache/huggingface` by default).
 To relocate it, set `HF_HOME` in your shell or copy `.env.example` to `.env`
