@@ -235,21 +235,16 @@ class Analyzer:
         if device.type != "cuda" or not torch.cuda.is_available():
             return "gpu"  # no host-offload target that would help
         cross_names = {n for pair in self.cross_pairs for n in pair if pair[0] != pair[1]}
-        if len(cross_names) < 2:
-            return "gpu"  # no cross dot holds two gradients at once
-        params = bundle.params
-        n_params = sum(p.numel() for p in params)
-        weights_bytes = sum(p.numel() * p.element_size() for p in params)
-        # One self-pair's GPU footprint during its backward: weights + the fp32
-        # flat-grad result (4·P) + a transient grad tuple + autograd/cuBLAS
-        # workspace. Measured ~weights + 9.5·P for a 7B bf16 model; 8·P is a
-        # deliberately optimistic floor, paired with the 0.85 fraction below.
-        self_pair_bytes = weights_bytes + 8 * n_params
-        # Cross gradients (fp32, 4 B) resident DURING that backward: all but the
-        # one currently being computed.
-        coexisting_cached = (len(cross_names) - 1) * 4 * n_params
+        n_params = sum(p.numel() for p in bundle.params)
+        weights_bytes = sum(p.numel() * p.element_size() for p in bundle.params)
         total = torch.cuda.get_device_properties(device).total_memory
-        return "cpu" if (self_pair_bytes + coexisting_cached) > 0.85 * total else "gpu"
+        offload = _should_offload_cross_grads(
+            n_params=n_params,
+            weights_bytes=weights_bytes,
+            n_cross_batches=len(cross_names),
+            total_device_bytes=total,
+        )
+        return "cpu" if offload else "gpu"
 
     # ------------------------------------------------------------------ runs
 
@@ -680,6 +675,35 @@ class Analyzer:
 
 
 # ------------------------------------------------------------- helpers
+
+
+def _should_offload_cross_grads(
+    *,
+    n_params: int,
+    weights_bytes: int,
+    n_cross_batches: int,
+    total_device_bytes: int,
+    fraction: float = 0.85,
+) -> bool:
+    """Whether cached cross-pair gradients should be offloaded to host RAM.
+
+    Pure size arithmetic (no device access) so it is unit-testable. The cross
+    dot needs ``n_cross_batches`` gradients; while one batch runs its backward
+    the others' fp32 gradients (``4·P`` bytes each) sit resident alongside that
+    backward's footprint — weights + the fp32 flat-grad result + a transient
+    grad tuple + autograd/cuBLAS workspace, estimated as ``weights + 8·P``
+    (measured ~``weights + 9.5·P`` for a 7B bf16 model; ``8·P`` is a deliberately
+    optimistic floor, paired with the conservative ``fraction``). Offload when
+    that total would exceed ``fraction`` of device memory.
+
+    Returns ``False`` for ``n_cross_batches < 2`` — no cross dot holds two
+    gradients at once, so there is nothing to offload.
+    """
+    if n_cross_batches < 2:
+        return False
+    self_pair_bytes = weights_bytes + 8 * n_params
+    coexisting_cached = (n_cross_batches - 1) * 4 * n_params
+    return (self_pair_bytes + coexisting_cached) > fraction * total_device_bytes
 
 
 def _zero_param_vector(params: list[torch.nn.Parameter], device: torch.device) -> torch.Tensor:
