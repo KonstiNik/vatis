@@ -18,6 +18,10 @@ dependencies = [
     "transformers>=4.40",
     "pyarrow>=14",
     "numpy>=1.24",
+    # Reading `model.safetensors` of a native checkpoint bundle
+    # (vatis/models/local_bundle.py). Already a transitive dependency of
+    # transformers; declared because vatis imports it directly.
+    "safetensors>=0.4",
 ]
 
 [project.optional-dependencies]

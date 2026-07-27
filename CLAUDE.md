@@ -161,7 +161,7 @@ There is **one** observable, computed at token granularity, normalized by the nu
 
 ## Scope (v1 / v1.1, current)
 
-- **In:** HuggingFace causal-LM checkpoints (Pythia, OLMo, GPT-NeoX class). Tokenized data already in model-ready form. DDP across user-specified `num_gpus`. Two `χ_net` estimators (`hutchinson`, `per_sequence_cv`) with auto-selection. Parquet result sink (canonical) plus optional W&B and TensorBoard. CLI via `python -m vatis run …` that wraps `torchrun`. End-to-end deployment example on `pythia-14m` with cross-pair observables (added in v1.1).
+- **In:** HuggingFace causal-LM checkpoints (Pythia, OLMo, GPT-NeoX class). Native **checkpoint bundles** written by our own training runs (`load_local_bundle`, see "Native checkpoint bundles" below). Tokenized data already in model-ready form. DDP across user-specified `num_gpus`. Two `χ_net` estimators (`hutchinson`, `per_sequence_cv`) with auto-selection. Parquet result sink (canonical) plus optional W&B and TensorBoard. CLI via `python -m vatis run …` that wraps `torchrun`. End-to-end deployment example on `pythia-14m` with cross-pair observables (added in v1.1).
 - **Out (current):** Tokenization (the example tokenizes inline; vatis core does not provide a tokenizer). Checkpoint discovery / sweep scheduling. FSDP. Tensor / pipeline parallelism. `OpacusEstimator` (stub only — full implementation deferred to v1.2). Custom non-CE losses for `chi_loss` (deferred to v1.2). Per-sample variance observables beyond the cross-sample alignment matrix. Models that don't fit on one GPU.
 
 Adding any of these later should be straightforward because the core (`vatis/core/`) is decoupled from model loading, data plumbing, and parallelism. Those items are tracked as future work.
@@ -179,10 +179,12 @@ vatis/
 │   │   ├── per_seq_cv.py  # PerSequenceControlVariateEstimator (default for small B)
 │   │   └── opacus.py      # OpacusEstimator (stub in v1; full impl deferred to v1.2)
 │   ├── probes.py          # Rademacher / Gaussian probe vector generation, masking
+│   ├── param_layout.py    # ParameterLayout: THE canonical parameter flattening order
 │   └── normalization.py   # valid-token counting, √(N_A·N_B) factors
 ├── models/
-│   ├── __init__.py        # exports load_hf_model (single impl; registry-ready)
-│   └── hf.py              # load_hf_model(name, revision) → nn.Module + loss_fn
+│   ├── __init__.py        # exports load_hf_model + load_local_bundle (registry-ready)
+│   ├── hf.py              # load_hf_model(name, revision) → nn.Module + loss_fn
+│   └── local_bundle.py    # load_local_bundle(run_dir, model_factory) → bundle source
 ├── data/
 │   ├── batches.py         # EvalBatchSpec: "fixed" | "resample" | "callable"
 │   └── collate.py         # micro-batch splitting, attention-mask aware
@@ -266,6 +268,42 @@ The `eval_batches` argument to `analyze()` is just `dict[str, EvalBatchSpec | Te
 
 For `δL(A, B)`, the user can specify `pairs=[("val_fixed", "train_at_step"), …]` to compute cross-batch alignments. By default `δL` is computed only for the "self" pair `(b, b)` for each named batch.
 
+### Native checkpoint bundles (the local source)
+
+Besides the hub, vatis reads **checkpoint bundles** written by our own training runs. A bundle is a run directory in a frozen schema (specified in the WP0 project repo, `wp0_specs/00_context.md`):
+
+```
+<run_dir>/
+  metadata.json                # model config, optimizer type + hparams, lr schedule,
+                               # seed, B_train, seq_len, dataset id, git hashes
+  param_names.json             # ordered [ [name, shape], ... ] — THE canonical flattening
+                               # order; index-aligned with the optimizer state_dict indices
+  checkpoints/step_00000123/
+    model.safetensors          # weights, bf16
+    optim.pt                   # torch optimizer.state_dict(), fp32, saved PRE-step
+    batch_a.npy                # int32 [B_train, seq_len] token ids of the update batch A_t
+    meta.json                  # step, tokens_seen, lr, train_loss, wall_time
+```
+
+```python
+from vatis import load_local_bundle
+
+source = load_local_bundle(run_dir, "my_project.models:build_model")  # or a callable
+analyzer.run(source.model_specs())                    # drop-in for the HF (name, revision) loop
+
+for ckpt in source:                                   # or drive it yourself
+    v = ckpt.optimizer_state.flat_state("exp_avg_sq")  # 1-D, canonical order
+    t = ckpt.optimizer_state.step_count                # pre-step update count
+    batch = ckpt.batch_a                               # {"input_ids", "labels"}
+```
+
+Four things to know:
+
+- **vatis stays project-agnostic.** The architecture comes from a user-supplied `model_factory(metadata) -> nn.Module` (a callable, or a `"module:function"` import string). vatis package code never imports a training stack; the factory for a specific project lives in that project or in a test fixture.
+- **`param_names.json` is the canonical flattening order, and there is one code path for it.** It is parsed into a `ParameterLayout` (`vatis/core/param_layout.py`), and *that same object* builds `ModelBundle.params` (by looking parameters up **by name in file order**, not by iterating `named_parameters()`) and flattens the optimizer state. So `flat_state("exp_avg_sq")` is segment-for-segment aligned with the gradient vector `parameter_grad_vector` / the analyzer's `_add_grads_into_flat` produce. A permutation here would silently corrupt every preconditioned observable, so the loader refuses anything it can prove is misaligned: optimizer `param_groups` index lists that aren't `[0 … n−1]` in order, state tensors whose shape contradicts the recorded shape, model parameters the order doesn't list, canonical names the model or the weight file doesn't have. `tests/unit/test_local_bundle.py` writes bundles whose `param_names.json` is a *permutation* of `named_parameters()` order, with a distinct `exp_avg_sq` constant per parameter and two pairs of identically-shaped parameters — so a same-shape swap (invisible to shape checks) fails the test.
+- **Pre-step semantics.** The checkpoint at step `t` holds `θ_t` *and the optimizer state from before the step-t update*; `batch_a.npy` is the batch step `t` is about to consume. `step_count` is therefore the number of updates already applied — the bias-correction exponent that matches the *saved* `exp_avg_sq`. A step-0 checkpoint legitimately has an empty optimizer state (`is_empty`); `flat_state` raises rather than inventing zeros.
+- **Lazy per checkpoint.** Bundles run ~0.5 GB × 100. Opening a bundle only reads the two JSON files and stats the checkpoint dirs; tensors load on first attribute access, weights are upcast bf16 → fp32 on load, and iterating the source `release()`s checkpoint `i−1` before yielding `i`. `Module.to(dtype)` is deliberately *not* used for the dtype cast — it would also hit complex buffers (precomputed rotary `freqs_cis`), silently discarding the imaginary part.
+
 ### Result format (parquet, long)
 
 One row per `(checkpoint_id, eval_batch_name_A, eval_batch_name_B, observable, value)`. Long format because:
@@ -341,6 +379,7 @@ Hard:
 - `transformers >= 4.40`
 - `pyarrow` (parquet sink)
 - `numpy`
+- `safetensors >= 0.4` — reading `model.safetensors` of a native checkpoint bundle. Already a transitive dependency of `transformers`; declared because `vatis/models/local_bundle.py` imports it directly.
 - `matplotlib >= 3.10` and `tqdm` — only used by the scripts under `examples/`; vatis core imports neither. Shipped as the `examples` extra (`vatis[examples]`), not a hard dependency.
 
 Soft (extras):
@@ -356,8 +395,8 @@ Soft (extras):
 - **Python:** `>= 3.11`.
 - **Lint + format:** `ruff` (for both — `ruff check` and `ruff format`). Black-compatible style. Drop-in for black, much faster, one tool.
 - **Types:** `mypy --strict` on `vatis/`. Tests are unchecked.
-- **Tests:** ~90 collected (52 unit + 34 cross-validation cases from 12 parametrized defs + 4 integration). Run via `.venv/bin/python -m pytest tests`. CI runs the unit tier only.
-  - `tests/unit/` (50 tests) — runs in CI. Uses a hand-built ~1M-param toy transformer (defined in `tests/fixtures/tiny_transformer.py`). Tests math correctness: Hutchinson convergence to the exact trace as `n → ∞`, `χ_loss` closed-form correctness on the supported CE shapes, `δL` symmetry, normalization invariants, the chi_pos combinator, the per-seq-CV memory pre-check, and the analyzer's contract assertions. v1.1 added exact-NTK ground-truth tests for `chi_pos` and `δL(A, B)` via an explicit per-token Jacobian builder (`_build_full_jacobian_and_u` in `tests/unit/test_chi_net.py`) — this is the most rigorous correctness reference because it bypasses Hutchinson entirely. v1.2 task 1 added a regression test for the `valid_mask_fn`/`chi_loss` intersection fix.
+- **Tests:** 126 collected (91 unit + 31 cross-validation cases + 4 integration). Run via `.venv/bin/python -m pytest tests`. CI runs the unit tier only. Measured tiers: `-m "not integration and not cross_validation"` → 91 passed; `-m integration` → 4 passed; `-m cross_validation` → 30 failed, 1 passed **when `perspic` is not installed** (every failure is `ModuleNotFoundError: No module named 'perspic'`; that tier needs perspic in the venv).
+  - `tests/unit/` (91 tests) — runs in CI. Uses a hand-built ~1M-param toy transformer (defined in `tests/fixtures/tiny_transformer.py`). Tests math correctness: Hutchinson convergence to the exact trace as `n → ∞`, `χ_loss` closed-form correctness on the supported CE shapes, `δL` symmetry, normalization invariants, the chi_pos combinator, the per-seq-CV memory pre-check, and the analyzer's contract assertions. v1.1 added exact-NTK ground-truth tests for `chi_pos` and `δL(A, B)` via an explicit per-token Jacobian builder (`_build_full_jacobian_and_u` in `tests/unit/test_chi_net.py`) — this is the most rigorous correctness reference because it bypasses Hutchinson entirely. v1.2 task 1 added a regression test for the `valid_mask_fn`/`chi_loss` intersection fix. `tests/unit/test_local_bundle.py` (35 tests) covers the native bundle source: round-trip exactness (bf16 → fp32 θ, fp32 optimizer tensors, metadata/meta fields), the canonical-order alignment tests described under "Native checkpoint bundles", laziness (≤1 checkpoint's tensors live, checked by gc tensor-byte accounting + weakrefs), the `module:function` factory path, and every mis-alignment the loader must reject. Its bundles are hand-written by `tests/fixtures/synthetic_bundle.py`, which imports **none** of the loader's code — otherwise an ordering bug would cancel out between writer and reader.
   - `tests/integration/` (4 tests) — gated behind `pytest -m integration`, **skipped in CI**, runnable locally. Uses `EleutherAI/pythia-14m` (smallest published Pythia) to verify the full HF loading + DDP path on real checkpoints. The DDP test is currently a 2-rank CPU loopback only — **the multi-GPU DDP path has never been validated on real GPUs**. Adding a real-GPU DDP test is on the v1.2 work order.
   - `tests/cross_validation/` (31 tests) — gated behind `pytest -m cross_validation`, **skipped in CI** (requires perspic in the environment), runnable locally. **Cross-validates every observable against perspic** as the ground-truth reference implementation — both self-pair and cross-pair. The protocol:
     1. Build a small model that perspic can wrap (a `pl.LightningModule` with `criterion`) — e.g. a tiny MLP or the toy transformer with a Lightning shim.
