@@ -29,6 +29,35 @@ with
 
 The full derivation is in the paper, [arXiv:2605.31244](https://arxiv.org/abs/2605.31244). Read it before touching the math.
 
+### The preconditioned ruler (`chi_pos_P`)
+
+An optimizer with update `Δθ = −η P ∇L` does not train on the raw eNTK but on the **effective kernel** `Θ_P = J P Jᵀ`. vatis measures the same LNP triple on that kernel — the "optimizer's-eye view" — alongside the raw one:
+
+```
+delta_loss_P(A, B) = ∇L^B · P ∇L^A        (diagonal P: elementwise-weighted dot)
+chi_net_P          = ‖P^{1/2} J‖_F² = Tr(Θ_P)
+chi_loss           = unchanged (kernel-independent)
+chi_pos_P          = delta_loss_P / (chi_loss · chi_net_P)
+```
+
+with the same σ-based batch-size normalization as the raw components, and the cross pair taking the geometric mean `‖P^{1/2}J^A‖_F · ‖P^{1/2}J^B‖_F` exactly as raw does. `P = I` reproduces the raw triple identically — that is a unit test (`tests/unit/test_chi_pos_p.py`), not a hope.
+
+**`P` is diagonal throughout** — a 1-D vector in the canonical parameter order (`vatis/core/preconditioner.py::Preconditioner`), segment-for-segment aligned with the flat gradient and with `OptimizerStateView.flat_state`. Non-diagonal `P` (Muon's orthogonalization) is out of scope and the code is deliberately not designed for it.
+
+P sources:
+
+| source | `P` | where |
+| --- | --- | --- |
+| none | — (raw ruler only) | `preconditioner=None`, the default |
+| `identity` | `I` | `preconditioner="identity"` |
+| `explicit` | user-supplied 1-D tensor | `Preconditioner.from_diagonal(...)` |
+| `adamw` | `diag(1/(√v̂ + ε))`, `v̂ = exp_avg_sq/(1−β2^t)` | `LocalBundleSource.adamw_preconditioner()` |
+| `gn` (tests only) | `(JᵀJ)⁺` | built in the test from a materialized `J` |
+
+**AdamW conventions (project decisions — do not revisit).** `t` is the **saved** `step_count`: bundles are pre-step, so that is the number of updates already folded into the saved `exp_avg_sq` and hence the matching bias-correction exponent. β2 and ε come from the saved `param_groups` (authoritative — what the optimizer ran with), with `metadata.json` as a cross-check that warns on disagreement. **Momentum (`m̂`) and decoupled weight decay are excluded**: `P` is the geometry factor only, because `Θ_P = J P Jᵀ` is defined for a preconditioner and momentum is a gradient-history filter, not a metric. `amsgrad=True` is refused (it preconditions with `max_exp_avg_sq`).
+
+**Step-0 / empty optimizer state.** A step-0 checkpoint legitimately has no optimizer state. `adamw_preconditioner()` then **skips the P rows for that checkpoint** and emits a `UserWarning`; the raw rows are unaffected. Neither fallback is honest: `P = 1/(√0 + ε) = 1/ε` scales every observable by ~`1/ε²`, and `P = I` would publish `chi_pos_P == chi_pos` under the `adamw` descriptor — a plausible-looking "the preconditioner does nothing yet" reading that is an artifact of the fallback. An absent row cannot be mistaken for a measured one.
+
 ### How `χ_loss` and `δL` are computed (cheap, fixed cost)
 
 These two are the same regardless of which `χ_net` estimator we use.
@@ -48,6 +77,8 @@ Total fixed cost per `(checkpoint, eval-batch-pair)`: **2 backwards** (or 1 for 
 
 `χ_net = Σ_b Tr(M_b)` where `M_b = J_b J_bᵀ` and `J_b = ∇_θ f(x_b)` is the per-sequence Jacobian. This is **the only expensive observable**, and the reason vatis exists. We support three methods, selected by the user (or auto-picked based on batch size and model compatibility). They share the same outer loop and produce the same observable; they differ only in *how* `Tr(M_b)` is estimated.
 
+Both live methods also produce `chi_net_P` when `compute(..., preconditioner=P)` is given, in the **same pass and from the same probes** (`ChiNetResult.chi_net_p`) — the P estimate needs no extra backward, because everywhere the raw path takes `‖g‖²` of a VJP or a per-sample gradient the P path takes `‖P^{1/2} g‖²`. Raw values are bit-identical with and without a `P`. `opacus` stays a stub and has no P path.
+
 The math reason there's more than one method: a single VJP is a projection (`g = Jᵀ v` collapses information), so trace estimation needs either (a) deterministic basis vectors over the full output dim — exact but `O(S·V)` backwards, infeasible for LMs — or (b) random probes (Hutchinson) — `O(n)` backwards with controllable variance. The methods below differ in *how the random probes are arranged across the batch*.
 
 #### Method 1: `HutchinsonEstimator` (default for large `B`)
@@ -63,6 +94,8 @@ chi_net_accumulator += g.pow(2).sum()  # accumulates Σ_b ‖J_bᵀ v‖²
 
 Cost: `n_h` backwards per micro-batch. No opacus, no vmap, no per-sample machinery. Variance is `~B× higher per draw` than the opacus path because the same `v` doesn't get reused across samples for free.
 
+Preconditioned: `Tr(J P Jᵀ) = E_z ‖P^{1/2}(Jᵀz)‖²`, so the accumulator simply reduces the same `g` with the elementwise weight.
+
 **When to use:** large `B` (≥ 32), or when other methods don't apply. This is the always-works fallback.
 
 #### Method 2: `PerSequenceControlVariateEstimator` (default for small `B`)
@@ -75,6 +108,8 @@ For each sequence `b`, do **one extra backward** of `L_b` (per-sequence loss) w.
 These are used as a **control variate** for the Hutchinson estimate of `Tr(M_b)`: the loss-direction projection is correlated with the trace, known exactly, has zero variance, and subtracting its noisy Hutchinson counterpart and adding back the exact value reduces total variance — substantially when the loss direction overlaps the top eigenmodes of `M_b`, which is exactly the high-`χ_pos` regime we care about.
 
 Cost per (ckpt, batch): `n_h + B` backwards. Linear in `B`, so this method becomes unattractive for `B > ~64`.
+
+Preconditioned: the decomposition carries over term by term — `Tr(Π J P Jᵀ) = Σ_b ‖P^{1/2}g_b‖²/‖u_b‖²` stays exact, and the Hutchinson residual estimates `Tr((I−Π) J P Jᵀ)` with the same output-space projection `w = (I−Π)v` (`Π` lives in output space and is set by the loss direction, not by the parameter metric). Derivation in the module docstring.
 
 **Bonus output:** the cross-sample alignment matrix `C_{bb'} = ⟨g_b, g_{b'}⟩` is available opt-in via `compute_alignment_matrix=True` (returned in `ChiNetResult.extras`; the analyzer does **not** enable it or write it to the sink by default). It's exactly the eNTK projected onto the loss direction, sample-resolved. Useful for sample-level variance / interference analysis (the negative-`χ_pos` regime; see the paper, arXiv:2605.31244 §A.2).
 
@@ -161,8 +196,8 @@ There is **one** observable, computed at token granularity, normalized by the nu
 
 ## Scope (v1 / v1.1, current)
 
-- **In:** HuggingFace causal-LM checkpoints (Pythia, OLMo, GPT-NeoX class). Native **checkpoint bundles** written by our own training runs (`load_local_bundle`, see "Native checkpoint bundles" below). Tokenized data already in model-ready form. DDP across user-specified `num_gpus`. Two `χ_net` estimators (`hutchinson`, `per_sequence_cv`) with auto-selection. Parquet result sink (canonical) plus optional W&B and TensorBoard. CLI via `python -m vatis run …` that wraps `torchrun`. End-to-end deployment example on `pythia-14m` with cross-pair observables (added in v1.1).
-- **Out (current):** Tokenization (the example tokenizes inline; vatis core does not provide a tokenizer). Checkpoint discovery / sweep scheduling. FSDP. Tensor / pipeline parallelism. `OpacusEstimator` (stub only — full implementation deferred to v1.2). Custom non-CE losses for `chi_loss` (deferred to v1.2). Per-sample variance observables beyond the cross-sample alignment matrix. Models that don't fit on one GPU.
+- **In:** HuggingFace causal-LM checkpoints (Pythia, OLMo, GPT-NeoX class). Native **checkpoint bundles** written by our own training runs (`load_local_bundle`, see "Native checkpoint bundles" below). Tokenized data already in model-ready form. DDP across user-specified `num_gpus`. Two `χ_net` estimators (`hutchinson`, `per_sequence_cv`) with auto-selection. The **preconditioned ruler** `chi_pos_P` (diagonal `P`; `none`/`identity`/`explicit`/`adamw` sources) alongside the raw one. Parquet result sink (canonical) plus optional W&B and TensorBoard. CLI via `python -m vatis run …` that wraps `torchrun`. End-to-end deployment example on `pythia-14m` with cross-pair observables (added in v1.1).
+- **Out (current):** Tokenization (the example tokenizes inline; vatis core does not provide a tokenizer). Checkpoint discovery / sweep scheduling. FSDP. Tensor / pipeline parallelism. `OpacusEstimator` (stub only — full implementation deferred to v1.2). Custom non-CE losses for `chi_loss` (deferred to v1.2). Per-sample variance observables beyond the cross-sample alignment matrix. Models that don't fit on one GPU. **Non-diagonal `P`** (Muon's orthogonalization) — out of scope for WP0 and deliberately not designed for; momentum inclusion in `P`.
 
 Adding any of these later should be straightforward because the core (`vatis/core/`) is decoupled from model loading, data plumbing, and parallelism. Those items are tracked as future work.
 
@@ -180,6 +215,7 @@ vatis/
 │   │   └── opacus.py      # OpacusEstimator (stub in v1; full impl deferred to v1.2)
 │   ├── probes.py          # Rademacher / Gaussian probe vector generation, masking
 │   ├── param_layout.py    # ParameterLayout: THE canonical parameter flattening order
+│   ├── preconditioner.py  # Preconditioner (diagonal P) + elementwise-weighted reductions
 │   └── normalization.py   # valid-token counting, √(N_A·N_B) factors
 ├── models/
 │   ├── __init__.py        # exports load_hf_model + load_local_bundle (registry-ready)
@@ -240,7 +276,8 @@ results = analyze(
         "val_resample": val_dataloader,         # DataLoader, redrawn per checkpoint
         "train_at_step": lambda ckpt: ...,      # callable(checkpoint_id) -> batch
     },
-    observables=["chi_loss", "chi_net", "chi_pos", "delta_loss"],
+    observables=None,                           # None = all raw (+ all P if a preconditioner is set)
+    preconditioner=None,                        # None | "identity" | Preconditioner | fn(ckpt_id)->P|None
     chi_net_method=None,                        # None = auto: per_seq_cv if B≤32 else hutchinson
     n_hutchinson=32,                            # interpretation depends on method
     hutchinson_distribution="rademacher",       # or "gaussian"
@@ -295,6 +332,9 @@ for ckpt in source:                                   # or drive it yourself
     v = ckpt.optimizer_state.flat_state("exp_avg_sq")  # 1-D, canonical order
     t = ckpt.optimizer_state.step_count                # pre-step update count
     batch = ckpt.batch_a                               # {"input_ids", "labels"}
+
+# The preconditioned ruler: P built per checkpoint from its saved optimizer state.
+analyze(model=..., preconditioner=source.adamw_preconditioner(), ...)
 ```
 
 Four things to know:
@@ -306,7 +346,7 @@ Four things to know:
 
 ### Result format (parquet, long)
 
-One row per `(checkpoint_id, eval_batch_name_A, eval_batch_name_B, observable, value)`. Long format because:
+One row per `(checkpoint_id, eval_batch_name_A, eval_batch_name_B, preconditioner, observable, value)`. Long format because:
 - It handles arbitrary numbers of eval batches and pair combinations without schema churn.
 - Trivial to load into pandas and pivot.
 - Append-friendly across DDP ranks (rank 0 writes after all-reduce).
@@ -324,7 +364,12 @@ value              float64
 n_hutchinson       int32         # null if not applicable
 hutchinson_seed    int64         # null if not applicable
 wallclock_s        float64
+preconditioner     str           # "none" on raw rows; the P descriptor on P rows
 ```
+
+The preconditioned ruler extends this format **minimally**: its results are new `observable` *values* (`delta_loss_P`, `chi_net_P`, `chi_pos_P`), not new columns, plus the single `preconditioner` descriptor column. Raw rows are untouched and carry `preconditioner = "none"`; a run without a preconditioner emits exactly the rows it always did. To select one ruler, filter on `preconditioner`.
+
+There is deliberately no `chi_net_P_normalized` row: it is `chi_net_P / sqrt(n_valid_a * n_valid_b)` from the same row's own columns, and `chi_pos_P` — like `chi_pos` — is invariant under the normalization anyway.
 
 ### Distributed semantics
 
@@ -395,8 +440,11 @@ Soft (extras):
 - **Python:** `>= 3.11`.
 - **Lint + format:** `ruff` (for both — `ruff check` and `ruff format`). Black-compatible style. Drop-in for black, much faster, one tool.
 - **Types:** `mypy --strict` on `vatis/`. Tests are unchecked.
-- **Tests:** 126 collected (91 unit + 31 cross-validation cases + 4 integration). Run via `.venv/bin/python -m pytest tests`. CI runs the unit tier only. Measured tiers: `-m "not integration and not cross_validation"` → 91 passed; `-m integration` → 4 passed; `-m cross_validation` → 30 failed, 1 passed **when `perspic` is not installed** (every failure is `ModuleNotFoundError: No module named 'perspic'`; that tier needs perspic in the venv).
-  - `tests/unit/` (91 tests) — runs in CI. Uses a hand-built ~1M-param toy transformer (defined in `tests/fixtures/tiny_transformer.py`). Tests math correctness: Hutchinson convergence to the exact trace as `n → ∞`, `χ_loss` closed-form correctness on the supported CE shapes, `δL` symmetry, normalization invariants, the chi_pos combinator, the per-seq-CV memory pre-check, and the analyzer's contract assertions. v1.1 added exact-NTK ground-truth tests for `chi_pos` and `δL(A, B)` via an explicit per-token Jacobian builder (`_build_full_jacobian_and_u` in `tests/unit/test_chi_net.py`) — this is the most rigorous correctness reference because it bypasses Hutchinson entirely. v1.2 task 1 added a regression test for the `valid_mask_fn`/`chi_loss` intersection fix. `tests/unit/test_local_bundle.py` (35 tests) covers the native bundle source: round-trip exactness (bf16 → fp32 θ, fp32 optimizer tensors, metadata/meta fields), the canonical-order alignment tests described under "Native checkpoint bundles", laziness (≤1 checkpoint's tensors live, checked by gc tensor-byte accounting + weakrefs), the `module:function` factory path, and every mis-alignment the loader must reject. Its bundles are hand-written by `tests/fixtures/synthetic_bundle.py`, which imports **none** of the loader's code — otherwise an ordering bug would cancel out between writer and reader.
+- **Tests:** 181 collected (144 unit + 31 cross-validation cases + 4 integration + 2 golden). Run via `.venv/bin/python -m pytest tests`. CI runs the unit tier only. Measured tiers: `-m "not integration and not cross_validation"` → 144 passed, 2 skipped (the golden gate opts itself out — see below); `-m golden` → 2 passed; `-m integration` → 4 passed; `-m cross_validation` → 30 failed, 1 passed **when `perspic` is not installed** (every failure is `ModuleNotFoundError: No module named 'perspic'`; that tier needs perspic in the venv).
+  - `tests/unit/` (144 tests) — runs in CI. Uses a hand-built ~1M-param toy transformer (defined in `tests/fixtures/tiny_transformer.py`). Tests math correctness: Hutchinson convergence to the exact trace as `n → ∞`, `χ_loss` closed-form correctness on the supported CE shapes, `δL` symmetry, normalization invariants, the chi_pos combinator, the per-seq-CV memory pre-check, and the analyzer's contract assertions. v1.1 added exact-NTK ground-truth tests for `chi_pos` and `δL(A, B)` via an explicit per-token Jacobian builder (`_build_full_jacobian_and_u` in `tests/unit/test_chi_net.py`) — this is the most rigorous correctness reference because it bypasses Hutchinson entirely. v1.2 task 1 added a regression test for the `valid_mask_fn`/`chi_loss` intersection fix. `tests/unit/test_local_bundle.py` (35 tests) covers the native bundle source: round-trip exactness (bf16 → fp32 θ, fp32 optimizer tensors, metadata/meta fields), the canonical-order alignment tests described under "Native checkpoint bundles", laziness (≤1 checkpoint's tensors live, checked by gc tensor-byte accounting + weakrefs), the `module:function` factory path, and every mis-alignment the loader must reject. Its bundles are hand-written by `tests/fixtures/synthetic_bundle.py`, which imports **none** of the loader's code — otherwise an ordering bug would cancel out between writer and reader.
+  - **The preconditioned ruler (WP0 component 03)** adds three files. `tests/unit/test_preconditioner.py` (27) covers the `Preconditioner` invariants, the weighted reductions, and **T-adamw-state** (20 real `torch.optim.AdamW` steps; the built `P` is `torch.equal` to a hand computation from the optimizer's own internals, with a companion test proving the bias-correction exponent is really pinned). `tests/unit/test_chi_pos_p.py` (13) is the exact-answer suite: **T-identity** (`P = I` reproduces the raw triple at 1e-10 on fp64), **T-GN** (`P = (JᵀJ)⁺` ⇒ `chi_pos_P = 1/M`), **T-bruteforce** (explicit `Θ_P` by eigendecomposition — an exact branch plus a stochastic branch whose Rademacher tolerance `√(2Σ_{i≠j}A_ij²/n)` is derived in the test), **T-flattening-direction** (`P = diag(π)⁻¹` ⇒ exactly `1/M`, and raw `chi_pos` below it on a tail residual), **T-batchsize** (cross-pair components independent of `|A| ∈ {8,32,128}` over 12 seeded repeats, by a 4σ standard-error test plus a 20% backstop). `tests/unit/test_analyzer_preconditioned.py` (11) covers the plumbing: raw rows unchanged bit-for-bit, the parquet descriptor column, the step-0 skip, cross-pair P symmetry, and the pipeline half of T-identity through `analyze()` → parquet at 1e-6. Shared toys and ground-truth helpers live in `tests/fixtures/preconditioned_toys.py`.
+  - **Two tolerance facts that recur in those tests** and are worth knowing before tightening anything: (1) the estimators and `chi_pos` return **fp32** scalars by the repo's pre-existing convention (and T-identity *requires* it — an fp64 `chi_net_p` could never match the fp32 `chi_net` at 1e-10), so an assertion on a public scalar is bounded below by a few multiples of `2^-24` relative; where the spec asks for 1e-8 the tests assert both the fp32 value against `max(1e-8, fp32 slack)` and the same quantity recomputed from the fp64 components against 1e-8. (2) Rademacher Hutchinson has variance `2Σ_{i≠j}A_ij²/n`, which is **exactly zero for diagonal `A`** — that is why the `Θ_P = I` constructions (T-GN, T-flattening) are equalities rather than statistical statements, and the tests assert that precondition instead of assuming it.
+  - `tests/golden/` (2 cases) — the **WP0 acceptance gate**, marked `@pytest.mark.golden`. It writes its own checkpoint bundle (`tests/utils/bundle_fixture.py`: ~100 CPU AdamW steps, frozen schema, pre-step semantics, full-sequence `batch_a.npy`), asserts the bundle round-trips to the batches its own loop trained on, runs both rulers over it, checks a `P = I` re-run against the raw columns and `|χ_pos| ≤ 1.5`, then **prints without asserting** the linearization sum `Σ_t η_t δL(A_t,B)` against the realized change in `loss(B)` and the share of `χ_net^P` carried by `1/ε`-capped coordinates. Parametrized over the self-contained tiny transformer (always) and the project Llama from `/workspace/antonio_code` (tied weights, rotary — skipped cleanly when absent, so the suite stays self-contained). Unlike `integration`/`cross_validation`, which callers deselect with `-m "not ..."`, `golden` postdates those call sites and therefore **opts itself out** via the `tests/conftest.py` hook: it runs only when the `-m` expression names `golden`, and shows as skipped-with-reason otherwise.
   - `tests/integration/` (4 tests) — gated behind `pytest -m integration`, **skipped in CI**, runnable locally. Uses `EleutherAI/pythia-14m` (smallest published Pythia) to verify the full HF loading + DDP path on real checkpoints. The DDP test is currently a 2-rank CPU loopback only — **the multi-GPU DDP path has never been validated on real GPUs**. Adding a real-GPU DDP test is on the v1.2 work order.
   - `tests/cross_validation/` (31 tests) — gated behind `pytest -m cross_validation`, **skipped in CI** (requires perspic in the environment), runnable locally. **Cross-validates every observable against perspic** as the ground-truth reference implementation — both self-pair and cross-pair. The protocol:
     1. Build a small model that perspic can wrap (a `pl.LightningModule` with `criterion`) — e.g. a tiny MLP or the toy transformer with a Lightning shim.
@@ -479,6 +527,11 @@ The `settings.local.json` allow list bounds *some* of what you can do, but **mos
 | `χ_net` | `chi_net` | `‖∇_θ f‖_F² = Tr(Θ)` |
 | `χ_pos` | `chi_pos` | `δL / (χ_loss · χ_net)` — "spectral position". **Naming note:** in vatis this is `chi_pos`. The same quantity is called `chi_align` (and sometimes `chi_coup`) in perspic and in the paper. When cross-validating against perspic (see "Testing" below), map `perspic.chi_align ↔ vatis.chi_pos` and `perspic.chi_coup ↔ vatis.chi_pos`. |
 | `δL` | `delta_loss` | `⟨∇_θ L^A, ∇_θ L^B⟩` |
+| `P` | `Preconditioner.diag` | diagonal preconditioner, 1-D in the canonical parameter order |
+| `Θ_P` | (not stored) | effective kernel `J P Jᵀ` — what the optimizer trains on |
+| `χ_net^P` | `chi_net_P` | `‖P^{1/2}∇_θ f‖²_F = Tr(Θ_P)` |
+| `δL^P` | `delta_loss_P` | `∇_θL^B · P ∇_θL^A` |
+| `χ_pos^P` | `chi_pos_P` | `δL^P / (χ_loss · χ_net^P)` — spectral position on the optimizer's ruler |
 | `Θ` | (not stored) | empirical NTK; never materialized |
 | `N_A`, `N_B` | `n_valid_a`, `n_valid_b` | valid (non-pad) token counts in batches A and B |
 | `n` | `n_hutchinson` | number of Hutchinson probe vectors |
@@ -490,7 +543,9 @@ Latent bugs and quirks that an agent walking into the repo should be aware of.
 - **`ParquetSink` truncates on re-open within the same path** — calling `analyze()` twice with `sink="path.parquet"` overwrites the file each time. The deployment example sidesteps this via the single-`analyze()`-with-multiple-revisions pattern, but it's an obvious footgun for any user who loops manually. Either fix or document explicitly.
 - **Multi-GPU DDP path is unverified on real GPUs** — only the 2-rank CPU loopback test exercises it. No real-GPU integration test exists.
 - **Custom (non-CE) `loss_fn` is not really supported** — `delta_loss` will use whatever `loss_fn` you pass, but `chi_loss` always uses the closed-form CE shortcut. Mixing the two produces wrong observables. The autograd fallback was deleted in v1.1 task 6 to avoid silent wrong-answer modes. Real support is the v1.2 feature work.
-- **`OpacusEstimator` is still a stub** — the original v1 spec called this v1.1 work; v1.1 was hardening instead. It remains open.
+- **`OpacusEstimator` is still a stub** — the original v1 spec called this v1.1 work; v1.1 was hardening instead. It remains open. It also has no `chi_net_P` path, so `preconditioner=...` with `chi_net_method="opacus"` fails at the same `NotImplementedError`.
+- **AdamW's `P` puts untouched coordinates at `1/ε`, by design.** Any parameter element the gradient never touched keeps `exp_avg_sq == 0` exactly (unused vocabulary rows are the obvious population; on a real bundle `exp_avg_sq.min() == 0` at every checkpoint), so `P = 1/(√0 + ε) = 1/ε` — ~`1e6`× a live coordinate's weight at `ε = 1e-8`. Since `χ_net^P = Σ_i P_i ‖J_{:,i}‖²`, such a coordinate is harmless only if its Jacobian column also vanishes on the *measurement* batch; a token present in a held-out batch but absent from the batches that built `v` is **not** harmless, and on held-out data that is the normal case. The convention is a frozen project decision, so vatis applies no clipping, flooring or dead-coordinate mask — instead `vatis.core.preconditioner.epsilon_cap_mask` identifies those coordinates so a caller can report their share of `χ_net^P` (the golden test prints exactly that, with a per-parameter breakdown). Read a `χ_net^P` without checking that share at your peril.
+- **A resident `P` costs one extra parameter-sized fp32 vector.** `_should_offload_cross_grads` (the cross-pair GPU/host heuristic) does not account for it. Irrelevant at toy scale; for a multi-billion-parameter model with `cross_pairs` on a borderline card, pass `cross_grad_storage="cpu"` explicitly.
 
 ## v1 build history (historical)
 
