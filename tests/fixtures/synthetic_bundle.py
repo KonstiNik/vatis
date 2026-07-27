@@ -47,6 +47,10 @@ class BundleTinyLM(nn.Module):
     Two hidden layers of identical shape on purpose (see the module docstring).
     Sized in the hundreds of parameters by default so the tests stay exact and
     instant; the lazy-loading test scales it up via the constructor.
+
+    ``tie_head`` shares ``head.weight`` with ``embed.weight`` — the project's
+    Llama-style tied-embedding case, where ``named_parameters()`` reports the
+    tensor once but ``state_dict()`` reports it under both names.
     """
 
     def __init__(
@@ -56,6 +60,7 @@ class BundleTinyLM(nn.Module):
         d_model: int = DEFAULT_D_MODEL,
         seq_len: int = DEFAULT_SEQ_LEN,
         seed: int = 0,
+        tie_head: bool = False,
     ) -> None:
         super().__init__()
         self.vocab_size = vocab_size
@@ -69,6 +74,8 @@ class BundleTinyLM(nn.Module):
         with torch.no_grad():
             for p in self.parameters():
                 p.copy_(torch.randn(p.shape, generator=generator) * 0.1)
+        if tie_head:
+            self.head.weight = self.embed.weight
 
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
         h = self.embed(input_ids)
@@ -90,6 +97,7 @@ def tiny_lm_factory(metadata: Any) -> nn.Module:
         vocab_size=int(config.get("vocab_size", DEFAULT_VOCAB_SIZE)),
         d_model=int(config.get("d_model", DEFAULT_D_MODEL)),
         seq_len=int(config.get("seq_len", DEFAULT_SEQ_LEN)),
+        tie_head=bool(config.get("tie_head", False)),
     )
 
 
@@ -138,6 +146,7 @@ def bundle_metadata(
             "vocab_size": model.vocab_size,
             "d_model": model.d_model,
             "seq_len": model.seq_len,
+            "tie_head": model.head.weight is model.embed.weight,
         },
         "model_class": type(model).__name__,
         "optimizer": optimizer,
@@ -331,6 +340,7 @@ def write_simple_bundle(
     seq_len: int = DEFAULT_SEQ_LEN,
     batch_size: int = DEFAULT_BATCH_SIZE,
     seed: int = 0,
+    tie_head: bool = False,
 ) -> tuple[BundleTinyLM, list[str]]:
     """Write a complete multi-checkpoint bundle with hand-made optimizer state.
 
@@ -339,7 +349,13 @@ def write_simple_bundle(
     plumbing and ordering, not training dynamics), so a caller can compare
     against :func:`bf16_reference_weights`.
     """
-    model = BundleTinyLM(vocab_size=vocab_size, d_model=d_model, seq_len=seq_len, seed=seed)
+    model = BundleTinyLM(
+        vocab_size=vocab_size,
+        d_model=d_model,
+        seq_len=seq_len,
+        seed=seed,
+        tie_head=tie_head,
+    )
     order = write_run_files(
         run_dir,
         model,

@@ -282,14 +282,26 @@ class ParameterLayout:
           because such a parameter would be silently excluded from every
           parameter-space vector. Pass ``allow_unlisted=True`` to accept that
           (the unlisted parameters are then simply not measured).
+
+        Tied weights need no special handling but are a likely source of the
+        first error: ``named_parameters()`` (and the optimizer) see a shared
+        tensor once, under its first name, while ``state_dict()`` lists it under
+        every name. A canonical order recorded from ``state_dict()`` keys
+        therefore names a parameter the model does not have — reported below.
         """
         available: dict[str, torch.nn.Parameter] = dict(model.named_parameters())
         missing = [name for name in self._names if name not in available]
         if missing:
+            shared = sorted(set(missing) & set(model.state_dict()))
+            hint = (
+                f" ({shared[:4]} exist in state_dict() but not in named_parameters(), "
+                "i.e. they are tied to another parameter and must be listed once)"
+                if shared
+                else "; the model factory does not match this bundle"
+            )
             raise LayoutMismatchError(
                 f"{self._source}: model {type(model).__name__} has no parameter(s) "
-                f"{missing[:8]}{' ...' if len(missing) > 8 else ''}; "
-                f"the model factory does not match this bundle"
+                f"{missing[:8]}{' ...' if len(missing) > 8 else ''}{hint}"
             )
         if not allow_unlisted:
             unlisted = [name for name in available if name not in set(self._names)]

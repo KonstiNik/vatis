@@ -152,6 +152,7 @@ def test_roundtrip_theta_optimizer_and_metadata(tmp_path: Path) -> None:
         "vocab_size": DEFAULT_VOCAB_SIZE,
         "d_model": DEFAULT_D_MODEL,
         "seq_len": DEFAULT_SEQ_LEN,
+        "tie_head": False,
     }
     assert metadata.seed == 0
     assert metadata.batch_size_train == 3
@@ -472,6 +473,54 @@ def test_unlisted_model_parameters_are_rejected_unless_allowed(tmp_path: Path) -
     reference = bf16_reference_weights(BundleTinyLM())
     loaded = dict(bundle.model.named_parameters())
     assert torch.equal(loaded["fc2.bias"], reference["fc2.bias"])
+
+
+def test_tied_weights_load_and_are_counted_once(tmp_path: Path) -> None:
+    """Tied weights: one canonical entry, one flat segment, theta still exact.
+
+    ``named_parameters()`` de-duplicates shared storages and so does the
+    optimizer, so the canonical order has one entry for the tied tensor and the
+    weight file has no ``head.weight`` — which must still leave theta fully
+    specified, because it *is* ``embed.weight``.
+    """
+    run_dir = tmp_path / "tied_run"
+    model, order = write_simple_bundle(run_dir, steps=(0,), tie_head=True)
+    assert model.head.weight is model.embed.weight
+    assert "head.weight" not in order
+
+    source = load_local_bundle(run_dir, tiny_lm_factory)
+    assert "head.weight" not in source.layout.names
+    bundle = source.checkpoints[0].model_bundle
+    assert bundle.model.head.weight is bundle.model.embed.weight
+    assert len(bundle.params) == len(source.layout)
+    assert source.layout.total_numel == sum(p.numel() for p in bundle.params)
+    reference = bf16_reference_weights(model)
+    for name, param in bundle.model.named_parameters():
+        assert torch.equal(param, reference[name])
+    flat = source.checkpoints[0].optimizer_state.flat_state("exp_avg_sq")
+    assert flat.numel() == source.layout.total_numel
+
+
+def test_tied_weights_listed_twice_are_rejected(tmp_path: Path) -> None:
+    """A canonical order listing a tied tensor under both names fails loudly.
+
+    That is what a writer recording ``state_dict()`` keys instead of
+    ``named_parameters()`` keys produces; the tied parameter would occupy two
+    flat segments while the optimizer state has one entry for it. The tied name
+    is not in ``named_parameters()`` at all (shared storages are reported once,
+    under the first name), so the loader reports it as a name the model does not
+    have and points at the tie.
+    """
+    run_dir = tmp_path / "tied_twice_run"
+    model, order = write_simple_bundle(run_dir, steps=(0,), tie_head=True)
+    shapes = {name: list(p.shape) for name, p in model.state_dict().items()}
+    doubled = [[name, shapes[name]] for name in [*order, "head.weight"]]
+    (run_dir / "param_names.json").write_text(json.dumps(doubled), encoding="utf-8")
+
+    source = load_local_bundle(run_dir, tiny_lm_factory)
+    assert "head.weight" in source.layout.names
+    with pytest.raises(LayoutMismatchError, match="they are tied to another parameter"):
+        _ = source.checkpoints[0].model_bundle
 
 
 def test_incomplete_checkpoint_directory_is_rejected(tmp_path: Path) -> None:
