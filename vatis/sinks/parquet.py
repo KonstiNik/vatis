@@ -30,6 +30,11 @@ _SCHEMA = pa.schema(
         ("n_hutchinson", pa.int32()),
         ("hutchinson_seed", pa.int64()),
         ("wallclock_s", pa.float64()),
+        # Which ruler the row was measured with: "none" for the raw columns,
+        # the preconditioner's descriptor ("adamw", "identity", ...) for the
+        # delta_loss_P / chi_net_P / chi_pos_P rows. Appended last so existing
+        # readers that select by name are unaffected.
+        ("preconditioner", pa.string()),
     ]
 )
 

@@ -18,6 +18,22 @@ The flow per ``(checkpoint, eval_batch)`` is:
     8. (Rank 0) write rows to the sink.
 
 Both unnormalized and normalized observables are emitted.
+
+Preconditioned ruler
+--------------------
+
+When a ``preconditioner`` is configured the analyzer measures the **second**
+ruler in the same pass: ``delta_loss_P``, ``chi_net_P`` and ``chi_pos_P``, the
+LNP triple of the effective kernel ``Theta_P = J P J^T`` the optimizer actually
+trains on (``00_context.md`` §"Preconditioned ruler"). It costs no extra
+backward — ``delta_loss_P`` re-reduces the gradient vector step 3 already built
+with the elementwise ``P`` weight, and ``chi_net_P`` comes out of the same
+estimator call and the same probes as ``chi_net``. ``chi_loss`` is
+kernel-independent and is not recomputed. Raw numerics are unchanged, bit for
+bit: the P accumulators are additive, never in the raw path.
+
+The rows land in the existing long format as new ``observable`` values, plus one
+``preconditioner`` descriptor column that carries ``"none"`` on every raw row.
 """
 
 from __future__ import annotations
@@ -42,6 +58,12 @@ from vatis.core.normalization import (
 from vatis.core.observables import (
     chi_loss_cross_entropy_unnormalized,
     chi_pos,
+)
+from vatis.core.preconditioner import (
+    RAW_DESCRIPTOR,
+    Preconditioner,
+    weighted_dot_fp64,
+    weighted_sum_sq_fp64,
 )
 from vatis.data.batches import EvalBatchSpec, normalize_eval_batches
 from vatis.data.collate import iter_micro_batches, move_batch
@@ -70,6 +92,37 @@ ALL_OBSERVABLES: tuple[str, ...] = (
     "delta_loss",
     "chi_pos",
 )
+
+# Observables of the preconditioned ruler. Emitted only when a ``preconditioner``
+# is configured, and always tagged with that preconditioner's descriptor in the
+# ``preconditioner`` column.
+#
+# There is deliberately no ``chi_net_P_normalized``: the spec (03 §3) names three
+# P observables and asks for a *minimal* schema extension. The sigma-normalized
+# companion is a pure function of what is already written —
+# ``chi_net_P_normalized = chi_net_P / sqrt(n_valid_a * n_valid_b)`` — using the
+# ``n_valid_a`` / ``n_valid_b`` columns of the same row, so nothing is lost.
+# ``chi_loss`` has no P variant at all (it is kernel-independent), and
+# ``chi_pos_P`` is normalization-invariant just like ``chi_pos``.
+P_OBSERVABLES: tuple[str, ...] = (
+    "delta_loss_P",
+    "chi_net_P",
+    "chi_pos_P",
+)
+
+# What a ``preconditioner`` argument may be:
+#   - None / "none"                  -> raw ruler only (the default, and the
+#                                       behaviour of every pre-WP0 caller)
+#   - "identity"                     -> P = I, the SGD ruler measured through the
+#                                       preconditioned code path (T-identity)
+#   - a Preconditioner               -> the same fixed P at every checkpoint
+#   - fn(checkpoint_id) -> P | None  -> per-checkpoint P; returning None skips
+#                                       the P rows for that checkpoint (this is
+#                                       how the adamw source handles a step-0
+#                                       checkpoint, whose optimizer state is
+#                                       legitimately empty)
+PreconditionerFactory = Callable[[str], Preconditioner | None]
+PreconditionerLike = str | Preconditioner | PreconditionerFactory
 
 
 @dataclass
@@ -109,8 +162,15 @@ class Analyzer:
             - a tensor / dict / tuple (auto-wrapped as ``fixed``),
             - a DataLoader (auto-wrapped as ``resample``),
             - a callable ``fn(checkpoint_id) -> batch`` (auto-wrapped).
-        observables: which observables to compute and emit. Defaults to all
-            of ``ALL_OBSERVABLES``.
+        observables: which observables to compute and emit. ``None`` (default)
+            means all of ``ALL_OBSERVABLES``, plus all of ``P_OBSERVABLES`` when
+            a ``preconditioner`` is configured. Pass an explicit list to select;
+            naming a P observable without a ``preconditioner`` is an error.
+        preconditioner: the diagonal ``P`` of the preconditioned ruler, or
+            ``None`` (default) for the raw ruler only. See
+            :data:`PreconditionerLike`. For a checkpoint bundle use
+            ``LocalBundleSource.adamw_preconditioner()``, which reads each
+            checkpoint's saved (pre-step) optimizer state.
         chi_net_method: ``"hutchinson"``, ``"per_sequence_cv"``, ``"opacus"``,
             or ``None`` for auto.
         n_hutchinson: number of probe vectors per micro-batch.
@@ -145,7 +205,8 @@ class Analyzer:
         self,
         *,
         eval_batches: dict[str, Any],
-        observables: Sequence[str] = ALL_OBSERVABLES,
+        observables: Sequence[str] | None = None,
+        preconditioner: PreconditionerLike | None = None,
         chi_net_method: str | None = None,
         n_hutchinson: int = 32,
         hutchinson_distribution: str = "rademacher",
@@ -162,9 +223,22 @@ class Analyzer:
         if not self.eval_batches:
             raise ValueError("at least one eval batch is required")
 
-        unknown = set(observables) - set(ALL_OBSERVABLES)
+        self.preconditioner = _normalize_preconditioner(preconditioner)
+        valid_observables = ALL_OBSERVABLES + P_OBSERVABLES
+        if observables is None:
+            observables = ALL_OBSERVABLES + (
+                P_OBSERVABLES if self.preconditioner is not None else ()
+            )
+        unknown = set(observables) - set(valid_observables)
         if unknown:
-            raise ValueError(f"unknown observables {sorted(unknown)}; valid: {ALL_OBSERVABLES}")
+            raise ValueError(f"unknown observables {sorted(unknown)}; valid: {valid_observables}")
+        requested_p = set(observables) & set(P_OBSERVABLES)
+        if requested_p and self.preconditioner is None:
+            raise ValueError(
+                f"observables {sorted(requested_p)} belong to the preconditioned ruler "
+                "but no preconditioner was given; pass preconditioner=... (e.g. "
+                "'identity', or LocalBundleSource.adamw_preconditioner())"
+            )
         self.observables = tuple(observables)
         self.chi_net_method_request = chi_net_method
         self.n_hutchinson = n_hutchinson
@@ -191,6 +265,9 @@ class Analyzer:
         # special-case "cache not yet created".
         self._chi_loss_cache: dict[str, float] = {}
         self._chi_net_cache: dict[str, float] = {}
+        # Same, for the preconditioned ruler's chi_net^P (the cross pair takes
+        # the geometric mean of the two batches' values, exactly as for raw).
+        self._chi_net_p_cache: dict[str, float] = {}
 
     @staticmethod
     def _normalize_sinks(
@@ -297,6 +374,14 @@ class Analyzer:
         for p in bundle.params:
             p.requires_grad_(True)
 
+        # The preconditioner is per checkpoint (an Adam P is built from *this*
+        # checkpoint's saved optimizer state), resolved once and reused for every
+        # eval batch and cross pair below. ``None`` here means "no P rows for
+        # this checkpoint" — either no preconditioner was configured at all, or
+        # the factory declined (see the step-0 policy in
+        # ``LocalBundleSource.adamw_preconditioner``).
+        precond = self._resolve_preconditioner(bundle, ckpt_id)
+
         # Self pairs first. We cache a batch's full parameter-space gradient
         # ONLY if some cross pair will consume it via the dot product. Caching it
         # unconditionally keeps a P-sized vector resident (e.g. ~29 GB fp32 for a
@@ -310,7 +395,9 @@ class Analyzer:
         per_batch_n_valid: dict[str, int] = {}
 
         for name, spec in self.eval_batches.items():
-            self_result, g_full = self._compute_self_pair(bundle, ckpt_id, revision, name, spec)
+            self_result, g_full = self._compute_self_pair(
+                bundle, ckpt_id, revision, name, spec, precond
+            )
             result.rows.extend(self_result)
             per_batch_n_valid[name] = self._last_n_valid
             if g_full is not None and name in cross_names:
@@ -341,6 +428,7 @@ class Analyzer:
                 n_valid_a=per_batch_n_valid[a],
                 n_valid_b=per_batch_n_valid[b],
                 bundle=bundle,
+                precond=precond,
             )
             result.rows.extend(cross_rows)
 
@@ -349,6 +437,53 @@ class Analyzer:
                 s.write_rows(result.rows)
 
         return result
+
+    # --------------------------------------------------------- preconditioner
+
+    def _resolve_preconditioner(
+        self,
+        bundle: ModelBundle,
+        ckpt_id: str,
+    ) -> Preconditioner | None:
+        """Resolve the configured preconditioner for one checkpoint.
+
+        Returns ``None`` when the raw ruler alone should be measured. The
+        resolved ``P`` is moved to the model's device and checked against
+        ``bundle.params``: its length must equal the number of parameter
+        elements the analyzer flattens, otherwise ``P`` and the gradient are not
+        describing the same parameter space and every ``chi_pos^P`` would be a
+        plausible-looking wrong number. (The *order* is guaranteed upstream: a
+        bundle's ``P`` and ``bundle.params`` both come from the one
+        :class:`~vatis.core.param_layout.ParameterLayout` of
+        ``param_names.json``.)
+
+        The ``P`` dtype is left alone — the weighted reductions promote to fp64
+        regardless, so an fp64 ``P`` on an fp32 gradient loses nothing.
+        """
+        spec = self.preconditioner
+        if spec is None:
+            return None
+        device = next(bundle.model.parameters()).device
+        precond: Preconditioner | None
+        if isinstance(spec, str):
+            # _normalize_preconditioner already rejected anything else.
+            precond = Preconditioner.identity(
+                sum(int(p.numel()) for p in bundle.params), device=device
+            )
+        elif isinstance(spec, Preconditioner):
+            precond = spec
+        else:
+            precond = spec(ckpt_id)
+            if precond is None:
+                return None
+            if not isinstance(precond, Preconditioner):
+                raise TypeError(
+                    f"preconditioner factory returned {type(precond).__name__} for "
+                    f"checkpoint {ckpt_id!r}; expected a Preconditioner or None"
+                )
+        precond = precond.to(device=device)
+        precond.validate_for(bundle.params, context=f"checkpoint {ckpt_id!r} parameters")
+        return precond
 
     # ------------------------------------------------------------- self pair
 
@@ -359,8 +494,14 @@ class Analyzer:
         revision: str,
         batch_name: str,
         spec: EvalBatchSpec,
+        precond: Preconditioner | None = None,
     ) -> tuple[list[ResultRow], torch.Tensor | None]:
         """Compute chi_loss / delta_loss / chi_net / chi_pos for one batch.
+
+        With ``precond`` given, also the preconditioned triple
+        (``delta_loss_P``, ``chi_net_P``, ``chi_pos_P``) — no extra backward:
+        ``delta_loss_P`` re-reduces the same gradient vector with the ``P``
+        weight and ``chi_net_P`` comes from the same estimator call.
 
         Returns the rows AND the flat parameter-space gradient of the total
         loss (used as a cache for cross pairs).
@@ -470,8 +611,19 @@ class Analyzer:
             params=bundle.params,
             micro_batch_size=self.micro_batch_size,
             generator=gen,
+            preconditioner=precond,
         )
         chi_net_local = chi_net_result.chi_net.to(dtype=torch.float64).to(device)
+        if precond is None:
+            chi_net_p_local = None
+        elif chi_net_result.chi_net_p is None:
+            raise RuntimeError(
+                f"chi_net estimator {estimator.name!r} was given a preconditioner but "
+                "returned no chi_net_p; the preconditioned ruler is implemented in "
+                "'hutchinson' and 'per_sequence_cv' only"
+            )
+        else:
+            chi_net_p_local = chi_net_result.chi_net_p.to(dtype=torch.float64).to(device)
 
         # ----- All-reduce: chi_loss, chi_net, n_valid, delta_loss grad -----
         # delta_loss needs the FULL gradient (sum across ranks) to compute its
@@ -482,6 +634,11 @@ class Analyzer:
 
             chi_loss_raw_global = all_reduce_sum_scalar(float(chi_loss_raw_local), device)
             chi_net_global = all_reduce_sum_scalar(float(chi_net_local), device)
+            chi_net_p_global = (
+                None
+                if chi_net_p_local is None
+                else all_reduce_sum_scalar(float(chi_net_p_local), device)
+            )
             n_valid_global = int(all_reduce_sum_scalar(float(n_valid_local), device))
             # Each rank's grad is grad_theta((1/n_local) Σ_local ℓ); we want
             # grad_theta((1/n_global) Σ_all ℓ) = Σ_r (n_local_r / n_global) *
@@ -497,8 +654,15 @@ class Analyzer:
         else:
             chi_loss_raw_global = float(chi_loss_raw_local)
             chi_net_global = float(chi_net_local)
+            chi_net_p_global = None if chi_net_p_local is None else float(chi_net_p_local)
             n_valid_global = n_valid_local
             delta_loss_global = float(delta_loss_local)
+
+        # delta_loss^P = grad L^T P grad L: the same (all-reduced) gradient
+        # vector, reduced again with the elementwise P weight. No backward.
+        delta_loss_p_global = (
+            None if precond is None else float(weighted_sum_sq_fp64(flat_grad_local, precond.diag))
+        )
 
         wallclock_s = time.perf_counter() - t0
         n_valid_a = max(1, n_valid_global)  # avoid div-by-zero downstream
@@ -508,6 +672,14 @@ class Analyzer:
         chi_loss_norm = chi_loss_global * norm
         chi_net_norm = chi_net_global / norm
         chi_pos_value = float(chi_pos(delta_loss_global, chi_loss_global, chi_net_global))
+        # chi_pos^P uses the SAME chi_loss (kernel-independent) and the same
+        # normalization convention; chi_pos is invariant under the sqrt(N_A N_B)
+        # factors, so the unnormalized components are used here exactly as for raw.
+        chi_pos_p_value = (
+            None
+            if precond is None or delta_loss_p_global is None or chi_net_p_global is None
+            else float(chi_pos(delta_loss_p_global, chi_loss_global, chi_net_p_global))
+        )
 
         rows = self._emit_rows(
             ckpt_id=ckpt_id,
@@ -525,6 +697,10 @@ class Analyzer:
             n_hutchinson=self.n_hutchinson,
             hutchinson_seed=probe_seed,
             wallclock_s=wallclock_s,
+            precond=precond,
+            delta_loss_p=delta_loss_p_global,
+            chi_net_p=chi_net_p_global,
+            chi_pos_p_value=chi_pos_p_value,
         )
 
         # Cache the (already-reduced) full gradient for cross-pair use.
@@ -547,6 +723,7 @@ class Analyzer:
         n_valid_a: int,
         n_valid_b: int,
         bundle: ModelBundle,
+        precond: Preconditioner | None = None,
     ) -> list[ResultRow]:
         """Compute the cross delta_loss + chi_pos using cached self gradients.
 
@@ -568,7 +745,9 @@ class Analyzer:
         missing = [
             name
             for name in (name_a, name_b)
-            if name not in self._chi_loss_cache or name not in self._chi_net_cache
+            if name not in self._chi_loss_cache
+            or name not in self._chi_net_cache
+            or (precond is not None and name not in self._chi_net_p_cache)
         ]
         if missing:
             raise RuntimeError(
@@ -599,6 +778,19 @@ class Analyzer:
             chi_pos(delta_loss_cross_value, chi_loss_cross_value, chi_net_cross_value)
         )
 
+        # Preconditioned ruler, same shape: the P-weighted gradient dot and the
+        # geometric mean of the two batches' chi_net^P (i.e.
+        # ||P^{1/2} J^A||_F * ||P^{1/2} J^B||_F, per 00_context.md).
+        delta_loss_p_cross: float | None = None
+        chi_net_p_cross: float | None = None
+        chi_pos_p_value: float | None = None
+        if precond is not None:
+            delta_loss_p_cross = float(weighted_dot_fp64(g_a, g_b, precond.diag))
+            chi_net_p_cross = (self._chi_net_p_cache[name_a] * self._chi_net_p_cache[name_b]) ** 0.5
+            chi_pos_p_value = float(
+                chi_pos(delta_loss_p_cross, chi_loss_cross_value, chi_net_p_cross)
+            )
+
         return self._emit_rows(
             ckpt_id=ckpt_id,
             revision=revision,
@@ -615,6 +807,10 @@ class Analyzer:
             n_hutchinson=self.n_hutchinson,
             hutchinson_seed=None,
             wallclock_s=None,
+            precond=precond,
+            delta_loss_p=delta_loss_p_cross,
+            chi_net_p=chi_net_p_cross,
+            chi_pos_p_value=chi_pos_p_value,
         )
 
     # ------------------------------------------------------------- emission
@@ -639,14 +835,20 @@ class Analyzer:
         n_hutchinson: int | None,
         hutchinson_seed: int | None,
         wallclock_s: float | None,
+        precond: Preconditioner | None = None,
+        delta_loss_p: float | None = None,
+        chi_net_p: float | None = None,
+        chi_pos_p_value: float | None = None,
     ) -> list[ResultRow]:
         # Stash the per-batch chi_loss / chi_net for the cross pair use.
         # Caches are eagerly initialized in __init__.
         if batch_a == batch_b:
             self._chi_loss_cache[batch_a] = chi_loss
             self._chi_net_cache[batch_a] = chi_net
+            if chi_net_p is not None:
+                self._chi_net_p_cache[batch_a] = chi_net_p
 
-        values = {
+        values: dict[str, float] = {
             "chi_loss": chi_loss,
             "chi_loss_normalized": chi_loss_normalized,
             "chi_net": chi_net,
@@ -654,8 +856,29 @@ class Analyzer:
             "delta_loss": delta_loss,
             "chi_pos": chi_pos_value,
         }
+        descriptors = dict.fromkeys(values, RAW_DESCRIPTOR)
+        if precond is not None:
+            if delta_loss_p is None or chi_net_p is None or chi_pos_p_value is None:
+                raise RuntimeError(
+                    "a preconditioner was configured but the preconditioned triple is "
+                    f"incomplete for ({batch_a!r}, {batch_b!r}): "
+                    f"delta_loss_P={delta_loss_p}, chi_net_P={chi_net_p}, "
+                    f"chi_pos_P={chi_pos_p_value}"
+                )
+            values["delta_loss_P"] = delta_loss_p
+            values["chi_net_P"] = chi_net_p
+            values["chi_pos_P"] = chi_pos_p_value
+            for name in P_OBSERVABLES:
+                descriptors[name] = precond.descriptor
+
         rows: list[ResultRow] = []
         for name in self.observables:
+            if name not in values:
+                # A P observable was requested but this checkpoint has no P (the
+                # factory declined — see the step-0 policy). Skipping the row is
+                # deliberate: emitting a raw-valued or 1/eps-valued row under the
+                # 'adamw' descriptor would be a wrong answer that looks plausible.
+                continue
             rows.append(
                 ResultRow(
                     checkpoint_id=ckpt_id,
@@ -669,12 +892,50 @@ class Analyzer:
                     n_hutchinson=n_hutchinson,
                     hutchinson_seed=hutchinson_seed,
                     wallclock_s=wallclock_s,
+                    preconditioner=descriptors[name],
                 )
             )
         return rows
 
 
 # ------------------------------------------------------------- helpers
+
+
+def _normalize_preconditioner(
+    spec: PreconditionerLike | None,
+) -> PreconditionerLike | None:
+    """Validate a ``preconditioner`` argument, mapping "no P" to ``None``.
+
+    Accepted string values are only ``"none"`` (equivalent to ``None``) and
+    ``"identity"``. In particular ``"adamw"`` is *not* accepted here: the
+    analyzer sees ``ModelBundle``s and has no access to a checkpoint's saved
+    optimizer state, so an Adam ``P`` must come from the source that owns that
+    state (``LocalBundleSource.adamw_preconditioner()``). Silently accepting
+    ``"adamw"`` and falling back to something else is exactly the wrong-answer
+    mode this rejection prevents.
+    """
+    if spec is None:
+        return None
+    if isinstance(spec, str):
+        if spec == RAW_DESCRIPTOR:
+            return None
+        if spec == "identity":
+            return spec
+        raise ValueError(
+            f"preconditioner={spec!r} is not a recognized shorthand; use None/'none' "
+            "for the raw ruler, 'identity' for P = I, a Preconditioner instance, or a "
+            "callable(checkpoint_id) -> Preconditioner | None. For an Adam P from a "
+            "checkpoint bundle use LocalBundleSource.adamw_preconditioner(), which has "
+            "access to the saved optimizer state."
+        )
+    if isinstance(spec, Preconditioner):
+        return spec
+    if callable(spec):
+        return spec
+    raise TypeError(
+        f"unsupported preconditioner type: {type(spec).__name__}; expected str, "
+        "Preconditioner, callable(checkpoint_id) -> Preconditioner | None, or None"
+    )
 
 
 def _should_offload_cross_grads(
@@ -804,7 +1065,8 @@ def analyze(
     model: ModelSpec,
     revisions: Sequence[str] | None = None,
     eval_batches: dict[str, Any],
-    observables: Sequence[str] = ALL_OBSERVABLES,
+    observables: Sequence[str] | None = None,
+    preconditioner: PreconditionerLike | None = None,
     chi_net_method: str | None = None,
     n_hutchinson: int = 32,
     hutchinson_distribution: str = "rademacher",
@@ -831,6 +1093,7 @@ def analyze(
     analyzer_obj = Analyzer(
         eval_batches=eval_batches,
         observables=observables,
+        preconditioner=preconditioner,
         chi_net_method=chi_net_method,
         n_hutchinson=n_hutchinson,
         hutchinson_distribution=hutchinson_distribution,

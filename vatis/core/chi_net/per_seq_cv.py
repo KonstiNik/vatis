@@ -76,6 +76,27 @@ There are two code paths, selected by ``compute_alignment_matrix``:
 
 The backward COUNT (``B + n_h``) is identical for both paths; only the memory
 differs.
+
+Preconditioned ruler
+====================
+
+The control-variate decomposition carries over to ``Tr(J P J^T)`` term by term,
+and both terms need the SAME backwards — so the P estimate is computed in the
+same pass and shares every probe. With ``Pi = block_diag(u_hat_b u_hat_b^T)``
+the output-space projector:
+
+    Tr(Pi J P J^T)       = sum_b ||P^{1/2} g_b||^2 / ||u_b||^2     (exact)
+    Tr((I-Pi) J P J^T)   = E_v ||P^{1/2} J^T (I - Pi) v||^2        (Hutchinson)
+
+The first identity is the same block-diagonal Rayleigh quotient as the raw one
+with ``M_b`` replaced by ``J_b P J_b^T``; the second follows from
+``E_v[(I-Pi)v ((I-Pi)v)^T] = (I-Pi)^2 = (I-Pi)`` and the cyclic trace, exactly as
+in the raw case (``J P J^T`` is symmetric PSD because ``P`` is). Their sum is
+``Tr(J P J^T)``, so the estimator stays unbiased. In code: every ``||.||^2`` of a
+parameter-space gradient gains the elementwise ``P`` weight, nothing else
+changes — the output-space projection ``w = (I - Pi) v`` is *not* touched
+(``Pi`` lives in output space and is defined by the loss direction, not by the
+metric on parameters).
 """
 
 from __future__ import annotations
@@ -91,6 +112,11 @@ from vatis.core.chi_net.base import (
     ForwardFn,
     LossFn,
     ValidMaskFn,
+)
+from vatis.core.preconditioner import (
+    Preconditioner,
+    weighted_sum_sq_fp64,
+    weighted_sum_sq_grads,
 )
 from vatis.core.probes import ProbeDistribution, make_probe, mask_probe
 from vatis.data.collate import batch_size, iter_micro_batches
@@ -214,6 +240,7 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
         params: list[torch.nn.Parameter],
         micro_batch_size: int,
         generator: torch.Generator | None = None,
+        preconditioner: Preconditioner | None = None,
     ) -> ChiNetResult:
         device = next(model.parameters()).device
         store_grads = self.compute_alignment_matrix
@@ -232,6 +259,15 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
             )
 
         chi_net_acc = torch.zeros((), dtype=torch.float64, device=device)
+        # Preconditioned accumulator and per-parameter P views — only built when
+        # a P was supplied, so the raw arithmetic is untouched otherwise.
+        precond: Preconditioner | None = None
+        p_views: list[torch.Tensor] | None = None
+        chi_net_p_acc: torch.Tensor | None = None
+        if preconditioner is not None:
+            precond = preconditioner.to(device=device)
+            p_views = precond.parameter_views(params)
+            chi_net_p_acc = torch.zeros((), dtype=torch.float64, device=device)
         n_valid_total = 0
         n_backwards = 0
 
@@ -265,6 +301,7 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
             g_b_flat_list: list[torch.Tensor] = []
             u_b_norm_sq_list: list[float] = []
             exact_loss_direction = torch.zeros((), dtype=torch.float64, device=device)
+            exact_loss_direction_p = torch.zeros((), dtype=torch.float64, device=device)
 
             for b in range(m):
                 # Construct grad_outputs that is non-zero only at sample b.
@@ -290,12 +327,21 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
                     if u_b_sq > 0.0:
                         g_b_sq = (g_b_flat.to(dtype=torch.float64) ** 2).sum()
                         exact_loss_direction = exact_loss_direction + g_b_sq / u_b_sq
+                        if precond is not None:
+                            g_b_sq_p = weighted_sum_sq_fp64(g_b_flat, precond.diag)
+                            exact_loss_direction_p = exact_loss_direction_p + g_b_sq_p / u_b_sq
                 elif u_b_sq > 0.0:
                     # Accumulate ||g_b||^2 directly without materializing g_b.
                     exact_loss_direction = exact_loss_direction + _sum_sq(grads_b, device) / u_b_sq
+                    if p_views is not None:
+                        exact_loss_direction_p = (
+                            exact_loss_direction_p
+                            + weighted_sum_sq_grads(grads_b, p_views, device=device) / u_b_sq
+                        )
 
             # Step 3: Hutchinson loop with the loss-direction control variate.
             hutch_acc = torch.zeros((), dtype=torch.float64, device=device)
+            hutch_acc_p = torch.zeros((), dtype=torch.float64, device=device)
             for h in range(self.n_hutchinson):
                 v = make_probe(
                     tuple(logits.shape),
@@ -335,6 +381,8 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
                         correction = correction + coef * g_b_flat_list[b]
                     grad_v_perp = grad_v_flat - correction
                     hutch_acc = hutch_acc + (grad_v_perp.to(dtype=torch.float64) ** 2).sum()
+                    if precond is not None:
+                        hutch_acc_p = hutch_acc_p + weighted_sum_sq_fp64(grad_v_perp, precond.diag)
                 else:
                     # O(P) path: project the probe in OUTPUT space,
                     # w = (I - P) v, then a single backward yields
@@ -360,9 +408,17 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
                     )
                     n_backwards += 1
                     hutch_acc = hutch_acc + _sum_sq(grads_v, device)
+                    if p_views is not None:
+                        hutch_acc_p = hutch_acc_p + weighted_sum_sq_grads(
+                            grads_v, p_views, device=device
+                        )
 
             chi_net_micro = (hutch_acc / float(self.n_hutchinson)) + exact_loss_direction
             chi_net_acc = chi_net_acc + chi_net_micro
+            if chi_net_p_acc is not None:
+                chi_net_p_acc = chi_net_p_acc + (
+                    (hutch_acc_p / float(self.n_hutchinson)) + exact_loss_direction_p
+                )
 
             # Tally valid output positions for normalization.
             if vmask is None:
@@ -380,6 +436,7 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
             del g_b_flat_list
 
         chi_net = chi_net_acc.to(dtype=torch.float32)
+        chi_net_p = None if chi_net_p_acc is None else chi_net_p_acc.to(dtype=torch.float32)
 
         extras: dict[str, Any] = {
             "n_hutchinson": self.n_hutchinson,
@@ -395,6 +452,7 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
             n_backwards=n_backwards,
             n_valid_tokens=n_valid_total,
             extras=extras,
+            chi_net_p=chi_net_p,
         )
 
 

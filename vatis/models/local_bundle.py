@@ -51,6 +51,7 @@ from __future__ import annotations
 import importlib
 import json
 import re
+import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -60,6 +61,7 @@ import torch
 import torch.nn as nn
 
 from vatis.core.param_layout import LayoutMismatchError, ParameterLayout
+from vatis.core.preconditioner import Preconditioner, resolve_adamw_hparams
 from vatis.data.batches import EvalBatchSpec
 from vatis.models.hf import (
     ForwardFn,
@@ -949,6 +951,72 @@ class LocalBundleSource:
         """
         return EvalBatchSpec.from_callable(lambda ckpt_id: self.checkpoint_for(ckpt_id).batch_a)
 
+    def adamw_preconditioner(
+        self,
+        *,
+        beta2: float | None = None,
+        eps: float | None = None,
+        descriptor: str = "adamw",
+    ) -> Callable[[str], Preconditioner | None]:
+        """The ``adamw`` P source, as a per-checkpoint factory for the analyzer.
+
+        Pass the result as ``Analyzer(preconditioner=...)`` /
+        ``analyze(preconditioner=...)``: it is called once per checkpoint with
+        that checkpoint's id and builds ``P = diag(1 / (sqrt(v_hat) + eps))``
+        from *that* checkpoint's saved (pre-step) optimizer state, with
+        ``v_hat = exp_avg_sq / (1 - beta2**step_count)``. The flat ``exp_avg_sq``
+        comes from :meth:`OptimizerStateView.flat_state`, so it is
+        segment-for-segment aligned with the gradient vector the analyzer builds
+        from ``ModelBundle.params`` — both go through this source's one
+        :class:`~vatis.core.param_layout.ParameterLayout`.
+
+        ``beta2`` / ``eps`` default to the saved ``param_groups`` (what the
+        optimizer actually ran with), cross-checked against
+        ``metadata.json``'s ``optimizer_hparams`` — a disagreement is warned
+        about, not silently resolved. Pass them explicitly to override.
+
+        **Step-0 / empty-optimizer-state policy: the P rows are SKIPPED for that
+        checkpoint** (a ``UserWarning`` says so, naming the checkpoint), and only
+        the raw rows are emitted. A step-0 checkpoint legitimately has no
+        optimizer state, and neither available fallback is honest:
+        ``P = 1/(sqrt(0) + eps) = 1/eps`` is a garbage preconditioner (it scales
+        every observable by ``1/eps^2``, e.g. ``1e16``), and ``P = I`` would
+        publish ``chi_pos_P == chi_pos`` under the ``"adamw"`` descriptor — a
+        plausible-looking "the preconditioner does nothing yet" reading that is
+        an artifact of the fallback, not a measurement. An absent row cannot be
+        mistaken for a measured one.
+
+        Returns:
+            ``fn(checkpoint_id) -> Preconditioner | None``.
+        """
+
+        def build(checkpoint_id: str) -> Preconditioner | None:
+            checkpoint = self.checkpoint_for(checkpoint_id)
+            state = checkpoint.optimizer_state
+            if state.is_empty:
+                warnings.warn(
+                    f"{checkpoint.identifier}: the saved optimizer state is empty "
+                    f"({checkpoint.path / CHECKPOINT_OPTIM_FILE}), which is what a step-0 "
+                    "checkpoint looks like under pre-step semantics. No AdamW "
+                    "preconditioner exists there, so the delta_loss_P / chi_net_P / "
+                    "chi_pos_P rows are SKIPPED for this checkpoint (the raw rows are "
+                    "unaffected). P = 1/(sqrt(0) + eps) = 1/eps would be a garbage "
+                    "preconditioner, and P = I would misreport the identity as 'adamw'.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                return None
+            return adamw_preconditioner_from_state(
+                state,
+                metadata=self.metadata,
+                beta2=beta2,
+                eps=eps,
+                descriptor=descriptor,
+                context=checkpoint.identifier,
+            )
+
+        return build
+
     def build_model(self) -> nn.Module:
         """Instantiate a fresh, un-initialized-by-us model via the factory."""
         model = self.model_factory(self.metadata)
@@ -1023,6 +1091,117 @@ def load_local_bundle(
         valid_mask_fn=valid_mask_fn,
         allow_unlisted_params=allow_unlisted_params,
     )
+
+
+def adamw_preconditioner_from_state(
+    state: OptimizerStateView,
+    *,
+    metadata: BundleMetadata | None = None,
+    beta2: float | None = None,
+    eps: float | None = None,
+    descriptor: str = "adamw",
+    state_key: str = "exp_avg_sq",
+    context: str = "optimizer state",
+) -> Preconditioner:
+    """Build the AdamW ``P`` from one saved (pre-step) optimizer state.
+
+    The plumbing half of the ``adamw`` P source; the math is
+    :meth:`vatis.core.preconditioner.Preconditioner.adamw` (which documents the
+    deliberate exclusion of momentum and decoupled weight decay — ``P`` is the
+    geometry factor only).
+
+    Where the numbers come from:
+
+    - ``exp_avg_sq``: :meth:`OptimizerStateView.flat_state`, i.e. the canonical
+      flat order;
+    - ``step``: :attr:`OptimizerStateView.step_count`. Under pre-step semantics
+      that is the number of updates already folded into the saved
+      ``exp_avg_sq``, hence the matching bias-correction exponent;
+    - ``beta2`` / ``eps``: the saved ``param_groups``
+      (:attr:`OptimizerStateView.hparams`) — authoritative, because that is what
+      the optimizer ran with. ``metadata.json`` is used as a *cross-check* only:
+      a disagreement raises a ``UserWarning`` naming both values and the saved
+      state wins. Explicit ``beta2`` / ``eps`` arguments override everything.
+
+    Raises:
+        BundleSchemaError: the state is empty, has no ``exp_avg_sq`` (e.g. an
+            SGD run — its ruler is the raw one, ``preconditioner=None``), or has
+            no ``step`` counter to bias-correct with.
+        ValueError: ``betas``/``eps`` missing from the saved ``param_groups``, or
+            ``amsgrad=True`` (which preconditions with ``max_exp_avg_sq``).
+    """
+    if state.is_empty:
+        raise BundleSchemaError(
+            f"{context}: the optimizer state is empty, so no AdamW preconditioner exists. "
+            "Under pre-step semantics this is a step-0 checkpoint; the analyzer's "
+            "adamw_preconditioner() skips the P rows for it."
+        )
+    if not state.has_state(state_key):
+        raise BundleSchemaError(
+            f"{context}: the saved optimizer state has no {state_key!r} for every "
+            f"parameter (present keys: {state.state_keys()}). An AdamW preconditioner "
+            "needs the second moment; a plain-SGD run has none and its ruler is the raw "
+            "one (preconditioner=None)."
+        )
+    step = state.step_count
+    if step is None:
+        raise BundleSchemaError(
+            f"{context}: the saved optimizer state has no 'step' counter, so "
+            "exp_avg_sq cannot be bias-corrected. Refusing to guess the exponent."
+        )
+    saved_beta2, saved_eps = resolve_adamw_hparams(
+        state.hparams, source=f"{context}: saved param_groups"
+    )
+    if metadata is not None:
+        _cross_check_adamw_hparams(metadata, saved_beta2, saved_eps, context=context)
+    return Preconditioner.adamw(
+        state.flat_state(state_key),
+        step=step,
+        beta2=saved_beta2 if beta2 is None else float(beta2),
+        eps=saved_eps if eps is None else float(eps),
+        descriptor=descriptor,
+    )
+
+
+def _cross_check_adamw_hparams(
+    metadata: BundleMetadata,
+    beta2: float,
+    eps: float,
+    *,
+    context: str,
+) -> None:
+    """Warn when ``metadata.json`` disagrees with the saved ``param_groups``.
+
+    The saved state wins (it is what ran); the warning exists because a
+    disagreement usually means the bundle's metadata was written from a config
+    the run did not actually use — worth knowing before it shows up as a
+    surprising ``chi_pos_P`` trajectory.
+    """
+    hparams = metadata.optimizer_hparams
+    if hparams is None:
+        return
+    try:
+        meta_beta2, meta_eps = resolve_adamw_hparams(hparams, source=f"{context}: metadata.json")
+    except (ValueError, TypeError):
+        # metadata.json is informational; an unusable entry is not a reason to
+        # refuse a P that the authoritative param_groups fully specify.
+        return
+    mismatches = [
+        f"{name}: metadata.json={meta_value!r} vs saved param_groups={saved_value!r}"
+        for name, meta_value, saved_value in (
+            ("beta2", meta_beta2, beta2),
+            ("eps", meta_eps, eps),
+        )
+        if meta_value != saved_value
+    ]
+    if mismatches:
+        warnings.warn(
+            f"{context}: AdamW hyper-parameters disagree ({'; '.join(mismatches)}). "
+            "Using the saved param_groups — they are what the optimizer actually ran "
+            "with — but the bundle's metadata.json is out of sync with its own run.",
+            UserWarning,
+            stacklevel=3,
+        )
 
 
 def resolve_model_factory(spec: ModelFactorySpec) -> ModelFactory:

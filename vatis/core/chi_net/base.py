@@ -19,6 +19,8 @@ from typing import Any
 import torch
 import torch.nn as nn
 
+from vatis.core.preconditioner import Preconditioner
+
 # Forward function type:
 #   forward_fn(model, batch) -> logits tensor
 ForwardFn = Callable[[nn.Module, Any], torch.Tensor]
@@ -48,12 +50,19 @@ class ChiNetResult:
         extras: estimator-specific bonus observables. Currently used by
             PerSequenceControlVariateEstimator to ship the cross-sample
             alignment matrix.
+        chi_net_p: the preconditioned counterpart ``Tr(Theta_P) =
+            ||P^{1/2} J||_F^2``, or ``None`` when ``compute`` was called without
+            a preconditioner. Computed in the **same pass** as ``chi_net`` (the
+            two share every backward and differ only in the elementwise weight
+            applied to the resulting VJP), so requesting it costs no extra
+            gradient evaluation.
     """
 
     chi_net: torch.Tensor
     n_backwards: int
     n_valid_tokens: int
     extras: dict[str, Any] = field(default_factory=dict)
+    chi_net_p: torch.Tensor | None = None
 
 
 class ChiNetEstimator(ABC):
@@ -76,6 +85,7 @@ class ChiNetEstimator(ABC):
         params: list[torch.nn.Parameter],
         micro_batch_size: int,
         generator: torch.Generator | None = None,
+        preconditioner: Preconditioner | None = None,
     ) -> ChiNetResult:
         """Estimate chi_net for the given (sub-)batch.
 
@@ -100,6 +110,15 @@ class ChiNetEstimator(ABC):
             generator: torch.Generator for reproducible probes; the caller
                 seeds this once per ``(checkpoint, eval_batch)`` call so that
                 ranks share probes in DDP.
+            preconditioner: optional diagonal ``P``
+                (:class:`~vatis.core.preconditioner.Preconditioner`), aligned
+                with ``params``. When given, the estimator additionally fills
+                :attr:`ChiNetResult.chi_net_p` with ``Tr(J P J^T)``, estimated
+                by the *same* mechanism and the *same* probes as ``chi_net``:
+                every place the raw path takes ``||g||^2`` of a VJP or a
+                per-sample gradient, the P path takes ``||P^{1/2} g||^2``. Raw
+                numerics are untouched — with or without a preconditioner,
+                ``chi_net`` is bit-identical for a given seed.
 
         Returns:
             A ChiNetResult.
