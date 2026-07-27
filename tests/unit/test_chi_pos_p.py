@@ -439,7 +439,7 @@ def test_bruteforce_exact_agreement_zero_variance_cv() -> None:
     )
 
 
-@pytest.mark.parametrize("method", ["hutchinson", "per_sequence_cv"])
+@pytest.mark.parametrize("method", ["hutchinson", "per_sequence_cv", "per_sequence_cv:store"])
 def test_bruteforce_matches_explicit_jacobian_stochastic(method: str) -> None:
     """T-bruteforce, stochastic branch: multi-output MLP, derived tolerance.
 
@@ -447,6 +447,18 @@ def test_bruteforce_matches_explicit_jacobian_stochastic(method: str) -> None:
     ``M = m|A| = 40`` — the spec's ceiling. Cross-entropy, so ``u`` is the real
     closed-form loss gradient. ``Theta_P = J P J^T`` is materialized and
     eigendecomposed; the estimator must match.
+
+    ``per_sequence_cv`` is run over **both of its memory paths** — the default
+    ``O(P)`` one and the opt-in ``O(B*P)`` one selected by
+    ``compute_alignment_matrix=True`` (the ``:store`` id). They are not two
+    spellings of the same code: the storing path caches the ``B`` per-sample
+    gradient vectors and forms *both* P-weighted terms from them (the exact term
+    from ``||P^{1/2} g_b||^2``, the Hutchinson term from a parameter-space
+    correction ``J^T v - sum_b coef_b g_b``), whereas the default path projects
+    in output space and never materializes a per-sample gradient. Holding both to
+    the same eigendecomposition reference is what stops a P-weighting regression
+    in the opt-in path from being silent — it is only ever reached when a caller
+    asks for the alignment matrix, so no other test would notice.
 
     Here the production path *is* stochastic (``m = 4`` leaves a rank-3
     per-sample subspace the control variate does not cover, and plain Hutchinson
@@ -511,11 +523,17 @@ def test_bruteforce_matches_explicit_jacobian_stochastic(method: str) -> None:
 
     n_h = 4096
     theta_p = (jac * p_diag.unsqueeze(0)) @ jac.T
+    store_grads = method.endswith(":store")
     if method == "hutchinson":
         estimator: object = HutchinsonEstimator(n_hutchinson=n_h)
         probe_matrix = theta_p
     else:
-        estimator = PerSequenceControlVariateEstimator(n_hutchinson=n_h)
+        # The memory pre-check only guards the storing path; keep the toy small
+        # enough that it passes on its own terms (B * n_params * 4 = 10 * 164 * 4
+        # = 6.6 kB) rather than relaxing ``memory_fraction`` to make it fit.
+        estimator = PerSequenceControlVariateEstimator(
+            n_hutchinson=n_h, compute_alignment_matrix=store_grads
+        )
         pi = loss_direction_projector(u, n_samples, m)
         eye = torch.eye(n_samples * m, dtype=torch.float64)
         probe_matrix = (eye - pi) @ theta_p @ (eye - pi)
@@ -535,6 +553,14 @@ def test_bruteforce_matches_explicit_jacobian_stochastic(method: str) -> None:
         preconditioner=precond,
     )
     assert result.chi_net_p is not None
+    if store_grads:
+        # Confirm the parametrization really landed on the opt-in path: only it
+        # produces the alignment matrix.
+        assert "alignment_matrix" in result.extras, (
+            "compute_alignment_matrix=True did not take the O(B*P) path, so this "
+            "case is not covering it"
+        )
+        assert tuple(result.extras["alignment_matrix"].shape) == (n_samples, n_samples)
     chi_net_p = float(result.chi_net_p)
     trace = reference["chi_net_p"]
     bound = K_SIGMA * std + fp32_output_slack(trace)
@@ -559,6 +585,67 @@ def test_bruteforce_matches_explicit_jacobian_stochastic(method: str) -> None:
         f"{method}: chi_pos_P {pos!r} vs exact {exact_pos!r} "
         f"(abs {abs(pos - exact_pos):.3e}, relative band "
         f"{K_SIGMA * std / trace:.3%})"
+    )
+
+
+def test_per_seq_cv_memory_paths_agree_on_chi_net_p() -> None:
+    """The two ``per_sequence_cv`` memory paths must agree on ``chi_net_P``
+    probe-for-probe, not merely within the stochastic tolerance.
+
+    The repo already asserts this for the raw ``chi_net``
+    (``test_chi_net.py::test_per_seq_cv_op_path_matches_storing_path``) because
+    the identity ``J^T v - sum_b coef_b g_b == J^T((I - Pi) v)`` is exact algebra,
+    not an approximation. Inserting the elementwise ``P`` weight does not disturb
+    that identity (``Pi`` acts in output space), so it must hold for
+    ``chi_net_P`` too. Same probe seed on both runs, so this is a much tighter
+    statement than "both converge to the same trace": it catches a P-weighting
+    difference between the paths in *either* term, at any ``n_hutchinson``, with
+    no tolerance reasoning involved. The residual allowed is the fp32 cast of the
+    returned scalar plus the fp64 cancellation the storing path performs when it
+    subtracts the correction (which the output-space path never forms).
+    """
+    model = Fp64MLP(in_dim=6, hidden=8, n_out=4, seed=0)
+    params = list(model.parameters())
+    n_params = sum(p.numel() for p in params)
+    gb = torch.Generator().manual_seed(1)
+    n_samples = 6
+    x = torch.randn(n_samples, 6, generator=gb, dtype=torch.float64)
+    y = torch.randint(0, 4, (n_samples,), generator=gb)
+    batch = (x, y)
+    gp = torch.Generator().manual_seed(21)
+    precond = Preconditioner.from_diagonal(
+        torch.rand(n_params, generator=gp, dtype=torch.float64) * 4.0 + 0.02
+    )
+
+    def run(store: bool) -> tuple[float, float]:
+        gen = torch.Generator().manual_seed(2024)
+        res = PerSequenceControlVariateEstimator(
+            n_hutchinson=16, compute_alignment_matrix=store
+        ).compute(
+            model,
+            batch,
+            tuple_forward,
+            loss_fn=ce_loss,
+            valid_mask_fn=all_valid_mask,
+            params=params,
+            micro_batch_size=3,
+            generator=gen,
+            preconditioner=precond,
+        )
+        assert res.chi_net_p is not None
+        return float(res.chi_net), float(res.chi_net_p)
+
+    raw_op, p_op = run(store=False)
+    raw_store, p_store = run(store=True)
+    assert abs(raw_op - raw_store) <= fp32_output_slack(raw_store) + 1e-9 * abs(raw_store), (
+        f"raw chi_net differs between memory paths: {raw_op!r} vs {raw_store!r}"
+    )
+    slack = fp32_output_slack(p_store) + 1e-9 * abs(p_store)
+    assert abs(p_op - p_store) <= slack, (
+        f"chi_net_P differs between the O(P) and O(B*P) memory paths: "
+        f"{p_op!r} (output-space projection) vs {p_store!r} (stored per-sample "
+        f"gradients) — abs {abs(p_op - p_store):.3e}, allowed {slack:.3e}. The P "
+        "weighting is not being applied identically in both terms of both paths."
     )
 
 
