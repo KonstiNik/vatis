@@ -909,6 +909,13 @@ class LocalBundleSource:
         bundle and use ``revision`` as the row label. Being a generator keeps
         the loading lazy: checkpoint ``i`` is read when the analyzer asks for
         it, and checkpoint ``i - 1`` is released at that moment.
+
+        One honest caveat: ``Analyzer.run``'s loop variable still references the
+        previous ``ModelBundle`` while the generator builds the next one, so the
+        *weights* of two checkpoints coexist for that moment (the optimizer
+        state and update batch of the previous one are already released).
+        Memory stays O(1) in the number of checkpoints either way; iterate the
+        source directly if you need the strict one-at-a-time bound.
         """
         for checkpoint in self:
             yield checkpoint.model_bundle, checkpoint.revision
