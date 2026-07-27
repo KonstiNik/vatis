@@ -284,6 +284,31 @@ class Preconditioner:
         either would not correspond to a kernel, and the spec fixes the
         convention: geometry factor only.
 
+        **Coordinates with ``exp_avg_sq == 0`` get ``P = 1/eps``, and that is
+        intended.** Real runs have such coordinates: any parameter element the
+        gradient never touched keeps ``v = 0`` exactly — unused vocabulary rows
+        of an embedding are the obvious population (measured on a real bundle:
+        ``exp_avg_sq.min() == 0`` at every checkpoint). With ``eps = 1e-8`` those
+        entries get ``P = 1e8``, of order ``1e6`` times a live coordinate's
+        weight. Consequences to be aware of when reading a number:
+
+        - ``chi_net^P = Tr(J P J^T) = sum_i P_i ||J_{:,i}||^2``, so a dead
+          coordinate is harmless *only if* its Jacobian column also vanishes on
+          the measurement batch. That holds when the measurement batch uses only
+          tokens the training batches used — and **fails in general**: a token
+          present in a held-out measurement batch but absent from the batches
+          that built ``v`` has a non-zero Jacobian column *and* ``P = 1/eps``, so
+          it enters ``chi_net^P`` with ~``1e6`` times the weight of a live
+          direction. On held-out data that is the normal case, not a corner case.
+        - No clipping, flooring or dead-coordinate mask is applied: the
+          convention ``P = 1/(sqrt(v_hat) + eps)`` is a frozen project decision
+          (``00_context.md`` §"P conventions", "do not revisit"), and quietly
+          altering it would make the reported ruler not the one the paper
+          defines. The right response is to *see* the effect, not to hide it:
+          :func:`epsilon_cap_mask` identifies the affected coordinates so a
+          caller can report what share of ``chi_net^P`` they carry (the golden
+          test does exactly that).
+
         Args:
             exp_avg_sq: 1-D flat second moment in the canonical order, e.g.
                 ``optimizer_state.flat_state("exp_avg_sq")``.
@@ -323,6 +348,40 @@ class Preconditioner:
         v_hat = exp_avg_sq.detach() / bias_correction
         diag = 1.0 / (v_hat.sqrt() + float(eps))
         return cls(diag=diag, descriptor=descriptor)
+
+
+def epsilon_cap_mask(
+    diag: torch.Tensor,
+    eps: float,
+    *,
+    rtol: float = 1e-6,
+) -> torch.Tensor:
+    """Which entries of an AdamW ``P`` sit at the ``1/eps`` ceiling.
+
+    ``P_i = 1/(sqrt(v_hat_i) + eps)`` is maximal, and equal to ``1/eps``, exactly
+    where ``v_hat_i == 0`` — a parameter coordinate no gradient ever touched (see
+    :meth:`Preconditioner.adamw` for why those exist in real runs and why they
+    are *not* clipped). Such coordinates carry ~``1/eps`` times the weight of a
+    converged one, so a ``chi_net^P`` that happens to be dominated by them is
+    saying something about dead directions rather than about learning.
+
+    This helper exists so that fact can be **surfaced** — count the mask, or use
+    it to split ``chi_net^P`` into a live and a capped part (run the estimator
+    twice with the same probe seed, once with ``P`` and once with
+    ``P * mask``; the trace estimate is linear in ``P`` at fixed probes, so the
+    two parts add up exactly).
+
+    Args:
+        diag: the ``P`` diagonal (``Preconditioner.diag``).
+        eps: the ``eps`` the ``P`` was built with.
+        rtol: relative slack, so fp32 round-off near the ceiling still counts.
+
+    Returns:
+        A boolean tensor, ``True`` where ``P`` is at the ceiling.
+    """
+    if float(eps) <= 0.0:
+        raise ValueError(f"eps must be > 0 to have a 1/eps ceiling, got {eps}")
+    return diag >= (1.0 / float(eps)) * (1.0 - float(rtol))
 
 
 # ------------------------------------------------------- weighted reductions

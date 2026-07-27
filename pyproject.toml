@@ -111,6 +111,7 @@ markers = [
     "cross_validation: tests that compare vatis observables against perspic (skipped in CI)",
     "gpu: tests that require a CUDA device (auto-skipped when none is available)",
     "slow: tests that take more than a few seconds",
+    "golden: WP0 end-to-end acceptance gate — writes its own checkpoint bundle, runs the raw + preconditioned rulers over it (run with `-m golden`)",
 ]
 addopts = "-q --strict-markers"
 filterwarnings = [
