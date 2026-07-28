@@ -253,13 +253,20 @@ examples/
 ├── benchmark/                     # A100 perf suite: single_gpu / ddp_scaling / accuracy (see benchmark/README.md)
 ├── spectral_tail_experiment.py    # research: spectral tail overlap (4 probes, 5 model scales)
 ├── spectral_tail_evaluate.py      # evaluation plots (--compute flag for FLOPs x-axis)
-└── spectral_tail/                 # outputs + README with hypothesis and findings
-    ├── README.md
-    ├── results_pythia-{14m,31m,70m,160m,410m}.parquet
-    └── figures/                   # all plots (step-based and _compute variants)
+├── spectral_tail/                 # outputs + README with hypothesis and findings
+│   ├── README.md
+│   ├── results_pythia-{14m,31m,70m,160m,410m}.parquet
+│   └── figures/                   # all plots (step-based and _compute variants)
+├── two_rulers_llama.py            # WP0 GPU example, phase 1: both rulers over a bundle
+├── two_rulers_llama_evaluate.py   # WP0 GPU example, phase 2: the figure + tables
+└── output/                        # outputs of the WP0 example
+    ├── results.parquet, run_summary.json, performance.csv
+    └── two_rulers_llama.png       # chi_pos and chi_pos^P vs step and vs train loss
 ```
 
 The deployment example is the canonical "does vatis work end-to-end on real weights" check. After any significant change to the analyzer or an estimator, **re-run `examples/pythia_sweep.py` and check the plots haven't moved unexpectedly**. The plots are an integration test the unit suite can't replicate.
+
+The **WP0 GPU example** (`examples/two_rulers_llama.py`, findings and sizing in `examples/BENCHMARK.md`) is the same check for the *bundle* path: a real checkpoint bundle written by the project's own training run, both rulers on the GPU, and the one figure a human looks at to see `chi_pos^P` on a transformer for the first time. It needs a bundle to exist, so it is not runnable from a clean checkout — the training half lives in the training repo (`runs/example_bundle_run.sh`) and hands over on disk.
 
 The spectral tail experiment (`examples/spectral_tail/README.md`) is a research investigation using vatis to probe whether `chi_pos(A, B)` can detect when training resolves a shared semantic feature (matrix multiplication) between texts in different programming languages. It runs across five Pythia model scales (14m–410m) with four probes (Python matmul, C++ matmul, English prose matmul, C++ string-processing as negative control).
 
