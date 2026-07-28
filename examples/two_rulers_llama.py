@@ -489,10 +489,18 @@ def performance_table(
     timings: list[CheckpointTiming],
     *,
     total_s: float,
+    script_s: float,
     peak_gpu_mb: float | None,
     n_rows: int,
 ) -> str:
-    """The performance table as text. Spec 05 §3: a deliverable, not a nicety."""
+    """The performance table as text. Spec 05 §3: a deliverable, not a nicety.
+
+    ``total_s`` is the sweep — every checkpoint loaded, both rulers, rows into
+    the sink — and is the number to budget a grid run with. ``script_s`` adds
+    this example's extra diagnostics (the ``P = I`` re-check and the
+    epsilon-ceiling split, several extra estimator passes) which a production
+    sweep would not pay.
+    """
     peak_total = "-" if peak_gpu_mb is None else f"{peak_gpu_mb:.0f}"
     lines = [
         f"{'checkpoint':>16} {'step':>6} {'load_s':>8} {'analysis_s':>11} {'peak_gpu_mb':>12}",
@@ -514,12 +522,20 @@ def performance_table(
     lines.append("")
     lines.append(f"  checkpoints          : {len(timings)}")
     lines.append(f"  result rows          : {n_rows}")
-    lines.append(f"  end-to-end wall time : {total_s:.1f} s")
-    lines.append(f"  peak GPU memory      : {peak_total} MiB (torch allocator, this process)")
-    lines.append(
-        "  caveat               : measured on a SHARED GPU (a co-tenant process was "
-        "resident); wall times are as-measured, not tuned or best-of-N."
-    )
+    lines.append(f"  sweep wall time      : {total_s:.1f} s  (load + both rulers + sink)")
+    lines.append(f"  script wall time     : {script_s:.1f} s  (+ P=I re-check, epsilon split)")
+    if peak_gpu_mb is None:
+        lines.append("  peak GPU memory      : n/a (CPU run)")
+        lines.append(
+            "  caveat               : wall times are as-measured on whatever this host was "
+            "doing at the time, not tuned or best-of-N."
+        )
+    else:
+        lines.append(f"  peak GPU memory      : {peak_total} MiB (torch allocator, this process)")
+        lines.append(
+            "  caveat               : the GPU may be shared (the allocator only sees this "
+            "process); wall times are as-measured, not tuned or best-of-N."
+        )
     return "\n".join(lines)
 
 
@@ -609,6 +625,7 @@ def resolve_device(requested: str) -> torch.device:
 
 
 def main(argv: list[str] | None = None) -> int:
+    t_script = time.perf_counter()
     args = parse_args(argv)
     args.device = resolve_device(args.device)
     torch.manual_seed(args.seed)
@@ -756,9 +773,16 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     # ---- performance table: print + save.
-    table = performance_table(timings, total_s=total_s, peak_gpu_mb=peak_gpu_mb, n_rows=len(rows))
+    script_s = time.perf_counter() - t_script
+    table = performance_table(
+        timings,
+        total_s=total_s,
+        script_s=script_s,
+        peak_gpu_mb=peak_gpu_mb,
+        n_rows=len(rows),
+    )
     print("\n" + "=" * 78)
-    print("performance (analysis phase; a co-tenant process shares this GPU)")
+    print(f"performance (analysis phase, {args.device})")
     print("=" * 78)
     print(table)
     write_csv(out_dir / "performance.csv", timings)
@@ -828,6 +852,7 @@ def main(argv: list[str] | None = None) -> int:
         "performance": {
             "per_checkpoint": [asdict(t) for t in timings],
             "total_wall_s": total_s,
+            "script_wall_s": script_s,
             "peak_gpu_mb": peak_gpu_mb,
             "n_rows": len(rows),
             "table": table,

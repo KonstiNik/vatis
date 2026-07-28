@@ -275,12 +275,11 @@ def caption(summary: dict[str, Any], scale_name: str = "log") -> str:
         "never moved, and they suppress chi_pos^P by inflating chi_net^P."
     )
     perf = summary["performance"]
+    device = summary["config"]["device"]
+    hardware = f"{perf['peak_gpu_mb']:.0f} MiB peak GPU, untuned" if perf.get("peak_gpu_mb") else ""
     lines.append(
-        f"Analysis: {len(perf['per_checkpoint'])} checkpoints, "
-        f"{perf['total_wall_s']:.1f} s total, "
-        f"{perf['peak_gpu_mb']:.0f} MiB peak GPU (shared card, untuned)"
-        if perf.get("peak_gpu_mb")
-        else f"Analysis: {perf['total_wall_s']:.1f} s total (CPU)"
+        f"Analysis sweep: {len(perf['per_checkpoint'])} checkpoints in "
+        f"{perf['total_wall_s']:.1f} s on {device}" + (f", {hardware}" if hardware else "")
     )
     return "\n".join(textwrap.fill(line, width=165) for line in lines)
 
@@ -320,7 +319,7 @@ def span(values: list[float], spec: str) -> str:
 def print_tables(rows: list[dict[str, Any]], summary: dict[str, Any]) -> None:
     perf = summary["performance"]
     print("=" * 78)
-    print("performance (analysis phase; a co-tenant process shared this GPU)")
+    print(f"performance (analysis phase, {summary['config']['device']})")
     print("=" * 78)
     print(perf["table"])
 

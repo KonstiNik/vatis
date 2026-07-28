@@ -191,17 +191,22 @@ checkpoints. Analysis: `per_sequence_cv`, `n_hutchinson=32`,
 
 | stage | per checkpoint | total |
 |---|---|---|
-| bundle load (weights → GPU) | 0.05–0.09 s | 1.1 s |
-| analysis (3 self pairs + 2 cross pairs, both rulers) | 4.11–4.87 s | 79.2 s |
-| end-to-end (incl. sink + summary) | — | 80.6 s |
+| bundle load (weights → GPU) | 0.05–0.35 s (mean 0.09) | 1.7 s |
+| analysis (3 self pairs + 2 cross pairs, both rulers) | 4.04–4.46 s (mean 4.13) | 78.5 s |
+| **sweep** (load + both rulers + sink) | — | **80.5 s** |
+| script total (+ the `P = I` re-check and the epsilon split) | — | 93.7 s |
 | peak GPU memory (torch allocator, this process) | — | 1875 MiB |
+
+Budget a grid run with the *sweep* row; the extra 13 s are this example's own
+diagnostics, which a production sweep does not pay.
 
 **Caveat attached to every number above: the GPU was shared** with an unrelated
 process (~425 MiB resident, ~33% utilization) for the whole run. Nothing was
 tuned or best-of-N'd; an earlier identical run of the same script came out at
-3.51 s mean analysis time instead of 4.17 s, which is the size of the
-contention noise. Both rulers cost the same as one: the P observables reuse the
-raw pass's probes, so `chi_net^P` adds no backward.
+3.51 s mean analysis time instead of 4.13 s, which is the size of the
+contention noise. (The observable *values* are unaffected — they reproduce
+bit-for-bit across those runs.) Both rulers cost the same as one: the P
+observables reuse the raw pass's probes, so `chi_net^P` adds no backward.
 
 Rule of thumb for budgeting the WP1 grid from this: **~4 s per checkpoint per
 (3 batches + 2 cross pairs) at 11M parameters and 4k measurement tokens**, plus
