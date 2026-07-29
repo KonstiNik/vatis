@@ -39,6 +39,7 @@ The rows land in the existing long format as new ``observable`` values, plus one
 from __future__ import annotations
 
 import time
+import warnings
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -58,6 +59,7 @@ from vatis.core.normalization import (
 from vatis.core.observables import (
     chi_loss_cross_entropy_unnormalized,
     chi_pos,
+    chi_pos_exceeds_cauchy_schwarz,
 )
 from vatis.core.preconditioner import (
     RAW_DESCRIPTOR,
@@ -374,11 +376,29 @@ class Analyzer:
         ckpt_id: str,
         revision: str,
     ) -> CheckpointResult:
-        result = CheckpointResult(checkpoint_id=ckpt_id, revision=revision)
         bundle.model.eval()
-        # Always require_grad for the analyzer's backwards.
+        # The analyzer needs requires_grad for its backwards, but the bundle may
+        # be the *caller's* model: a user-built ModelBundle whose params include a
+        # deliberately frozen tensor used to come back unfrozen. Save the flags and
+        # restore them in the finally below, so measuring a model does not mutate
+        # it. (The bundle loaders set requires_grad themselves on models they own;
+        # that is their business, and restoring is a no-op there.)
+        saved_requires_grad = [p.requires_grad for p in bundle.params]
         for p in bundle.params:
             p.requires_grad_(True)
+        try:
+            return self._run_one_checkpoint_inner(bundle, ckpt_id, revision)
+        finally:
+            for p, flag in zip(bundle.params, saved_requires_grad, strict=True):
+                p.requires_grad_(flag)
+
+    def _run_one_checkpoint_inner(
+        self,
+        bundle: ModelBundle,
+        ckpt_id: str,
+        revision: str,
+    ) -> CheckpointResult:
+        result = CheckpointResult(checkpoint_id=ckpt_id, revision=revision)
 
         # The preconditioner is per checkpoint (an Adam P is built from *this*
         # checkpoint's saved optimizer state), resolved once and reused for every
@@ -891,6 +911,27 @@ class Analyzer:
             values["chi_pos_P"] = chi_pos_p_value
             for name in P_OBSERVABLES:
                 descriptors[name] = precond.descriptor
+
+        # |chi_pos| <= 1 is a Cauchy-Schwarz consequence, so a violation is not a
+        # measurement — it is an inconsistency between the three components, and
+        # the only symptom a user ever gets. Warn rather than raise: chi_net is a
+        # stochastic estimate and a legitimate chi_pos near 1 can overshoot at
+        # small n_hutchinson, so refusing to publish would break honest runs.
+        for name in ("chi_pos", "chi_pos_P"):
+            value = values.get(name)
+            if value is not None and chi_pos_exceeds_cauchy_schwarz(value):
+                warnings.warn(
+                    f"{name} = {value:.6g} for ({batch_a!r}, {batch_b!r}) at checkpoint "
+                    f"{ckpt_id!r} is outside the [-1, 1] range the LNP definition "
+                    "guarantees. Cauchy-Schwarz makes that impossible for a consistent "
+                    "triple, so the three components are not describing the same loss. "
+                    "Most likely: loss_fn is not mean-reduced over the same valid tokens "
+                    "chi_loss normalizes by (a sum-reduced CE inflates chi_pos by exactly "
+                    "N_valid^2), or loss_fn's ignore_index differs from the analyzer's. "
+                    "A very small n_hutchinson can also overshoot legitimately.",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
         rows: list[ResultRow] = []
         for name in self.observables:
