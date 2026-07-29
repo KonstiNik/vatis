@@ -75,7 +75,7 @@ from vatis.distributed.ddp import (
     is_main_rank,
 )
 from vatis.distributed.sharding import shard_batch
-from vatis.models.hf import ModelBundle, load_hf_model
+from vatis.models.hf import ModelBundle, ValidMaskFn, load_hf_model
 from vatis.sinks.base import ResultRow, ResultSink
 from vatis.sinks.parquet import ParquetSink
 
@@ -123,6 +123,12 @@ P_OBSERVABLES: tuple[str, ...] = (
 #                                       legitimately empty)
 PreconditionerFactory = Callable[[str], Preconditioner | None]
 PreconditionerLike = str | Preconditioner | PreconditionerFactory
+
+# The mask closure every accumulator in ``_compute_self_pair`` shares: unlike a
+# bundle's ``ValidMaskFn`` it never returns ``None`` (see
+# ``_intersected_valid_mask_fn``). Bound here as a module-level alias because
+# ``Callable`` itself is deleted at the bottom of this module.
+EffectiveMaskFn = Callable[[Any, torch.Tensor], torch.Tensor]
 
 
 @dataclass
@@ -516,6 +522,11 @@ class Analyzer:
         )
         local_batch = move_batch(local_batch, device)
 
+        # THE mask, built once and used by every accumulator below: the bundle's
+        # ``valid_mask_fn`` intersected with ``labels != ignore_index``. See
+        # ``_intersected_valid_mask_fn`` for why all three paths need it.
+        valid_mask_fn = _intersected_valid_mask_fn(bundle.valid_mask_fn, self.ignore_index)
+
         # ----- chi_loss (per-rank partial, raw sum) -----
         # We accumulate the UN-normalized squared sum
         # ``Sigma_valid (softmax - onehot)^2`` across micro-batches and ranks,
@@ -528,19 +539,11 @@ class Analyzer:
             with torch.no_grad():
                 logits = bundle.forward_fn(bundle.model, micro)
             targets = _extract_targets(micro)
-            vmask = bundle.valid_mask_fn(micro, logits)
-            # Numerator and denominator must agree on which positions count.
-            # We compute the intersection of (labels != ignore_index) and the
-            # bundle's valid_mask_fn once and use it for both. Without this,
-            # a user-supplied valid_mask_fn that disagrees with labels=-100
-            # (e.g. all-True for an MLP with -100 labels) would leave the
-            # numerator and denominator counting different positions and
-            # chi_loss would be silently miscomputed.
-            effective_mask = valid_token_mask(
-                targets, ignore_index=self.ignore_index, attention_mask=vmask
-            )
+            # Numerator and denominator must agree on which positions count, and
+            # so must chi_net and delta_loss below -- hence the one shared mask.
+            effective_mask = valid_mask_fn(micro, logits)
             raw = chi_loss_cross_entropy_unnormalized(
-                logits, targets, ignore_index=self.ignore_index, attention_mask=vmask
+                logits, targets, ignore_index=self.ignore_index, attention_mask=effective_mask
             )
             chi_loss_raw_local = chi_loss_raw_local + raw.to(dtype=torch.float64)
             n_valid_local += int(effective_mask.sum().item())
@@ -569,12 +572,11 @@ class Analyzer:
                 # of micro / total valid tokens (the loss_fn already divides by
                 # the micro's n_valid, so we multiply back to get an unscaled
                 # sum and divide by total).
-                vmask_micro = bundle.valid_mask_fn(micro, logits)
-                n_valid_micro = (
-                    int(vmask_micro.sum().item())
-                    if vmask_micro is not None
-                    else int(torch.tensor(logits.shape[:-1]).prod().item())
-                )
+                # Counted over the SAME set as n_total_for_loss (the intersected
+                # mask). Using the un-intersected valid_mask_fn count here made
+                # delta_loss depend on micro_batch_size whenever the two masks
+                # disagreed -- see _intersected_valid_mask_fn.
+                n_valid_micro = int(valid_mask_fn(micro, logits).sum().item())
                 if n_valid_micro == 0:
                     del logits
                     continue
@@ -607,12 +609,25 @@ class Analyzer:
             local_batch,
             bundle.forward_fn,
             loss_fn=bundle.loss_fn,
-            valid_mask_fn=bundle.valid_mask_fn,
+            valid_mask_fn=valid_mask_fn,
             params=bundle.params,
             micro_batch_size=self.micro_batch_size,
             generator=gen,
             preconditioner=precond,
         )
+        # Permanent tripwire. Both paths now mask with the same closure, so their
+        # valid-position counts agree by construction; a disagreement means a
+        # masking path drifted apart again (this repo's most expensive bug class,
+        # twice) and would rescale chi_pos by the ratio of the two masks. Loud,
+        # not logged: a plausible-looking wrong chi_pos is the failure mode.
+        if chi_net_result.n_valid_tokens != n_valid_local:
+            raise RuntimeError(
+                f"chi_net covered {chi_net_result.n_valid_tokens} valid output positions but "
+                f"chi_loss / n_valid counted {n_valid_local} (checkpoint {ckpt_id!r}, batch "
+                f"{batch_name!r}, estimator {estimator.name!r}). The two must be the same set "
+                "-- chi_pos would be rescaled by their ratio. This is an internal invariant "
+                "of vatis, not a user error; please report it."
+            )
         chi_net_local = chi_net_result.chi_net.to(dtype=torch.float64).to(device)
         if precond is None:
             chi_net_p_local = None
@@ -1012,6 +1027,44 @@ def _add_grads_into_flat(
         if g is not None:
             flat[offset : offset + n] += g.detach().to(dtype=torch.float32).reshape(-1)
         offset += n
+
+
+def _intersected_valid_mask_fn(
+    valid_mask_fn: ValidMaskFn,
+    ignore_index: int,
+) -> EffectiveMaskFn:
+    """Build THE mask every accumulator uses: ``valid_mask_fn`` AND the labels.
+
+    A position counts iff the bundle's ``valid_mask_fn`` accepts it **and** its
+    label is not ``ignore_index``. Both conditions have to hold in all three
+    places, not only in ``chi_loss``:
+
+    - a position whose label is ``ignore_index`` contributes nothing to the loss,
+      so its Jacobian rows have no business in ``chi_net = ||grad_theta f||_F^2``
+      (nor in ``chi_net^P``) — hence the probe handed to the estimator is masked
+      with *this* mask, not with ``valid_mask_fn`` alone;
+    - the per-micro-batch weight that reassembles ``grad_theta L`` from
+      micro-batch gradients has to be counted over the same set the global
+      denominator (``n_valid``, and hence ``chi_loss``) uses, or ``delta_loss``
+      comes out rescaled *and* dependent on ``micro_batch_size``.
+
+    Returning one closure and threading it through every accumulator is what
+    makes "padding is handled at one place" (``CLAUDE.md`` §Conventions) true
+    rather than aspirational. The mask itself is still computed by
+    :func:`vatis.core.normalization.valid_token_mask`; this only composes it with
+    whatever the bundle supplied.
+
+    The result is never ``None`` (unlike a raw ``valid_mask_fn``): "no mask" and
+    "everything valid" are the same thing once the labels are folded in, and
+    collapsing the two removes a branch from every call site.
+    """
+
+    def fn(batch: Any, logits: torch.Tensor) -> torch.Tensor:
+        vmask = valid_mask_fn(batch, logits)
+        targets = _extract_targets(batch)
+        return valid_token_mask(targets, ignore_index=ignore_index, attention_mask=vmask)
+
+    return fn
 
 
 def _extract_targets(batch: Any) -> torch.Tensor:
