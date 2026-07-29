@@ -3,10 +3,19 @@
 We compare against a single-process baseline and assert that:
     - chi_loss is identical (closed form is invariant under sharding)
     - delta_loss is identical (re-weighted all-reduce gives the right grad)
-    - chi_net is close (Hutchinson is identical because the same probe seed
-      is shared across ranks; ranks just partition which probe entries they
-      backprop)
+    - chi_net is close, but only in a *sampling* sense — see below
     - chi_pos matches within Hutchinson noise
+
+**Correction to an earlier version of this docstring.** It claimed "Hutchinson is
+identical because the same probe seed is shared across ranks; ranks just
+partition which probe entries they backprop". That is not what happens. Each rank
+seeds its generator identically and then draws a *full* probe for **its own
+shard**, so the same random numbers are applied to *different samples*. The DDP
+total is therefore a different (still unbiased) estimate of the same trace, not
+the single-process one, and the measured gap is a few percent — which is why the
+`chi_net` bound here is loose. The shared seed also *correlates* the shards'
+estimates, so it slightly increases the variance of the total relative to
+independent probes; it buys reproducibility, not agreement.
 """
 
 from __future__ import annotations

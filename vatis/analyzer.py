@@ -601,8 +601,14 @@ class Analyzer:
             distribution=self.hutchinson_distribution,
         )
         # Probe seed must be SHARED across ranks for the same (ckpt, batch).
+        # The generator is deliberately on the CPU even for a CUDA run: probes are
+        # drawn on the CPU and copied to the device
+        # (``vatis.core.probes.make_probe``), so the ``hutchinson_seed`` recorded
+        # in the sink identifies the same probe set on every device. A CUDA
+        # generator would make one seed mean different probes on CPU vs GPU, and
+        # the two runs could then only agree to within the Hutchinson noise floor.
         probe_seed = _per_call_seed(self.seed, ckpt_id, batch_name)
-        gen = torch.Generator(device=device)
+        gen = torch.Generator()
         gen.manual_seed(probe_seed)
         chi_net_result: ChiNetResult = estimator.compute(
             bundle.model,
