@@ -14,19 +14,47 @@ toy, growing as ``1/sqrt(n_h)``), which is far above the ~5e-08 reduction-order
 difference everything else shows. Drawing on the CPU makes a seed mean one probe
 set everywhere.
 
-The cost is one host-to-device copy of the probe per draw. The draw itself is
-unchanged (same ``int64`` ``randint``, same arithmetic), so **CPU runs are
-bit-identical to before**; only device runs move, and they move onto the CPU
-values.
+**The Rademacher draw is bit-packed**, because the naive version is far too slow
+to ship. Generating one ``fp32`` element per probe entry on the CPU costs a *full
+CPU RNG call per entry*; measured on the WP0 example's probe shape
+``(8, 512, 4096)`` = 16.8M entries, RTX 3090 Ti:
+
+===========================================================  ==============
+draw strategy                                                 ms per probe
+===========================================================  ==============
+on-device ``randint`` (device-dependent values, the old way)          0.69
+CPU ``int64 randint`` -> fp32 -> H2D (naive CPU draw)               125.25
+CPU ``uint8 randint`` -> H2D -> expand on device                     44.16
+**CPU packed bytes -> H2D -> bit-unpack on device**                  11.85
+===========================================================  ==============
+
+So the packing matters by 10.6x: a Rademacher entry needs exactly **one random
+bit**, and a uniform ``uint8`` supplies eight. We draw ``ceil(N/8)`` bytes on the
+CPU, ship 1/8 as many bytes, and unpack on the device where the work is cheap.
+Each bit of a uniform byte is an independent fair coin, so this is exactly the
+same distribution -- no per-bit-position bias (asserted in
+``tests/unit/test_probes.py``).
+
+The residual overhead over an on-device draw is ~17x per probe, which on the WP0
+example works out to ~1.1 s per checkpoint against ~4.1 s of backwards (~26%).
+The naive CPU draw was ~12 s per checkpoint (3.5x end to end) and would have made
+the 8B production target infeasible, which is why it is not what ships.
+
+``gaussian`` probes cannot be bit-packed and take the plain CPU draw. They are not
+the default; if a large-scale run needs them, that is the place to look.
 """
 
 from __future__ import annotations
 
+import math
 from typing import Literal
 
 import torch
 
 ProbeDistribution = Literal["rademacher", "gaussian"]
+
+# One random *bit* is all a Rademacher entry needs; a uniform byte supplies 8.
+_BITS_PER_BYTE = 8
 
 
 def make_probe(
@@ -71,18 +99,36 @@ def make_probe(
             "destination with device=..."
         )
     if distribution == "rademacher":
-        # {0, 1} via randint, shifted to {-1, +1}: exact in fp32 and cheaper than
-        # a sign() of a uniform. Drawn on CPU with the same dtype and arithmetic
-        # as before, so CPU probe values are unchanged by the move.
-        raw = torch.randint(0, 2, shape, device="cpu", dtype=torch.int64, generator=generator)
-        probe = raw.to(dtype=dtype) * 2.0 - 1.0
-    elif distribution == "gaussian":
-        probe = torch.randn(shape, device="cpu", dtype=dtype, generator=generator)
-    else:
-        raise ValueError(
-            f"unknown probe distribution: {distribution!r}. expected 'rademacher' or 'gaussian'."
-        )
-    return probe.to(device=target)
+        return _rademacher_packed(shape, dtype=dtype, target=target, generator=generator)
+    if distribution == "gaussian":
+        # Cannot be bit-packed; the plain CPU draw is the cost of a Gaussian probe.
+        return torch.randn(shape, device="cpu", dtype=dtype, generator=generator).to(device=target)
+    raise ValueError(
+        f"unknown probe distribution: {distribution!r}. expected 'rademacher' or 'gaussian'."
+    )
+
+
+def _rademacher_packed(
+    shape: tuple[int, ...],
+    *,
+    dtype: torch.dtype,
+    target: torch.device,
+    generator: torch.Generator | None,
+) -> torch.Tensor:
+    """A +-1 probe from CPU-drawn packed bytes, unpacked on ``target``.
+
+    Draws ``ceil(N/8)`` uniform bytes on the CPU (one RNG call per *eight*
+    entries instead of one per entry, the 10.6x in the module docstring), ships
+    them, and expands bit ``k`` of byte ``i`` into entry ``8i + k``. Every bit of
+    a uniform byte is an independent fair coin, so the result is an exact
+    Rademacher vector; the values depend only on the seed, never on ``target``.
+    """
+    n_elem = math.prod(shape) if shape else 1
+    n_bytes = (n_elem + _BITS_PER_BYTE - 1) // _BITS_PER_BYTE
+    packed = torch.randint(0, 256, (n_bytes,), device="cpu", dtype=torch.uint8, generator=generator)
+    shifts = torch.arange(_BITS_PER_BYTE, device=target, dtype=torch.uint8)
+    bits = (packed.to(device=target).unsqueeze(1) >> shifts) & 1
+    return (bits.reshape(-1)[:n_elem].to(dtype=dtype) * 2.0 - 1.0).reshape(shape)
 
 
 def mask_probe(probe: torch.Tensor, valid_mask: torch.Tensor | None) -> torch.Tensor:

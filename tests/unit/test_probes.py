@@ -16,6 +16,33 @@ def test_rademacher_probe_has_unit_variance_in_expectation() -> None:
     assert abs(float(probe.mean())) < 0.05
 
 
+def test_bit_packing_introduces_no_per_bit_position_bias() -> None:
+    """The Rademacher draw packs 8 entries per CPU-drawn byte (see the module
+    docstring). Bit ``k`` of a uniform byte is an independent fair coin, so every
+    residue class mod 8 must be unbiased — a packing or shift bug would show up as
+    one position drifting while the overall mean still looked fine.
+    """
+    g = torch.Generator()
+    g.manual_seed(20260729)
+    flat = make_probe((512, 512), generator=g).reshape(-1)
+    assert torch.all((flat == 1.0) | (flat == -1.0))
+    n = flat.numel() // 8
+    # 4-sigma bound on the mean of n fair coins mapped to +-1: 4/sqrt(n)
+    bound = 4.0 / n**0.5
+    for k in range(8):
+        assert abs(float(flat[k::8].mean())) < bound, (k, float(flat[k::8].mean()), bound)
+
+
+@pytest.mark.parametrize("shape", [(1,), (7,), (8,), (9,), (3, 5), (2, 3, 4)])
+def test_rademacher_shapes_including_non_multiples_of_eight(shape: tuple[int, ...]) -> None:
+    """The packed draw slices ``ceil(N/8)*8`` bits back to ``N``; check the tail."""
+    g = torch.Generator()
+    g.manual_seed(1)
+    probe = make_probe(shape, generator=g)
+    assert tuple(probe.shape) == shape
+    assert torch.all((probe == 1.0) | (probe == -1.0))
+
+
 def test_gaussian_probe_has_unit_variance_in_expectation() -> None:
     g = torch.Generator(device="cpu")
     g.manual_seed(0)

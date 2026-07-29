@@ -298,9 +298,9 @@
           "n_distinct_tokens_in_batch_b": 574
         }
       ],
-      "chi_net_p_full": 291960468275200.0,
-      "chi_net_p_live_only": 262082712829952.0,
-      "chi_net_p_ceiling_share": 0.10233493466343335
+      "chi_net_p_full": 292609377435648.0,
+      "chi_net_p_live_only": 262669193969664.0,
+      "chi_net_p_ceiling_share": 0.10232133955641454
     },
     {
       "step": 2,
@@ -557,9 +557,9 @@
           "n_distinct_tokens_in_batch_b": 574
         }
       ],
-      "chi_net_p_full": 108633874497536.0,
-      "chi_net_p_live_only": 108205678002176.0,
-      "chi_net_p_ceiling_share": 0.003941648011180087
+      "chi_net_p_full": 107821496532992.0,
+      "chi_net_p_live_only": 107422072963072.0,
+      "chi_net_p_ceiling_share": 0.003704489204504609
     },
     {
       "step": 27,
@@ -848,8 +848,8 @@
           "n_distinct_tokens_in_batch_b": 574
         }
       ],
-      "chi_net_p_full": 7689599925092352.0,
-      "chi_net_p_live_only": 7689599925092352.0,
+      "chi_net_p_full": 7718901802598400.0,
+      "chi_net_p_live_only": 7718901802598400.0,
       "chi_net_p_ceiling_share": 0.0
     }
   ],
@@ -859,142 +859,142 @@
       {
         "checkpoint_id": "bundle@step0",
         "step": 0,
-        "load_s": 0.3871226030169055,
-        "analysis_s": 14.799005853012204,
-        "peak_gpu_mb": 1640.2783203125
+        "load_s": 0.43832548800855875,
+        "analysis_s": 6.506892074015923,
+        "peak_gpu_mb": 1642.5283203125
       },
       {
         "checkpoint_id": "bundle@step1",
         "step": 1,
-        "load_s": 0.20883206301368773,
-        "analysis_s": 14.661440187948756,
-        "peak_gpu_mb": 1769.70361328125
+        "load_s": 0.44903091195737943,
+        "analysis_s": 4.216625678003766,
+        "peak_gpu_mb": 1770.8125
       },
       {
         "checkpoint_id": "bundle@step2",
         "step": 2,
-        "load_s": 0.19656264799414203,
-        "analysis_s": 12.979547330003697,
-        "peak_gpu_mb": 1769.70361328125
+        "load_s": 0.45681475702440366,
+        "analysis_s": 3.5943097450071946,
+        "peak_gpu_mb": 1770.8125
       },
       {
         "checkpoint_id": "bundle@step3",
         "step": 3,
-        "load_s": 0.3034649429609999,
-        "analysis_s": 13.37945564900292,
-        "peak_gpu_mb": 1769.70361328125
+        "load_s": 0.4577722499961965,
+        "analysis_s": 4.28757308999775,
+        "peak_gpu_mb": 1770.8125
       },
       {
         "checkpoint_id": "bundle@step4",
         "step": 4,
-        "load_s": 0.4598539030412212,
-        "analysis_s": 13.810699803987518,
-        "peak_gpu_mb": 1769.70361328125
+        "load_s": 0.42065008799545467,
+        "analysis_s": 3.9313768119900487,
+        "peak_gpu_mb": 1770.8125
       },
       {
         "checkpoint_id": "bundle@step6",
         "step": 6,
-        "load_s": 0.3473079369869083,
-        "analysis_s": 13.518091687990818,
-        "peak_gpu_mb": 1769.70361328125
+        "load_s": 0.4544533689622767,
+        "analysis_s": 3.9443607260473073,
+        "peak_gpu_mb": 1770.8125
       },
       {
         "checkpoint_id": "bundle@step8",
         "step": 8,
-        "load_s": 0.34352618898265064,
-        "analysis_s": 13.730178377998527,
-        "peak_gpu_mb": 1769.70361328125
+        "load_s": 0.3890915709780529,
+        "analysis_s": 3.2166049140505493,
+        "peak_gpu_mb": 1770.8125
       },
       {
         "checkpoint_id": "bundle@step11",
         "step": 11,
-        "load_s": 0.07413623598404229,
-        "analysis_s": 16.05204852099996,
-        "peak_gpu_mb": 1769.70361328125
+        "load_s": 0.367986214987468,
+        "analysis_s": 3.966472400992643,
+        "peak_gpu_mb": 1770.8125
       },
       {
         "checkpoint_id": "bundle@step15",
         "step": 15,
-        "load_s": 0.05882577400188893,
-        "analysis_s": 12.890955162001774,
-        "peak_gpu_mb": 1769.70361328125
+        "load_s": 0.41468750999774784,
+        "analysis_s": 4.039526718028355,
+        "peak_gpu_mb": 1770.8125
       },
       {
         "checkpoint_id": "bundle@step20",
         "step": 20,
-        "load_s": 0.344052228028886,
-        "analysis_s": 13.089873060001992,
-        "peak_gpu_mb": 1769.70361328125
+        "load_s": 0.44631176098482683,
+        "analysis_s": 4.033456158009358,
+        "peak_gpu_mb": 1770.8125
       },
       {
         "checkpoint_id": "bundle@step27",
         "step": 27,
-        "load_s": 0.321242448000703,
-        "analysis_s": 16.559905216970947,
-        "peak_gpu_mb": 1769.70361328125
+        "load_s": 0.4657656620256603,
+        "analysis_s": 3.521403790975455,
+        "peak_gpu_mb": 1770.8125
       },
       {
         "checkpoint_id": "bundle@step37",
         "step": 37,
-        "load_s": 0.3347171409986913,
-        "analysis_s": 17.401620825985447,
-        "peak_gpu_mb": 1769.70361328125
+        "load_s": 0.4332143380306661,
+        "analysis_s": 3.493609839002602,
+        "peak_gpu_mb": 1770.8125
       },
       {
         "checkpoint_id": "bundle@step49",
         "step": 49,
-        "load_s": 0.06836978904902935,
-        "analysis_s": 16.1374908949947,
-        "peak_gpu_mb": 1769.70361328125
+        "load_s": 0.43494673899840564,
+        "analysis_s": 3.7030068010208197,
+        "peak_gpu_mb": 1770.8125
       },
       {
         "checkpoint_id": "bundle@step67",
         "step": 67,
-        "load_s": 0.3009657240472734,
-        "analysis_s": 13.899667618970852,
-        "peak_gpu_mb": 1769.70361328125
+        "load_s": 0.4011531839496456,
+        "analysis_s": 3.3963858200004324,
+        "peak_gpu_mb": 1770.8125
       },
       {
         "checkpoint_id": "bundle@step90",
         "step": 90,
-        "load_s": 0.21479543001623824,
-        "analysis_s": 13.793733557977248,
-        "peak_gpu_mb": 1769.70361328125
+        "load_s": 0.42154031596146524,
+        "analysis_s": 3.4867783350055106,
+        "peak_gpu_mb": 1770.8125
       },
       {
         "checkpoint_id": "bundle@step122",
         "step": 122,
-        "load_s": 0.2623576860059984,
-        "analysis_s": 16.695481106988154,
-        "peak_gpu_mb": 1769.70361328125
+        "load_s": 0.44588372198631987,
+        "analysis_s": 3.533856729976833,
+        "peak_gpu_mb": 1770.8125
       },
       {
         "checkpoint_id": "bundle@step164",
         "step": 164,
-        "load_s": 0.3779210179927759,
-        "analysis_s": 13.60010980401421,
-        "peak_gpu_mb": 1769.70361328125
+        "load_s": 0.461200017016381,
+        "analysis_s": 4.0919878099812195,
+        "peak_gpu_mb": 1770.8125
       },
       {
         "checkpoint_id": "bundle@step221",
         "step": 221,
-        "load_s": 0.3332766490057111,
-        "analysis_s": 14.589275459991768,
-        "peak_gpu_mb": 1769.70361328125
+        "load_s": 0.38294872897677124,
+        "analysis_s": 3.3754456160240807,
+        "peak_gpu_mb": 1770.8125
       },
       {
         "checkpoint_id": "bundle@step299",
         "step": 299,
-        "load_s": 0.3990345490165055,
-        "analysis_s": 14.830204636964481,
-        "peak_gpu_mb": 1769.70361328125
+        "load_s": 0.4317703240085393,
+        "analysis_s": 3.726475831004791,
+        "peak_gpu_mb": 1770.8125
       }
     ],
-    "total_wall_s": 282.0977969620144,
-    "script_wall_s": 331.42763764597476,
-    "peak_gpu_mb": 1769.70361328125,
+    "total_wall_s": 86.79654552403372,
+    "script_wall_s": 99.0258446969674,
+    "peak_gpu_mb": 1770.8125,
     "n_rows": 840,
-    "table": "      checkpoint   step   load_s  analysis_s  peak_gpu_mb\n    bundle@step0      0     0.39       14.80         1640\n    bundle@step1      1     0.21       14.66         1770\n    bundle@step2      2     0.20       12.98         1770\n    bundle@step3      3     0.30       13.38         1770\n    bundle@step4      4     0.46       13.81         1770\n    bundle@step6      6     0.35       13.52         1770\n    bundle@step8      8     0.34       13.73         1770\n   bundle@step11     11     0.07       16.05         1770\n   bundle@step15     15     0.06       12.89         1770\n   bundle@step20     20     0.34       13.09         1770\n   bundle@step27     27     0.32       16.56         1770\n   bundle@step37     37     0.33       17.40         1770\n   bundle@step49     49     0.07       16.14         1770\n   bundle@step67     67     0.30       13.90         1770\n   bundle@step90     90     0.21       13.79         1770\n  bundle@step122    122     0.26       16.70         1770\n  bundle@step164    164     0.38       13.60         1770\n  bundle@step221    221     0.33       14.59         1770\n  bundle@step299    299     0.40       14.83         1770\n            mean            0.28       14.55         1770\n           total            5.34      276.42             \n\n  checkpoints          : 19\n  result rows          : 840\n  sweep wall time      : 282.1 s  (load + both rulers + sink)\n  script wall time     : 331.4 s  (+ P=I re-check, epsilon split)\n  peak GPU memory      : 1770 MiB (torch allocator, this process)\n  caveat               : the GPU may be shared (the allocator only sees this process); wall times are as-measured, not tuned or best-of-N."
+    "table": "      checkpoint   step   load_s  analysis_s  peak_gpu_mb\n    bundle@step0      0     0.44        6.51         1643\n    bundle@step1      1     0.45        4.22         1771\n    bundle@step2      2     0.46        3.59         1771\n    bundle@step3      3     0.46        4.29         1771\n    bundle@step4      4     0.42        3.93         1771\n    bundle@step6      6     0.45        3.94         1771\n    bundle@step8      8     0.39        3.22         1771\n   bundle@step11     11     0.37        3.97         1771\n   bundle@step15     15     0.41        4.04         1771\n   bundle@step20     20     0.45        4.03         1771\n   bundle@step27     27     0.47        3.52         1771\n   bundle@step37     37     0.43        3.49         1771\n   bundle@step49     49     0.43        3.70         1771\n   bundle@step67     67     0.40        3.40         1771\n   bundle@step90     90     0.42        3.49         1771\n  bundle@step122    122     0.45        3.53         1771\n  bundle@step164    164     0.46        4.09         1771\n  bundle@step221    221     0.38        3.38         1771\n  bundle@step299    299     0.43        3.73         1771\n            mean            0.43        3.90         1771\n           total            8.17       74.07             \n\n  checkpoints          : 19\n  result rows          : 840\n  sweep wall time      : 86.8 s  (load + both rulers + sink)\n  script wall time     : 99.0 s  (+ P=I re-check, epsilon split)\n  peak GPU memory      : 1771 MiB (torch allocator, this process)\n  caveat               : the GPU may be shared (the allocator only sees this process); wall times are as-measured, not tuned or best-of-N."
   },
   "step0_p_skip_warnings": [
     "bundle@step0: the saved optimizer state is empty (/tmp/wp0_example/bundle/checkpoints/step_00000000/optim.pt), which is what a step-0 checkpoint looks like under pre-step semantics. No AdamW preconditioner exists there, so the delta_loss_P / chi_net_P / chi_pos_P rows are SKIPPED for this checkpoint (the raw rows are unaffected). P = 1/(sqrt(0) + eps) = 1/eps would be a garbage preconditioner, and P = I would misreport the identity as 'adamw'."
