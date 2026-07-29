@@ -238,3 +238,98 @@ def test_valid_count_tripwire_fires_when_the_masks_drift_apart(
             micro_batch_size=4,
             sink=None,
         )
+
+
+# --------------------------------------------------- masked positions are inert
+
+
+class _CausalMeanLM(torch.nn.Module):
+    """A causal toy: position ``s`` sees tokens ``0..s`` only.
+
+    ``TinyTransformer`` is *not* causal (it has no attention mask), so a token at
+    a padded tail position leaks into earlier positions and the bit-identity test
+    below could not be written with it. This model is the minimum that makes
+    "later tokens cannot influence earlier logits" true, which is what turns the
+    masking check into an exact statement instead of a tolerance.
+    """
+
+    def __init__(self, *, vocab: int = 8, dim: int = 6, hidden: int = 8, seed: int = 0) -> None:
+        super().__init__()
+        g = torch.Generator().manual_seed(seed)
+        self.emb = torch.nn.Parameter(torch.randn(vocab, dim, generator=g) * 0.7)
+        self.w1 = torch.nn.Parameter(torch.randn(dim, hidden, generator=g) * 0.7)
+        self.b1 = torch.nn.Parameter(torch.randn(hidden, generator=g) * 0.3)
+        self.w2 = torch.nn.Parameter(torch.randn(hidden, vocab, generator=g) * 0.7)
+        self.b2 = torch.nn.Parameter(torch.randn(vocab, generator=g) * 0.3)
+
+    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+        h = self.emb[input_ids]
+        denom = torch.arange(1, h.shape[1] + 1, dtype=h.dtype, device=h.device).reshape(1, -1, 1)
+        h = torch.cumsum(h, dim=1) / denom  # causal running mean
+        return torch.tanh(h @ self.w1 + self.b1) @ self.w2 + self.b2
+
+
+@pytest.mark.parametrize("method", ["per_sequence_cv", "hutchinson"])
+@pytest.mark.parametrize("micro", [1, 2, 3])
+def test_masked_tail_tokens_change_no_observable_bit(method: str, micro: int) -> None:
+    """Rewriting the input tokens at ignored tail positions must change nothing.
+
+    On a causal model a token at position ``s`` can only influence logits at
+    positions ``>= s``. When the ignored positions are exactly the tail,
+    overwriting those tokens leaves every valid-position logit untouched — so
+    every observable, raw and preconditioned, must be **bit-identical**. Any drift
+    means a masked position leaked into an accumulator. This is the cheapest
+    possible regression guard for this repo's most expensive bug class, and unlike
+    a tolerance-based check it cannot be satisfied by a small leak.
+    """
+    torch.manual_seed(3)
+    model = _CausalMeanLM().eval()
+    for p in model.parameters():
+        p.requires_grad_(True)
+    params = list(model.parameters())
+    gen = torch.Generator().manual_seed(4)
+    p_diag = torch.exp(torch.randn(sum(p.numel() for p in params), generator=gen) * 2.0)
+
+    pads = [0, 2, 3]
+    ids = torch.randint(0, 8, (3, 5), generator=torch.Generator().manual_seed(17))
+    labels = ids.clone()
+    seq_len = ids.shape[1]
+    for row, n_pad in enumerate(pads):
+        if n_pad:
+            labels[row, seq_len - n_pad :] = -100
+    base = {"input_ids": ids, "labels": labels}
+    perturbed = {"input_ids": ids.clone(), "labels": labels.clone()}
+    for row, n_pad in enumerate(pads):
+        if n_pad:
+            perturbed["input_ids"][row, seq_len - n_pad :] = (
+                perturbed["input_ids"][row, seq_len - n_pad :] + 3
+            ) % 8
+    assert not torch.equal(base["input_ids"], perturbed["input_ids"])
+    assert torch.equal(base["labels"], perturbed["labels"])
+
+    def run(batch: dict[str, torch.Tensor]) -> dict[str, float]:
+        bundle = ModelBundle(
+            model=model,
+            params=params,
+            forward_fn=lambda m, b: m(b["input_ids"]),
+            loss_fn=causal_lm_loss,
+            valid_mask_fn=lambda b, logits: b["labels"] != -100,  # noqa: ARG005
+            identifier="causal@step0",
+        )
+        results = analyze(
+            model=bundle,
+            revisions=["step0"],
+            eval_batches={"lm": batch},
+            preconditioner=Preconditioner.from_diagonal(p_diag, descriptor="explicit"),
+            chi_net_method=method,
+            n_hutchinson=4,
+            micro_batch_size=micro,
+            sink=None,
+            seed=99,
+        )
+        return {r.observable: r.value for r in results[0].rows}
+
+    before, after = run(base), run(perturbed)
+    assert set(before) == set(after)
+    for observable, value in before.items():
+        assert value == after[observable], (method, micro, observable, value, after[observable])
