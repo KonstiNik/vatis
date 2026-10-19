@@ -1,0 +1,41 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+title: "vatis"
+abstract: >-
+  Compute LNP observables (chi_loss, chi_net, chi_pos) on pretrained model
+  checkpoints, scaled across multiple GPUs via DDP.
+type: software
+keywords:
+  - "training dynamics"
+  - "learning theory"
+  - "neural tangent kernel"
+  - "large language models"
+authors:
+  - given-names: Konstantin
+    family-names: Nikolaou
+    email: knikolaou@icp.uni-stuttgart.de
+    affiliation: University of Stuttgart
+    orcid: 'https://orcid.org/0009-0000-9926-680X'
+version: 0.2.1
+date-released: "2026-10-19"
+license: Apache-2.0
+repository-code: "https://github.com/KonstiNik/vatis"
+references:
+  - type: article
+    title: "Spectral Reach: Understanding Neural Scaling as Progress into the Spectral Tail"
+    authors:
+      - given-names: Konstantin
+        family-names: Nikolaou
+      - given-names: Jonas
+        family-names: Scheunemann
+      - given-names: Sven
+        family-names: Krippendorf
+      - given-names: Samuel
+        family-names: Tovey
+      - given-names: Christian
+        family-names: Holm
+    year: 2026
+    identifiers:
+      - type: other
+        value: "arXiv:2605.31244"
+    url: "https://arxiv.org/abs/2605.31244"
