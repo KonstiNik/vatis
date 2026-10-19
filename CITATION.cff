@@ -18,6 +18,7 @@ authors:
     orcid: 'https://orcid.org/0009-0000-9926-680X'
 version: 0.2.1
 date-released: "2026-10-19"
+doi: 10.5281/zenodo.23475753
 license: Apache-2.0
 repository-code: "https://github.com/KonstiNik/vatis"
 references:
