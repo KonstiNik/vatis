@@ -1,5 +1,7 @@
 # vatis
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23475753.svg)](https://doi.org/10.5281/zenodo.23475753)
+
 Compute  **Spectral Position** — and LNP observables `chi_loss`, `chi_net`, `chi_pos` — on **pretrained HF checkpoints** (Pythia, OLMo, GPT-NeoX), scaled across GPUs with DDP. Sister
 package to [perspic](https://github.com/zincware/perspic), which computes the same quantities *during* Lightning
 training; vatis is for when you want to probe existing checkpoints.

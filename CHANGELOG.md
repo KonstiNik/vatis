@@ -4,6 +4,11 @@ All notable changes to vatis are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-10-19
+
+### Added
+- `CITATION.cff` for software citation.
+
 ## [0.2.0] — 2026-06-17
 
 ### Added
@@ -45,5 +50,6 @@ First public release.
 - Specification in `docs/SPEC.md`; LNP derivation in
   [arXiv:2605.31244](https://arxiv.org/abs/2605.31244).
 
+[0.2.1]: https://github.com/KonstiNik/vatis/releases/tag/v0.2.1
 [0.2.0]: https://github.com/KonstiNik/vatis/releases/tag/v0.2.0
 [0.1.0]: https://github.com/KonstiNik/vatis/releases/tag/v0.1.0
