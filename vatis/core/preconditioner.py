@@ -260,6 +260,7 @@ class Preconditioner:
         beta2: float,
         eps: float,
         descriptor: str = "adamw",
+        inplace: bool = False,
     ) -> Preconditioner:
         """The ``adamw`` P source: ``P = diag(1 / (sqrt(v_hat) + eps))``.
 
@@ -323,9 +324,13 @@ class Preconditioner:
                 ``optimizer_state.flat_state("exp_avg_sq")``.
             step: number of updates already applied (``>= 1``).
             beta2: Adam's second-moment decay.
-            eps: Adam's epsilon (inside the square root's *sum*, matching
-                ``torch.optim.AdamW``'s default ``eps`` placement).
+            eps: Adam's epsilon, added to ``sqrt(v_hat)`` — outside the square
+                root, as in ``torch.optim.AdamW``.
             descriptor: parquet descriptor for the resulting rows.
+            inplace: overwrite ``exp_avg_sq`` with ``P`` instead of cloning it
+                first. Only for a tensor the caller owns and no longer needs
+                (the bundle path passes its freshly flattened copy); saves one
+                parameter-sized vector.
 
         Raises:
             ValueError: ``step < 1`` (bias correction undefined — a step-0
@@ -354,8 +359,12 @@ class Preconditioner:
                 f"adamw bias correction 1 - beta2**step underflowed to {bias_correction} "
                 f"(beta2={beta2}, step={step})"
             )
-        v_hat = exp_avg_sq.detach() / bias_correction
-        diag = 1.0 / (v_hat.sqrt() + float(eps))
+        # One parameter-sized buffer, transformed in place: v -> v_hat -> sqrt ->
+        # + eps -> reciprocal. The out-of-place spelling of the same expression
+        # holds four such vectors at its peak, which matters at 1e9+ parameters.
+        # Same operations in the same order, so the result is bit-identical.
+        diag = exp_avg_sq.detach() if inplace else exp_avg_sq.detach().clone()
+        diag.div_(bias_correction).sqrt_().add_(float(eps)).reciprocal_()
         return cls(diag=diag, descriptor=descriptor)
 
 
@@ -472,7 +481,13 @@ def weighted_sum_sq_grads(
         if g is None:
             continue
         g64 = g.to(dtype=torch.float64)
-        total = total + (w.to(dtype=torch.float64) * g64 * g64).sum()
+        # (w * g) * g accumulated into one owned fp64 copy of the weight: 16
+        # bytes/element at the peak instead of 24, same multiplication order as
+        # before. ``copy=True`` matters — for an fp64 ``P`` a plain ``.to`` would
+        # return the view itself and the in-place product would overwrite ``P``.
+        weighted = w.to(dtype=torch.float64, copy=True)
+        weighted.mul_(g64).mul_(g64)
+        total = total + weighted.sum()
     return total
 
 

@@ -247,8 +247,10 @@ def chi_pos_exceeds_cauchy_schwarz(value: float, *, slack: float = 0.5) -> bool:
     chi_loss^{AB} chi_net^{AB}``). It therefore cannot be violated by a correct
     measurement, only by an *inconsistency* between the three components — most
     plausibly a ``loss_fn`` that is not mean-reduced over the same valid tokens
-    ``chi_loss`` normalizes by (a sum-reduced CE inflates ``chi_pos`` by exactly
-    ``N^2``), or an ``ignore_index`` mismatch between the analyzer and the loss.
+    ``chi_loss`` normalizes by (a sum-reduced CE inflates ``chi_pos`` by the square
+    of the valid-token count *per micro-batch* — ``N^2`` only when the whole batch
+    is one micro-batch), or an ``ignore_index`` mismatch between the analyzer and
+    the loss.
 
     ``slack`` exists because ``chi_net`` is a *stochastic* estimate: at small
     ``n_hutchinson`` a legitimate ``chi_pos`` near 1 can overshoot. The default

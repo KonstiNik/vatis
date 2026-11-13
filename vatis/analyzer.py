@@ -99,8 +99,8 @@ ALL_OBSERVABLES: tuple[str, ...] = (
 # is configured, and always tagged with that preconditioner's descriptor in the
 # ``preconditioner`` column.
 #
-# There is deliberately no ``chi_net_P_normalized``: the spec (03 §3) names three
-# P observables and asks for a *minimal* schema extension. The sigma-normalized
+# There is deliberately no ``chi_net_P_normalized``: the result format names three
+# P observables and extends the schema *minimally* (``docs/SPEC.md``). The sigma-normalized
 # companion is a pure function of what is already written —
 # ``chi_net_P_normalized = chi_net_P / sqrt(n_valid_a * n_valid_b)`` — using the
 # ``n_valid_a`` / ``n_valid_b`` columns of the same row, so nothing is lost.
@@ -316,7 +316,12 @@ class Analyzer:
         """
         if self.cross_grad_storage in ("gpu", "cpu"):
             return self.cross_grad_storage
-        device = self.device
+        # The device that matters is the one the *model* (and hence the cached
+        # gradients) lives on. For the HF path that is ``self.device``; a bundle
+        # source places its own model (``load_local_bundle(device=...)``) and
+        # ``Analyzer.device`` may still be the "cpu" default, which used to
+        # switch the heuristic off for exactly the large-model case it exists for.
+        device = next((p.device for p in bundle.params), self.device)
         if device.type != "cuda" or not torch.cuda.is_available():
             return "gpu"  # no host-offload target that would help
         cross_names = {n for pair in self.cross_pairs for n in pair if pair[0] != pair[1]}
@@ -926,8 +931,9 @@ class Analyzer:
                     "guarantees. Cauchy-Schwarz makes that impossible for a consistent "
                     "triple, so the three components are not describing the same loss. "
                     "Most likely: loss_fn is not mean-reduced over the same valid tokens "
-                    "chi_loss normalizes by (a sum-reduced CE inflates chi_pos by exactly "
-                    "N_valid^2), or loss_fn's ignore_index differs from the analyzer's. "
+                    "chi_loss normalizes by (a sum-reduced CE inflates chi_pos by the "
+                    "square of the valid-token count per micro-batch), or loss_fn's "
+                    "ignore_index differs from the analyzer's. "
                     "A very small n_hutchinson can also overshoot legitimately.",
                     UserWarning,
                     stacklevel=2,

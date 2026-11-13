@@ -17,9 +17,11 @@ documented in ``docs/SPEC.md`` §"Native checkpoint bundles"::
 
 **Pre-step semantics** (do not reinterpret): the checkpoint at step ``t`` holds
 ``theta_t`` *and the optimizer state as it was before the step-t update*;
-``batch_a.npy`` is the batch that step ``t`` is about to consume. So the
-preconditioner built from ``optim.pt`` is the one the optimizer would apply to
-``grad L(batch_a)`` at ``theta_t``.
+``batch_a.npy`` is the batch that step ``t`` is about to consume. The
+preconditioner built from ``optim.pt`` is therefore the geometry factor from
+*before* the step-``t`` update; the step itself applies ``P_{t+1}`` (which also
+folds in ``grad L(batch_a)``) to the first moment, not to the gradient. See
+``docs/SPEC.md`` §"What ``delta_loss_P`` is not".
 
 Relationship to the HF source (``vatis/models/hf.py``): that module turns
 ``(name, revision)`` into a :class:`~vatis.models.hf.ModelBundle` — the four
@@ -90,6 +92,11 @@ BUNDLE_PARAM_NAMES_FILE = "param_names.json"
 BUNDLE_CHECKPOINTS_DIR = "checkpoints"
 CHECKPOINT_WEIGHTS_FILE = "model.safetensors"
 CHECKPOINT_OPTIM_FILE = "optim.pt"
+
+# Optimizers whose update divides by ``sqrt(v_hat) + eps`` exactly as
+# ``Preconditioner.adamw`` assumes. Adam and AdamW differ only in how weight
+# decay enters, which P excludes anyway.
+_ADAM_FAMILY = frozenset({"adam", "adamw"})
 CHECKPOINT_BATCH_A_FILE = "batch_a.npy"
 CHECKPOINT_META_FILE = "meta.json"
 
@@ -267,7 +274,7 @@ class OptimizerStateView:
        records for that index.
 
     Bias correction, ``eps``, momentum handling and every other piece of
-    preconditioner math belong to the estimator (component 03); this class only
+    preconditioner math belong to :mod:`vatis.core.preconditioner`; this class only
     hands out correctly-ordered vectors and the hparams the optimizer ran with.
     """
 
@@ -467,7 +474,11 @@ class OptimizerStateView:
                 missing.append(name)
                 continue
             value = entry[key]
-            if not isinstance(value, torch.Tensor) or value.ndim == 0:
+            # A 0-dim tensor is a per-parameter *scalar* (AdamW's ``step``) unless
+            # the parameter itself is 0-dim, in which case it is that parameter's
+            # one-element state and belongs in the flat vector.
+            is_scalar_parameter = self._layout.shape_of(name) == ()
+            if not isinstance(value, torch.Tensor) or (value.ndim == 0 and not is_scalar_parameter):
                 raise BundleSchemaError(
                     f"{self._source}: state[{index}][{key!r}] is a per-parameter "
                     f"scalar ({value!r}), not a per-element tensor; use "
@@ -719,6 +730,10 @@ class LocalBundleCheckpoint:
 
     # ----------------------------------------------------------------- release
 
+    def release_optimizer_state(self) -> None:
+        """Drop the loaded ``optim.pt`` tensors; the next access reloads them."""
+        self._optimizer_state = None
+
     def release(self) -> None:
         """Drop every loaded tensor of this checkpoint.
 
@@ -947,7 +962,9 @@ class LocalBundleSource:
         API. Pass it in ``eval_batches`` to measure at the batch the step was
         about to consume::
 
-            analyze(model=..., eval_batches={"batch_a": source.batch_a_spec()})
+            Analyzer(eval_batches={"batch_a": source.batch_a_spec()}).run(
+                source.model_specs()
+            )
         """
         return EvalBatchSpec.from_callable(lambda ckpt_id: self.checkpoint_for(ckpt_id).batch_a)
 
@@ -1006,7 +1023,17 @@ class LocalBundleSource:
                     stacklevel=2,
                 )
                 return None
-            return adamw_preconditioner_from_state(
+            if state.step_count is not None and state.step_count != checkpoint.step:
+                warnings.warn(
+                    f"{checkpoint.identifier}: the saved optimizer state has applied "
+                    f"{state.step_count} update(s), but the checkpoint directory says step "
+                    f"{checkpoint.step}. Under pre-step semantics the two are the same "
+                    "number; a mismatch means the optimizer state and the weights may not "
+                    "belong together. P is built from the saved state's own counter.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            precond = adamw_preconditioner_from_state(
                 state,
                 metadata=self.metadata,
                 beta2=beta2,
@@ -1014,6 +1041,11 @@ class LocalBundleSource:
                 descriptor=descriptor,
                 context=checkpoint.identifier,
             )
+            # P is all the analyzer needs from optim.pt. Dropping the loaded state
+            # here keeps two parameter-sized vectors (exp_avg, exp_avg_sq) from
+            # staying resident for the whole checkpoint; a later access reloads it.
+            checkpoint.release_optimizer_state()
+            return precond
 
         return build
 
@@ -1136,12 +1168,29 @@ def adamw_preconditioner_from_state(
             "Under pre-step semantics this is a step-0 checkpoint; the analyzer's "
             "adamw_preconditioner() skips the P rows for it."
         )
-    if not state.has_state(state_key):
+    optimizer_name = None if metadata is None else metadata.optimizer_name
+    if optimizer_name is not None and optimizer_name.lower() not in _ADAM_FAMILY:
         raise BundleSchemaError(
-            f"{context}: the saved optimizer state has no {state_key!r} for every "
-            f"parameter (present keys: {state.state_keys()}). An AdamW preconditioner "
-            "needs the second moment; a plain-SGD run has none and its ruler is the raw "
-            "one (preconditioner=None)."
+            f"{context}: metadata.json names the optimizer {optimizer_name!r}. "
+            f"P = 1/(sqrt(v_hat) + eps) is the preconditioner of {sorted(_ADAM_FAMILY)} "
+            "only; other optimizers that happen to keep an 'exp_avg_sq' (RAdam, NAdam, "
+            "...) apply a different update, and labelling their rows 'adamw' would be "
+            "wrong. Build the P you mean with Preconditioner.from_diagonal(...)."
+        )
+    if not state.has_state(state_key):
+        if state_key not in state.state_keys():
+            raise BundleSchemaError(
+                f"{context}: the saved optimizer state has no {state_key!r} at all "
+                f"(present keys: {state.state_keys()}). An AdamW preconditioner needs the "
+                "second moment; a plain-SGD run has none and its ruler is the raw one "
+                "(preconditioner=None)."
+            )
+        raise BundleSchemaError(
+            f"{context}: the saved optimizer state has {state_key!r} for some parameters "
+            "but not for all. torch keeps no state for a parameter that never received a "
+            "gradient, so at least one parameter in param_names.json was never updated. "
+            "No P is defined for it under the adamw convention; exclude it from the "
+            "bundle's parameter list or build P explicitly."
         )
     step = state.step_count
     if step is None:
@@ -1149,17 +1198,42 @@ def adamw_preconditioner_from_state(
             f"{context}: the saved optimizer state has no 'step' counter, so "
             "exp_avg_sq cannot be bias-corrected. Refusing to guess the exponent."
         )
-    saved_beta2, saved_eps = resolve_adamw_hparams(
-        state.hparams, source=f"{context}: saved param_groups"
-    )
-    if metadata is not None:
-        _cross_check_adamw_hparams(metadata, saved_beta2, saved_eps, context=context)
+    disagreeing = [
+        key
+        for key in ("betas", "eps")
+        if len({repr(group.get(key)) for group in state.param_groups}) > 1
+    ]
+    if disagreeing and (beta2 is None or eps is None):
+        raise ValueError(
+            f"{context}: the saved param_groups disagree on {disagreeing}. One diagonal "
+            "P with a single beta2 / eps cannot represent per-group values; pass beta2= "
+            "and eps= explicitly if one pair is meant for all parameters, or build P "
+            "per group with Preconditioner.from_diagonal(...)."
+        )
+    if beta2 is not None and eps is not None:
+        # Both given explicitly: nothing is read from the saved groups, which may
+        # legitimately not agree on a single pair.
+        saved_beta2, saved_eps = float(beta2), float(eps)
+    else:
+        saved_beta2, saved_eps = resolve_adamw_hparams(
+            state.hparams, source=f"{context}: saved param_groups"
+        )
+        if metadata is not None:
+            _cross_check_adamw_hparams(metadata, saved_beta2, saved_eps, context=context)
+    # An override changes P, so it has to be visible in the descriptor: two runs
+    # that differ only in an override must not both be written as "adamw".
+    overrides = [
+        f"{name}={value:g}" for name, value in (("beta2", beta2), ("eps", eps)) if value is not None
+    ]
+    if overrides and descriptor == "adamw":
+        descriptor = f"adamw({','.join(overrides)})"
     return Preconditioner.adamw(
-        state.flat_state(state_key),
+        state.flat_state(state_key),  # a fresh concatenation, safe to overwrite
         step=step,
         beta2=saved_beta2 if beta2 is None else float(beta2),
         eps=saved_eps if eps is None else float(eps),
         descriptor=descriptor,
+        inplace=True,
     )
 
 
@@ -1294,13 +1368,30 @@ def _load_weights(
             "not have; the model factory does not match this bundle"
         )
 
+    # The schema stores parameters. A *persistent* buffer (one that is part of
+    # state_dict()) that is not in the file keeps whatever the factory gave it:
+    # harmless for a constant (a causal mask, position ids), wrong for anything a
+    # training run changes (running statistics, a learned scale kept as a buffer).
+    # vatis cannot tell the two apart, so it says so instead of staying silent.
+    stale_buffers = sorted(
+        name for name, _ in model.named_buffers() if name in model_state and name not in file_state
+    )
+    if stale_buffers:
+        warnings.warn(
+            f"{path}: persistent buffer(s) {_abbrev(stale_buffers)} are not in the file and "
+            "keep the model factory's values. That is correct only if they are constants; "
+            "a buffer the training run modified is NOT restored.",
+            UserWarning,
+            stacklevel=2,
+        )
+
     to_load = {
         key: (value.to(dtype=dtype) if value.is_floating_point() else value)
         for key, value in file_state.items()
     }
-    # strict=False: buffers may legitimately be absent from the file. Every
-    # parameter is checked above, and load_state_dict still raises on a shape
-    # mismatch, so nothing silently slips through.
+    # strict=False: non-persistent buffers are not in state_dict() at all and
+    # persistent ones were reported above. Every parameter is checked above, and
+    # load_state_dict still raises on a shape mismatch.
     model.load_state_dict(to_load, strict=False)
 
 
