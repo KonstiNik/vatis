@@ -209,6 +209,14 @@ def test_ddp_loopback_matches_single_process(tmp_path: Path) -> None:
         rel = abs(ddp[observable] - base[observable]) / max(abs(base[observable]), 1e-300)
         assert rel < DDP_REL, (observable, ddp[observable], base[observable], rel)
 
+    # The absolute bounds this test carried before it was rewritten, verbatim.
+    # The relative check above is tighter for ``delta_loss`` but ~20x / ~10x
+    # looser than these for ``chi_loss`` / ``chi_loss_normalized`` at their
+    # magnitudes here, so on its own it would have weakened the test. Both hold.
+    assert abs(ddp["chi_loss"] - base["chi_loss"]) < 1e-9
+    assert abs(ddp["chi_loss_normalized"] - base["chi_loss_normalized"]) < 1e-7
+    assert abs(ddp["delta_loss"] - base["delta_loss"]) < 1e-7
+
     rel_chi_net = abs(ddp["chi_net"] - base["chi_net"]) / max(1e-12, abs(base["chi_net"]))
     assert rel_chi_net < 0.5, f"chi_net mismatch: {ddp['chi_net']} vs {base['chi_net']}"
     assert all(value == value for value in ddp.values()), "no NaNs"
