@@ -20,7 +20,8 @@ Concatenating ``reshape(-1)`` of each entry, in list order, defines:
 - the segment ``[offset(name), offset(name) + numel(name))`` that belongs to
   each named parameter.
 
-For a checkpoint bundle (``00_context.md`` §schema) the records come from
+For a checkpoint bundle (``docs/SPEC.md`` §"Native checkpoint bundles") the records
+come from
 ``param_names.json``, which is *by definition* the canonical order: the saved
 optimizer ``state_dict`` indices are index-aligned with it. vatis therefore
 builds ``ModelBundle.params`` by looking parameters up **by name in that
@@ -150,7 +151,7 @@ class ParameterLayout:
     def from_named_parameters(cls, model: nn.Module) -> ParameterLayout:
         """Build the layout a bundle writer would record for ``model``.
 
-        This is the writer-side convention from ``00_context.md``: ordered
+        This is the writer-side convention of the bundle schema: ordered
         ``[name, shape]`` from ``model.named_parameters()``, which iterates in
         the same order as ``model.parameters()`` — hence index-aligned with a
         ``torch.optim`` ``state_dict`` built from ``model.parameters()``. Tied

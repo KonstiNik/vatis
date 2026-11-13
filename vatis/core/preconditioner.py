@@ -2,8 +2,8 @@
 
 An optimizer with update ``dtheta = -eta * P grad L`` does not train on the raw
 eNTK ``Theta = J J^T`` but on the **effective kernel** ``Theta_P = J P J^T``
-(``00_context.md`` §"Preconditioned ruler", ``background.md`` §4.2). vatis
-measures the same LNP triple on that kernel:
+(``docs/SPEC.md`` §"The preconditioned ruler"). vatis measures the same LNP triple on that
+kernel:
 
     delta_loss^P(A, B) = grad L^B . P grad L^A     (elementwise-weighted dot)
     chi_net^P          = ||P^{1/2} J||_F^2 = Tr(Theta_P)
@@ -14,15 +14,15 @@ measures the same LNP triple on that kernel:
 order (:class:`~vatis.core.param_layout.ParameterLayout`), segment-for-segment
 aligned with the flat gradient vector the analyzer builds and with
 ``OptimizerStateView.flat_state``. Non-diagonal ``P`` (Muon's orthogonalization)
-is explicitly out of scope for WP0 and this module is deliberately not designed
+is explicitly out of scope and this module is deliberately not designed
 for it — every consumer here assumes an elementwise weight.
 
 This module owns three things and nothing else:
 
 - :class:`Preconditioner` — a validated diagonal ``P`` plus the ``descriptor``
   string that ends up in the parquet ``preconditioner`` column;
-- the builders for the P sources of ``03_estimator.md`` §1 that are pure math
-  (``identity``, ``explicit``, ``adamw``). The bundle plumbing for ``adamw``
+- the builders for the P sources that are pure math (``identity``,
+  ``explicit``, ``adamw``). The bundle plumbing for ``adamw``
   (which optimizer state, which hparams, what to do at step 0) lives in
   :mod:`vatis.models.local_bundle`, because that is where the saved state is;
 - the elementwise-weighted reductions the estimators and the analyzer need
@@ -216,10 +216,11 @@ class Preconditioner:
         """``P = I`` — the SGD ruler, materialized.
 
         The ones are materialized on purpose rather than short-circuited: the
-        point of the ``P = I`` runs (``03_estimator.md`` T-identity) is to drive
-        the *preconditioned* code path — its alignment, normalization and
-        combinator — and check that it reproduces the raw columns. A
-        short-circuit would make that test vacuous. Multiplying by exactly
+        point of the ``P = I`` runs (the T-identity tests in
+        ``tests/unit/test_chi_pos_p.py``) is to drive the *preconditioned* code
+        path — its alignment, normalization and combinator — and check that it
+        reproduces the raw columns. A short-circuit would make that test
+        vacuous. Multiplying by exactly
         ``1.0`` is exact in IEEE-754 and the reductions keep the raw
         accumulation order, so the agreement is bit-for-bit, not merely within
         tolerance.
@@ -263,16 +264,24 @@ class Preconditioner:
         """The ``adamw`` P source: ``P = diag(1 / (sqrt(v_hat) + eps))``.
 
         With ``v_hat = exp_avg_sq / (1 - beta2**step)`` — the bias-corrected
-        second moment (``00_context.md`` §"P conventions").
+        second moment (``docs/SPEC.md`` §"The preconditioned ruler").
 
         ``step`` is the **saved** step counter. vatis reads bundles with
         *pre-step* semantics: the checkpoint at step ``t`` stores the optimizer
         state as it was *before* the step-``t`` update, so the number of updates
         already folded into ``exp_avg_sq`` is exactly that counter, and it is
         therefore the bias-correction exponent that matches the saved tensor.
-        (The exact step-``t`` Adam ``P`` would additionally fold in the step-``t``
-        gradient — one EMA update, an ``O(1 - beta2)`` difference, documented as
-        negligible in ``00_context.md`` and not implemented.)
+        The ``P`` that the step-``t`` update *actually applies* additionally folds
+        in the step-``t`` gradient — one EMA update — and is **not implemented**:
+        ``v_hat_{t+1} = (1 - w) * v_hat_t + w * g_t**2`` with
+        ``w = (1 - beta2) / (1 - beta2**(t + 1))``. That weight is ``O(1 - beta2)``
+        only once ``t >> 1 / (1 - beta2)``; early in a run it is ``~1 / (t + 1)``
+        (``w = 1`` at ``t = 0``), so there the saved ``P`` and the applied ``P``
+        differ substantially — and systematically on the update batch itself,
+        whose own ``g_t**2`` is exactly the term that is missing. The offset is
+        pinned by ``tests/unit/test_preconditioner_vs_torch.py``; see
+        ``docs/SPEC.md`` §"What ``delta_loss_P`` is not" before reading
+        ``delta_loss_P`` as a loss change.
 
         **Deliberately excluded from P: the first moment ``m_hat`` and decoupled
         weight decay.** The full AdamW update is
@@ -302,7 +311,7 @@ class Preconditioner:
           direction. On held-out data that is the normal case, not a corner case.
         - No clipping, flooring or dead-coordinate mask is applied: the
           convention ``P = 1/(sqrt(v_hat) + eps)`` is a frozen project decision
-          (``00_context.md`` §"P conventions", "do not revisit"), and quietly
+          (``docs/SPEC.md`` §"The preconditioned ruler"), and quietly
           altering it would make the reported ruler not the one the paper
           defines. The right response is to *see* the effect, not to hide it:
           :func:`epsilon_cap_mask` identifies the affected coordinates so a

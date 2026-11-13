@@ -25,7 +25,7 @@ Preconditioned ruler
 When a ``preconditioner`` is configured the analyzer measures the **second**
 ruler in the same pass: ``delta_loss_P``, ``chi_net_P`` and ``chi_pos_P``, the
 LNP triple of the effective kernel ``Theta_P = J P J^T`` the optimizer actually
-trains on (``00_context.md`` §"Preconditioned ruler"). It costs no extra
+trains on (``docs/SPEC.md`` §"The preconditioned ruler"). It costs no extra
 backward — ``delta_loss_P`` re-reduces the gradient vector step 3 already built
 with the elementwise ``P`` weight, and ``chi_net_P`` comes out of the same
 estimator call and the same probes as ``chi_net``. ``chi_loss`` is
@@ -114,7 +114,7 @@ P_OBSERVABLES: tuple[str, ...] = (
 
 # What a ``preconditioner`` argument may be:
 #   - None / "none"                  -> raw ruler only (the default, and the
-#                                       behaviour of every pre-WP0 caller)
+#                                       behaviour before this argument existed)
 #   - "identity"                     -> P = I, the SGD ruler measured through the
 #                                       preconditioned code path (T-identity)
 #   - a Preconditioner               -> the same fixed P at every checkpoint
@@ -821,7 +821,7 @@ class Analyzer:
 
         # Preconditioned ruler, same shape: the P-weighted gradient dot and the
         # geometric mean of the two batches' chi_net^P (i.e.
-        # ||P^{1/2} J^A||_F * ||P^{1/2} J^B||_F, per 00_context.md).
+        # ||P^{1/2} J^A||_F * ||P^{1/2} J^B||_F, as the raw cross pair does).
         delta_loss_p_cross: float | None = None
         chi_net_p_cross: float | None = None
         chi_pos_p_value: float | None = None

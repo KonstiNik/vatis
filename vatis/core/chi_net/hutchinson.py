@@ -13,7 +13,7 @@ Preconditioned ruler
 ====================
 
 ``Tr(J P J^T) = E_z ||P^{1/2} (J^T z)||^2`` for the same probes ``z``
-(``00_context.md`` §"Preconditioned ruler"), so the P estimate needs **no extra
+(``docs/SPEC.md`` §"The preconditioned ruler"), so the P estimate needs **no extra
 backward**: the accumulator simply reduces the very same gradient tuple with the
 elementwise weight ``P`` applied. Raw and P are therefore computed in one pass
 and share every probe, and the raw value is bit-identical to a run without a

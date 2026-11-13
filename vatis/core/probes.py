@@ -16,7 +16,7 @@ set everywhere.
 
 **The Rademacher draw is bit-packed**, because the naive version is far too slow
 to ship. Generating one ``fp32`` element per probe entry on the CPU costs a *full
-CPU RNG call per entry*; measured on the WP0 example's probe shape
+CPU RNG call per entry*; measured on the ``two_rulers_llama`` example's probe shape
 ``(8, 512, 4096)`` = 16.8M entries, RTX 3090 Ti:
 
 ===========================================================  ==============
@@ -35,7 +35,7 @@ Each bit of a uniform byte is an independent fair coin, so this is exactly the
 same distribution -- no per-bit-position bias (asserted in
 ``tests/unit/test_probes.py``).
 
-The residual overhead over an on-device draw is ~17x per probe, which on the WP0
+The residual overhead over an on-device draw is ~17x per probe, which on that
 example works out to ~1.1 s per checkpoint against ~4.1 s of backwards (~26%).
 The naive CPU draw was ~12 s per checkpoint (3.5x end to end) and would have made
 the 8B production target infeasible, which is why it is not what ships.

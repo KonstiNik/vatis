@@ -1,7 +1,7 @@
 """Native checkpoint-bundle loader — vatis's local (non-HuggingFace) source.
 
-A *bundle* is a directory written by a training run, in the frozen schema of
-``00_context.md`` §"Checkpoint bundle schema"::
+A *bundle* is a directory written by a training run, in the frozen schema
+documented in ``docs/SPEC.md`` §"Native checkpoint bundles"::
 
     <run_dir>/
       metadata.json                # model config, optimizer type + hparams, lr
@@ -408,8 +408,8 @@ class OptimizerStateView:
 
         With pre-step semantics this is the number of updates already applied
         to ``theta_t`` — i.e. the exponent ``t`` of the bias correction that
-        matches the *saved* ``exp_avg_sq`` (see ``00_context.md``: P is taken
-        from the saved pre-step state). Raises if parameters disagree, which
+        matches the *saved* ``exp_avg_sq`` (P is taken from the saved pre-step
+        state). Raises if parameters disagree, which
         would make a single scalar meaningless.
         """
         if not self.has_state("step"):
