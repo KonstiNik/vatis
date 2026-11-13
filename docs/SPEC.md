@@ -48,7 +48,9 @@ identically (asserted in `tests/unit/test_chi_pos_p.py`).
 It costs **no extra backward**: `delta_loss_P` re-reduces the gradient vector the
 raw `δL` already built, and `chi_net_P` comes out of the same estimator call and
 the same probes as `chi_net`, via `Tr(J P Jᵀ) = E_z ‖P^{1/2} Jᵀ z‖²`. The
-additional memory is one parameter-sized fp32 vector for `P`.
+additional memory while a checkpoint is analyzed is one parameter-sized fp32
+vector for `P` (building it from a bundle is costlier, see "Native checkpoint
+bundles").
 
 **`P` is diagonal throughout** — a 1-D vector in the canonical parameter order
 (`vatis/core/preconditioner.py::Preconditioner`), segment-for-segment aligned
@@ -416,12 +418,38 @@ for ckpt in source:                                    # or drive the loop yours
   optimizer from, and record names in, the same `named_parameters()` order.**
 - **Pre-step semantics.** The checkpoint at step `t` holds `θ_t` and the
   optimizer state from *before* the step-`t` update; `batch_a.npy` is the batch
-  step `t` is about to consume. A step-0 checkpoint legitimately has an empty
-  optimizer state; `flat_state` raises rather than inventing zeros.
+  step `t` is about to consume. The directory step is the number of optimizer
+  updates already applied, so it equals the optimizer state's own step counter;
+  `adamw_preconditioner()` warns when the two disagree. A step-0 checkpoint
+  legitimately has an empty optimizer state; `flat_state` raises rather than
+  inventing zeros.
+- **`batch_a.npy` holds whole token sequences.** The loader turns a row `ids`
+  into inputs `ids` and next-token labels (`labels[:, :-1] = ids[:, 1:]`, last
+  position ignored), i.e. the pairs `ids[:, :-1] → ids[:, 1:]`. The file carries
+  no padding information, so every position counts; if the training loss
+  ignored some targets (pad tokens), pass a `valid_mask_fn` or the update-batch
+  rows describe a different loss than the one that was descended.
+- **Weights are stored as parameters only.** A persistent buffer the model
+  factory creates keeps the factory's value, and the loader warns about it:
+  correct for constants, wrong for anything a training run changes. The loader
+  casts whatever floating dtype the file holds (bf16 by default) to the dtype
+  requested from `load_local_bundle(dtype=...)`; note that a bf16 file is a
+  rounded `θ_t`, and that rounding can be a sizeable fraction of one update.
+- **`load_local_bundle(device=..., dtype=...)` decide placement and precision.**
+  A bundle source hands the analyzer ready-built models, so `Analyzer(device=,
+  dtype=)` do not move or recast them.
+- **Only Adam / AdamW states are accepted** by `adamw_preconditioner()`. A
+  bundle whose `metadata.json` names another optimizer is refused rather than
+  labelled `"adamw"`; so are parameter groups that disagree on `betas` / `eps`
+  (unless both are passed explicitly) and a parameter that never received a
+  gradient. An `eps` / `beta2` override is written into the descriptor, e.g.
+  `adamw(eps=0.001)`.
 - **Lazy per checkpoint.** Opening a bundle reads the two JSON files and stats
-  the checkpoint directories; tensors load on first access, weights are upcast
-  bf16 → fp32, and iterating the source releases checkpoint `i−1` before
-  yielding `i`.
+  the checkpoint directories; tensors load on first access, and iterating the
+  source releases checkpoint `i−1` before yielding `i`. Building `P` needs the
+  loaded optimizer state (two parameter-sized vectors) plus about three more
+  transiently; the state is released as soon as `P` exists. Under DDP every
+  rank does this.
 
 ### Result format (parquet, long)
 
@@ -635,6 +663,15 @@ cross-validation test tier (gated, skipped in CI).
   `param_names.json` and the optimizer state (see "Native checkpoint bundles").
 - **AdamW's `P` puts never-updated coordinates at `1/ε`.** Check their share of
   `chi_net_P` with `epsilon_cap_mask` before interpreting it on held-out data.
-- **A resident `P` costs one extra parameter-sized fp32 vector**, which the
-  cross-pair GPU/host offload heuristic does not account for; on a borderline
-  card pass `cross_grad_storage="cpu"` explicitly.
+- **A resident `P` costs one extra parameter-sized fp32 vector** during a
+  checkpoint's analysis, and building it peaks at about five (see "Native
+  checkpoint bundles"). The cross-pair GPU/host offload heuristic does not
+  account for either; on a borderline card pass `cross_grad_storage="cpu"`
+  explicitly.
+- **The `chi_pos` range warning is a weak backstop.** A sum-reduced `loss_fn`
+  inflates `chi_pos` by the square of the valid-token count *per micro-batch*,
+  and the warning fires only if that pushes `|chi_pos|` past 1.5. With small
+  micro-batches and the small `chi_pos` values of real models it stays silent.
+- **Bundle `checkpoint_id`s are `<run directory name>@step<N>`.** Two runs whose
+  directories share a name produce identical ids (and identical probe seeds);
+  keep run directory names distinct before concatenating result files.

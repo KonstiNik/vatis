@@ -28,6 +28,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sum-reduced `loss_fn`).
 - `golden` test tier (`pytest -m golden`): trains a tiny transformer, writes a
   bundle, runs both rulers end to end.
+- New hard dependency: `safetensors` (to read bundle weights).
 
 ### Changed
 - **Hutchinson probes are drawn on the CPU** and copied to the device, so a seed
@@ -40,6 +41,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `chi_pos` is computed in fp64 and returned as an fp64 scalar. The absolute
   `1e-30` floor on its denominator is gone: only an exactly-zero denominator
   yields `0.0`.
+- **Custom `ChiNetEstimator` subclasses must accept a `preconditioner` keyword**
+  in `compute()`; the analyzer always passes it (`None` without a P).
+- The analyzer raises a `RuntimeError` if the estimator's valid-token count
+  differs from the one `chi_loss` was normalized with.
+- `cross_grad_storage="auto"` looks at the device the model is on rather than at
+  `Analyzer.device`.
 - `observables=None` is the new default and means "all raw observables, plus the
   P observables when a preconditioner is set". Passing an explicit list behaves
   as before.
