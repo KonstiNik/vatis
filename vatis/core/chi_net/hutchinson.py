@@ -8,6 +8,16 @@ over the (sub-)batch.
 
 This is the always-works fallback. It is the default for large batches
 (``B >= 32``) where the per-sequence path becomes too expensive.
+
+Preconditioned ruler
+====================
+
+``Tr(J P J^T) = E_z ||P^{1/2} (J^T z)||^2`` for the same probes ``z``
+(``docs/SPEC.md`` §"The preconditioned ruler"), so the P estimate needs **no extra
+backward**: the accumulator simply reduces the very same gradient tuple with the
+elementwise weight ``P`` applied. Raw and P are therefore computed in one pass
+and share every probe, and the raw value is bit-identical to a run without a
+preconditioner.
 """
 
 from __future__ import annotations
@@ -24,6 +34,7 @@ from vatis.core.chi_net.base import (
     LossFn,
     ValidMaskFn,
 )
+from vatis.core.preconditioner import Preconditioner, weighted_sum_sq_grads
 from vatis.core.probes import ProbeDistribution, make_probe, mask_probe
 from vatis.data.collate import iter_micro_batches
 
@@ -60,9 +71,17 @@ class HutchinsonEstimator(ChiNetEstimator):
         params: list[torch.nn.Parameter],
         micro_batch_size: int,
         generator: torch.Generator | None = None,
+        preconditioner: Preconditioner | None = None,
     ) -> ChiNetResult:
         device = next(model.parameters()).device
         chi_net_acc = torch.zeros((), dtype=torch.float64, device=device)
+        # Preconditioned accumulator: only allocated when a P was supplied, so
+        # the raw path's arithmetic is untouched when it is not.
+        p_views: list[torch.Tensor] | None = None
+        chi_net_p_acc: torch.Tensor | None = None
+        if preconditioner is not None:
+            p_views = preconditioner.to(device=device).parameter_views(params)
+            chi_net_p_acc = torch.zeros((), dtype=torch.float64, device=device)
         n_valid_total = 0
         n_backwards = 0
 
@@ -102,6 +121,11 @@ class HutchinsonEstimator(ChiNetEstimator):
                         continue
                     grad_sq = grad_sq + (g.to(dtype=torch.float64) ** 2).sum()
                 chi_net_acc = chi_net_acc + grad_sq
+                if chi_net_p_acc is not None and p_views is not None:
+                    # Same gradient tuple, P-weighted: ||P^{1/2} (J^T v)||^2.
+                    chi_net_p_acc = chi_net_p_acc + weighted_sum_sq_grads(
+                        grads, p_views, device=device
+                    )
 
                 # Tally valid tokens once per probe? No — once per
                 # micro-batch. Use the first probe of the micro-batch.
@@ -115,6 +139,11 @@ class HutchinsonEstimator(ChiNetEstimator):
         # The Hutchinson estimator is unbiased for E[||J^T v||^2] = Tr(JJ^T)
         # only after dividing by the number of probes per micro-batch.
         chi_net = (chi_net_acc / float(self.n_hutchinson)).to(dtype=torch.float32)
+        chi_net_p = (
+            None
+            if chi_net_p_acc is None
+            else (chi_net_p_acc / float(self.n_hutchinson)).to(dtype=torch.float32)
+        )
 
         return ChiNetResult(
             chi_net=chi_net,
@@ -124,4 +153,5 @@ class HutchinsonEstimator(ChiNetEstimator):
                 "n_hutchinson": self.n_hutchinson,
                 "distribution": self.distribution,
             },
+            chi_net_p=chi_net_p,
         )

@@ -1,5 +1,38 @@
-"""Model loading dispatch. v1 only ships HF causal-LM via load_hf_model."""
+"""Model loading dispatch.
 
-from vatis.models.hf import load_hf_model
+Two sources, same output shape (a :class:`~vatis.models.hf.ModelBundle`):
 
-__all__ = ["load_hf_model"]
+- :func:`load_hf_model` — HuggingFace causal LMs by ``(name, revision)``.
+- :func:`load_local_bundle` — native checkpoint bundles written by a training
+  run (``docs/SPEC.md`` §"Native checkpoint bundles"), which additionally
+  expose the saved optimizer state aligned to the canonical flattening order.
+"""
+
+from vatis.models.hf import ModelBundle, load_hf_model
+from vatis.models.local_bundle import (
+    BundleMetadata,
+    BundleSchemaError,
+    CheckpointMeta,
+    LocalBundleCheckpoint,
+    LocalBundleSource,
+    OptimizerStateView,
+    adamw_preconditioner_from_state,
+    load_local_bundle,
+    plain_lm_forward,
+    resolve_model_factory,
+)
+
+__all__ = [
+    "BundleMetadata",
+    "BundleSchemaError",
+    "CheckpointMeta",
+    "LocalBundleCheckpoint",
+    "LocalBundleSource",
+    "ModelBundle",
+    "OptimizerStateView",
+    "adamw_preconditioner_from_state",
+    "load_hf_model",
+    "load_local_bundle",
+    "plain_lm_forward",
+    "resolve_model_factory",
+]

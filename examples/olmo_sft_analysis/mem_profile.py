@@ -96,12 +96,13 @@ def run_delta_loss(bundle, batch, micro_bs: int) -> tuple[float, str, float]:
 
 
 def run_chi_net(bundle, batch, micro_bs: int, method: str, n_h: int) -> float:
-    device = next(bundle.model.parameters()).device
     if method == "hutchinson":
         est = HutchinsonEstimator(n_hutchinson=n_h)
     else:
         est = PerSequenceControlVariateEstimator(n_hutchinson=n_h)
-    gen = torch.Generator(device=device).manual_seed(0)
+    # CPU generator: probes are drawn on the CPU and copied to the device so a
+    # seed means the same probe set everywhere (vatis.core.probes.make_probe).
+    gen = torch.Generator().manual_seed(0)
     reset_peak()
     est.compute(
         bundle.model,

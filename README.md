@@ -24,6 +24,11 @@ Per `(checkpoint, eval-batch)`, four scalars:
 | `chi_pos`    | δL/(χ_loss·χ_net)  | spectral **position**: bulk (→1) vs tail (→0)      | combinator |
 | `delta_loss` | ⟨∇_θ Lᴬ, ∇_θ Lᴮ⟩   | gradient alignment of two batches (A=B → ‖∇_θ L‖²) | 1–2 backwards |
 
+With a checkpoint that carries its optimizer state, the same three scalars can
+additionally be measured on the optimizer's preconditioned kernel
+(`delta_loss_P`, `chi_net_P`, `chi_pos_P`) — see
+[Optimizer-aware ruler](#optimizer-aware-ruler).
+
 ## Setup
 
 vatis recommends [uv](https://docs.astral.sh/uv/) for environment management —
@@ -50,7 +55,7 @@ python -c "from vatis import analyze; print('vatis ready')"
 
 ```bash
 uv pip install -e ".[dev]"
-pytest tests/unit -q          # 52 CPU-only unit tests, ~30 s
+pytest tests/unit -q          # the unit tier (GPU-only cases skip without CUDA)
 
 # the cross-validation tier additionally compares against perspic (the
 # unpublished sister package); skip this tier if you don't have it:
@@ -101,10 +106,54 @@ and edit it — the example scripts read it via `run_config.py`. SLURM benchmark
 jobs are submitted with `examples/benchmark/submit.sh <script>.sbatch`, which
 pulls `SBATCH_PARTITION`/`SBATCH_ACCOUNT` from the same `.env`.
 
+## Optimizer-aware ruler
+
+An optimizer with update `Δθ = −η P ∇L` trains on the effective kernel
+`Θ_P = J P Jᵀ` rather than on the raw eNTK. Pass a diagonal `P` and vatis
+measures the LNP triple on that kernel too, in the same pass and with no extra
+backward:
+
+| observable     | symbol               | meaning |
+|----------------|----------------------|---------|
+| `delta_loss_P` | ∇_θ Lᴮ · P ∇_θ Lᴬ    | preconditioned gradient alignment |
+| `chi_net_P`    | Tr(J P Jᵀ)           | trace of the effective kernel |
+| `chi_pos_P`    | δLᴾ/(χ_loss·χ_netᴾ)  | spectral position on the optimizer's ruler |
+
+```python
+from vatis import Analyzer, load_local_bundle
+
+source = load_local_bundle(run_dir, "my_project.models:build_model")
+analyzer = Analyzer(
+    eval_batches={"train": source.batch_a_spec(), "val": val_batch},
+    preconditioner=source.adamw_preconditioner(),  # P = 1/(√v̂ + ε), per checkpoint
+    cross_pairs=[("train", "val")],
+    sink="results.parquet",
+)
+analyzer.run(source.model_specs())
+```
+
+`preconditioner` also accepts `"identity"` or any diagonal you build yourself
+(`Preconditioner.from_diagonal(vector)`), which works with HF checkpoints as
+well. Without the argument nothing changes: no P rows, no extra cost.
+
+Three things to know before using it:
+
+- **AdamW's `P` is read from vatis's own checkpoint-bundle format only** — a run
+  directory with weights, `optim.pt` and the update batch per checkpoint
+  ([`docs/SPEC.md` → Native checkpoint bundles](docs/SPEC.md)). There is no
+  loader yet for optimizer states published with hub checkpoints.
+- **`delta_loss_P` is not the first-order loss change of the AdamW step.** `P`
+  is the geometry factor only: momentum and weight decay are excluded, and it is
+  built from the second moment *before* the step
+  ([`docs/SPEC.md` → What `delta_loss_P` is not](docs/SPEC.md)).
+- Coordinates the optimizer never updated sit at `P = 1/ε` and can dominate
+  `chi_net_P` on held-out data; `vatis.core.preconditioner.epsilon_cap_mask`
+  lets you check their share.
+
 ## Output
 
-Long-format parquet: one row per `(checkpoint, batch_a, batch_b, observable)`,
-each in raw and `_normalized` form. Load with pandas/pyarrow and pivot. The
+Long-format parquet: one row per `(checkpoint, batch_a, batch_b, preconditioner,
+observable)`, each raw observable in raw and `_normalized` form. Load with pandas/pyarrow and pivot. The
 schema is the contract between vatis and any downstream analysis — see
 [`docs/SPEC.md` → Result format](docs/SPEC.md).
 

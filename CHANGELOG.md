@@ -4,6 +4,68 @@ All notable changes to vatis are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Preconditioned ruler.** `Analyzer` / `analyze()` gained **`preconditioner`**
+  (`None` | `"identity"` | `Preconditioner` | `callable(checkpoint_id)`). With a
+  diagonal `P`, three more observables are measured on the effective kernel
+  `Θ_P = J P Jᵀ` in the same pass, with no extra backward: `delta_loss_P`,
+  `chi_net_P`, `chi_pos_P`. Supported by both `χ_net` estimators, cross pairs
+  and DDP. `P = I` reproduces the raw triple.
+- `vatis.Preconditioner` (`identity`, `from_diagonal`, `adamw`) and
+  `vatis.core.preconditioner.epsilon_cap_mask`.
+- **Native checkpoint bundles**: `vatis.load_local_bundle(run_dir,
+  model_factory)` reads a run directory holding weights, the pre-step
+  `torch.optim` state and the update batch per checkpoint, and exposes the
+  optimizer state flattened in one canonical parameter order
+  (`vatis.core.param_layout.ParameterLayout`). `source.adamw_preconditioner()`
+  builds `P = diag(1/(√v̂ + ε))` per checkpoint.
+- Parquet rows carry a **`preconditioner`** column (appended last): `"none"` on
+  raw rows, the `P` descriptor on the new rows.
+- A warning when a published `chi_pos` / `chi_pos_P` leaves `[−1, 1]` by more
+  than 0.5 (a Cauchy–Schwarz violation, i.e. inconsistent inputs such as a
+  sum-reduced `loss_fn`).
+- `golden` test tier (`pytest -m golden`): trains a tiny transformer, writes a
+  bundle, runs both rulers end to end.
+- New hard dependency: `safetensors` (to read bundle weights).
+
+### Changed
+- **Hutchinson probes are drawn on the CPU** and copied to the device, so a seed
+  now identifies one probe set on every device, and the default Rademacher draw
+  is bit-packed. Consequence: for a given `seed`, `chi_net` (and therefore
+  `chi_pos`) with Rademacher probes is a *different draw* than in 0.2.x — same
+  estimator, same expectation, different random numbers. `chi_loss` and
+  `delta_loss` are bit-identical to 0.2.x, and so is `chi_net` with Gaussian
+  probes on a CPU run. `make_probe` refuses a CUDA generator.
+- `chi_pos` is computed in fp64 and returned as an fp64 scalar. The absolute
+  `1e-30` floor on its denominator is gone: only an exactly-zero denominator
+  yields `0.0`.
+- **Custom `ChiNetEstimator` subclasses must accept a `preconditioner` keyword**
+  in `compute()`; the analyzer always passes it (`None` without a P).
+- The analyzer raises a `RuntimeError` if the estimator's valid-token count
+  differs from the one `chi_loss` was normalized with.
+- `cross_grad_storage="auto"` looks at the device the model is on rather than at
+  `Analyzer.device`.
+- `observables=None` is the new default and means "all raw observables, plus the
+  P observables when a preconditioner is set". Passing an explicit list behaves
+  as before.
+
+### Fixed
+- The `valid_mask_fn ∧ labels != ignore_index` intersection is now applied by
+  **every** accumulator, not only `chi_loss`. With a `valid_mask_fn` that accepts
+  positions whose label is `ignore_index`, `delta_loss` was rescaled and depended
+  on `micro_batch_size`, and `chi_net` included the Jacobian rows of ignored
+  positions. The shipped loaders were not affected (their mask already equals
+  `labels != ignore_index`).
+- The analyzer restores the `requires_grad` flags it changes on the model's parameters.
+
+### Known limitations
+- `delta_loss_P` is **not** the first-order loss change of the AdamW step:
+  momentum, weight decay and the step's own second-moment update are excluded.
+- AdamW's `P` can only be built from native checkpoint bundles; optimizer states
+  published with hub checkpoints are not read.
+
 ## [0.2.1] — 2026-10-19
 
 ### Added

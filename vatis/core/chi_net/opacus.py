@@ -8,7 +8,9 @@ compatibility requirements (no tied embeddings, no in-place ops, only
 opacus-supported layers).
 
 In v1 we ship only the stub. Calling ``compute`` raises NotImplementedError
-with a clear pointer to the supported alternatives.
+with a clear pointer to the supported alternatives. The preconditioned ruler
+(``chi_net^P``) is implemented in the two live estimators only, for the same
+reason: there is no opacus path to insert the P weighting into yet.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from vatis.core.chi_net.base import (
     LossFn,
     ValidMaskFn,
 )
+from vatis.core.preconditioner import Preconditioner
 
 
 class OpacusEstimator(ChiNetEstimator):
@@ -48,6 +51,7 @@ class OpacusEstimator(ChiNetEstimator):
         params: list[torch.nn.Parameter],
         micro_batch_size: int,
         generator: torch.Generator | None = None,
+        preconditioner: Preconditioner | None = None,
     ) -> ChiNetResult:
         raise NotImplementedError(
             "the opacus chi_net path is v1.1 work; "

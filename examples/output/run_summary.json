@@ -1,0 +1,1002 @@
+{
+  "kind": "wp0_two_rulers_llama",
+  "bundle": "/tmp/wp0_example/bundle",
+  "eval_batches_dir": "/tmp/wp0_example/eval_batches",
+  "random_token_measurement_batches": false,
+  "random_token_training_run": false,
+  "scientifically_empty": false,
+  "config": {
+    "device": "cuda",
+    "dtype": "fp32",
+    "chi_net_method": "per_sequence_cv",
+    "n_hutchinson": 32,
+    "micro_batch_size": 8,
+    "seed": 0,
+    "batch_names": [
+      "A1",
+      "A2",
+      "B"
+    ],
+    "cross_pairs": [
+      [
+        "A1",
+        "B"
+      ],
+      [
+        "A2",
+        "B"
+      ]
+    ]
+  },
+  "environment": {
+    "torch": "2.10.0+cu128",
+    "python": "3.11.15",
+    "gpu": "NVIDIA GeForce RTX 3090 Ti",
+    "gpu_contended": "yes -- another process shares this card; timings are as-measured, untuned"
+  },
+  "bundle_metadata": {
+    "run_name": "bundle",
+    "model_class": "Transformer",
+    "model_config": {
+      "dim": 320,
+      "n_layers": 6,
+      "n_heads": 4,
+      "n_kv_heads": null,
+      "vocab_size": 4096,
+      "multiple_of": 256,
+      "norm_eps": 1e-05,
+      "max_seq_len": 512,
+      "dropout": 0.0
+    },
+    "num_parameters": 10981440,
+    "num_param_tensors": 57,
+    "optimizer_class": "AdamW",
+    "optimizer_hparams": {
+      "lr": 1e-05,
+      "betas": [
+        0.9,
+        0.95
+      ],
+      "eps": 1e-08,
+      "weight_decay": 0.01,
+      "amsgrad": false,
+      "maximize": false,
+      "foreach": null,
+      "capturable": false,
+      "differentiable": false,
+      "fused": null,
+      "decoupled_weight_decay": true,
+      "initial_lr": 0.004,
+      "beta1": 0.9,
+      "beta2": 0.95
+    },
+    "dataset_id": "SimpleStories/SimpleStories",
+    "tokenizer": "SimpleStories/SimpleStories-1.25M",
+    "B_train": 32,
+    "seq_len": 512,
+    "total_steps_planned": 300,
+    "bundle_steps_spec": "log:20",
+    "learning_rate": 0.004,
+    "warmup_steps": 30
+  },
+  "checkpoints": [
+    {
+      "checkpoint_id": "bundle@step0",
+      "revision": "step0",
+      "step": 0,
+      "train_loss": 8.56212329864502,
+      "lr": 1e-05,
+      "tokens_seen": 0,
+      "wall_time": 0.22997354000108317
+    },
+    {
+      "checkpoint_id": "bundle@step1",
+      "revision": "step1",
+      "step": 1,
+      "train_loss": 8.493307113647461,
+      "lr": 0.000143,
+      "tokens_seen": 16352,
+      "wall_time": 0.5851713849697262
+    },
+    {
+      "checkpoint_id": "bundle@step2",
+      "revision": "step2",
+      "step": 2,
+      "train_loss": 7.435482025146484,
+      "lr": 0.000276,
+      "tokens_seen": 32704,
+      "wall_time": 1.2480844240053557
+    },
+    {
+      "checkpoint_id": "bundle@step3",
+      "revision": "step3",
+      "step": 3,
+      "train_loss": 6.45854377746582,
+      "lr": 0.00040899999999999997,
+      "tokens_seen": 49056,
+      "wall_time": 1.4653209979878739
+    },
+    {
+      "checkpoint_id": "bundle@step4",
+      "revision": "step4",
+      "step": 4,
+      "train_loss": 4.863214492797852,
+      "lr": 0.000542,
+      "tokens_seen": 65408,
+      "wall_time": 2.121993930952158
+    },
+    {
+      "checkpoint_id": "bundle@step6",
+      "revision": "step6",
+      "step": 6,
+      "train_loss": 4.001189231872559,
+      "lr": 0.0008079999999999998,
+      "tokens_seen": 98112,
+      "wall_time": 2.4730034269741736
+    },
+    {
+      "checkpoint_id": "bundle@step8",
+      "revision": "step8",
+      "step": 8,
+      "train_loss": 4.452707767486572,
+      "lr": 0.0010739999999999997,
+      "tokens_seen": 130816,
+      "wall_time": 3.346534031967167
+    },
+    {
+      "checkpoint_id": "bundle@step11",
+      "revision": "step11",
+      "step": 11,
+      "train_loss": 3.436152935028076,
+      "lr": 0.0014729999999999995,
+      "tokens_seen": 179872,
+      "wall_time": 3.840773868956603
+    },
+    {
+      "checkpoint_id": "bundle@step15",
+      "revision": "step15",
+      "step": 15,
+      "train_loss": 3.558448076248169,
+      "lr": 0.0020049999999999994,
+      "tokens_seen": 245280,
+      "wall_time": 4.506191523978487
+    },
+    {
+      "checkpoint_id": "bundle@step20",
+      "revision": "step20",
+      "step": 20,
+      "train_loss": 3.1324830055236816,
+      "lr": 0.00267,
+      "tokens_seen": 327040,
+      "wall_time": 5.737505054974463
+    },
+    {
+      "checkpoint_id": "bundle@step27",
+      "revision": "step27",
+      "step": 27,
+      "train_loss": 2.945955753326416,
+      "lr": 0.003601000000000001,
+      "tokens_seen": 441504,
+      "wall_time": 6.752745107980445
+    },
+    {
+      "checkpoint_id": "bundle@step37",
+      "revision": "step37",
+      "step": 37,
+      "train_loss": 3.0038108825683594,
+      "lr": 0.003993386351648789,
+      "tokens_seen": 605024,
+      "wall_time": 8.653617192001548
+    },
+    {
+      "checkpoint_id": "bundle@step49",
+      "revision": "step49",
+      "step": 49,
+      "train_loss": 2.556830883026123,
+      "lr": 0.003951446248967505,
+      "tokens_seen": 801248,
+      "wall_time": 10.354176112974528
+    },
+    {
+      "checkpoint_id": "bundle@step67",
+      "revision": "step67",
+      "step": 67,
+      "train_loss": 2.6002352237701416,
+      "lr": 0.003817958502302258,
+      "tokens_seen": 1095584,
+      "wall_time": 13.241342107998207
+    },
+    {
+      "checkpoint_id": "bundle@step90",
+      "revision": "step90",
+      "step": 90,
+      "train_loss": 2.5636188983917236,
+      "lr": 0.0035332586640223576,
+      "tokens_seen": 1471680,
+      "wall_time": 16.337657451978885
+    },
+    {
+      "checkpoint_id": "bundle@step122",
+      "revision": "step122",
+      "step": 122,
+      "train_loss": 2.0271852016448975,
+      "lr": 0.002962027660934237,
+      "tokens_seen": 1994944,
+      "wall_time": 20.593885932990815
+    },
+    {
+      "checkpoint_id": "bundle@step164",
+      "revision": "step164",
+      "step": 164,
+      "train_loss": 2.1028854846954346,
+      "lr": 0.0020282123552737836,
+      "tokens_seen": 2681728,
+      "wall_time": 26.56511818896979
+    },
+    {
+      "checkpoint_id": "bundle@step221",
+      "revision": "step221",
+      "step": 221,
+      "train_loss": 1.5844480991363525,
+      "lr": 0.0007951300846293654,
+      "tokens_seen": 3613792,
+      "wall_time": 34.05499278497882
+    },
+    {
+      "checkpoint_id": "bundle@step299",
+      "revision": "step299",
+      "step": 299,
+      "train_loss": 1.7777575254440308,
+      "lr": 1.0135045532494403e-05,
+      "tokens_seen": 4889248,
+      "wall_time": 44.67539658397436
+    }
+  ],
+  "identity_recheck": {
+    "step": 299,
+    "checkpoint_id": "bundle@step299",
+    "pairs_compared": 15,
+    "worst_abs_deviation": 0.0,
+    "worst_at": null,
+    "tolerance": 1e-06,
+    "passed": true
+  },
+  "epsilon_ceiling": [
+    {
+      "step": 0,
+      "optimizer_state": "empty",
+      "note": "step-0 checkpoint: no AdamW P exists, P rows skipped"
+    },
+    {
+      "step": 1,
+      "eps": 1e-08,
+      "n_capped": 835840,
+      "n_total": 10981440,
+      "diag_capped_share": 0.07611387941836407,
+      "p_min": 0.6570460796356201,
+      "p_max": 100000000.0,
+      "capped_by_param": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_capped": 835840,
+          "numel": 1310720
+        }
+      ],
+      "dead_vocab_rows": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_dead_rows": 2612,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 139,
+          "n_distinct_tokens_in_batch_b": 574
+        },
+        {
+          "name": "model.output.weight",
+          "n_dead_rows": 0,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 0,
+          "n_distinct_tokens_in_batch_b": 574
+        }
+      ],
+      "chi_net_p_full": 292609377435648.0,
+      "chi_net_p_live_only": 262669193969664.0,
+      "chi_net_p_ceiling_share": 0.10232133955641454
+    },
+    {
+      "step": 2,
+      "eps": 1e-08,
+      "n_capped": 662080,
+      "n_total": 10981440,
+      "diag_capped_share": 0.06029081796194306,
+      "p_min": 0.649442732334137,
+      "p_max": 100000000.0,
+      "capped_by_param": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_capped": 662080,
+          "numel": 1310720
+        }
+      ],
+      "dead_vocab_rows": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_dead_rows": 2069,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 84,
+          "n_distinct_tokens_in_batch_b": 574
+        },
+        {
+          "name": "model.output.weight",
+          "n_dead_rows": 0,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 0,
+          "n_distinct_tokens_in_batch_b": 574
+        }
+      ]
+    },
+    {
+      "step": 3,
+      "eps": 1e-08,
+      "n_capped": 563200,
+      "n_total": 10981440,
+      "diag_capped_share": 0.051286534370720054,
+      "p_min": 0.6342939138412476,
+      "p_max": 100000000.0,
+      "capped_by_param": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_capped": 563200,
+          "numel": 1310720
+        }
+      ],
+      "dead_vocab_rows": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_dead_rows": 1760,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 65,
+          "n_distinct_tokens_in_batch_b": 574
+        },
+        {
+          "name": "model.output.weight",
+          "n_dead_rows": 0,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 0,
+          "n_distinct_tokens_in_batch_b": 574
+        }
+      ]
+    },
+    {
+      "step": 4,
+      "eps": 1e-08,
+      "n_capped": 474240,
+      "n_total": 10981440,
+      "diag_capped_share": 0.043185593146254045,
+      "p_min": 0.6701300144195557,
+      "p_max": 100000000.0,
+      "capped_by_param": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_capped": 474240,
+          "numel": 1310720
+        }
+      ],
+      "dead_vocab_rows": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_dead_rows": 1482,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 47,
+          "n_distinct_tokens_in_batch_b": 574
+        },
+        {
+          "name": "model.output.weight",
+          "n_dead_rows": 0,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 0,
+          "n_distinct_tokens_in_batch_b": 574
+        }
+      ]
+    },
+    {
+      "step": 6,
+      "eps": 1e-08,
+      "n_capped": 369280,
+      "n_total": 10981440,
+      "diag_capped_share": 0.03362764810443803,
+      "p_min": 0.8047547340393066,
+      "p_max": 100000000.0,
+      "capped_by_param": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_capped": 369280,
+          "numel": 1310720
+        }
+      ],
+      "dead_vocab_rows": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_dead_rows": 1154,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 27,
+          "n_distinct_tokens_in_batch_b": 574
+        },
+        {
+          "name": "model.output.weight",
+          "n_dead_rows": 0,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 0,
+          "n_distinct_tokens_in_batch_b": 574
+        }
+      ]
+    },
+    {
+      "step": 8,
+      "eps": 1e-08,
+      "n_capped": 311040,
+      "n_total": 10981440,
+      "diag_capped_share": 0.02832415420928403,
+      "p_min": 0.9541892409324646,
+      "p_max": 100000000.0,
+      "capped_by_param": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_capped": 311040,
+          "numel": 1310720
+        }
+      ],
+      "dead_vocab_rows": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_dead_rows": 972,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 20,
+          "n_distinct_tokens_in_batch_b": 574
+        },
+        {
+          "name": "model.output.weight",
+          "n_dead_rows": 0,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 0,
+          "n_distinct_tokens_in_batch_b": 574
+        }
+      ]
+    },
+    {
+      "step": 11,
+      "eps": 1e-08,
+      "n_capped": 258560,
+      "n_total": 10981440,
+      "diag_capped_share": 0.023545181688376025,
+      "p_min": 1.1663414239883423,
+      "p_max": 100000000.0,
+      "capped_by_param": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_capped": 258560,
+          "numel": 1310720
+        }
+      ],
+      "dead_vocab_rows": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_dead_rows": 808,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 8,
+          "n_distinct_tokens_in_batch_b": 574
+        },
+        {
+          "name": "model.output.weight",
+          "n_dead_rows": 0,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 0,
+          "n_distinct_tokens_in_batch_b": 574
+        }
+      ]
+    },
+    {
+      "step": 15,
+      "eps": 1e-08,
+      "n_capped": 219200,
+      "n_total": 10981440,
+      "diag_capped_share": 0.01996095229769502,
+      "p_min": 1.4417612552642822,
+      "p_max": 100000000.0,
+      "capped_by_param": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_capped": 219200,
+          "numel": 1310720
+        }
+      ],
+      "dead_vocab_rows": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_dead_rows": 685,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 5,
+          "n_distinct_tokens_in_batch_b": 574
+        },
+        {
+          "name": "model.output.weight",
+          "n_dead_rows": 0,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 0,
+          "n_distinct_tokens_in_batch_b": 574
+        }
+      ]
+    },
+    {
+      "step": 20,
+      "eps": 1e-08,
+      "n_capped": 189440,
+      "n_total": 10981440,
+      "diag_capped_share": 0.01725092519742402,
+      "p_min": 1.7919126749038696,
+      "p_max": 100000000.0,
+      "capped_by_param": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_capped": 189440,
+          "numel": 1310720
+        }
+      ],
+      "dead_vocab_rows": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_dead_rows": 592,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 5,
+          "n_distinct_tokens_in_batch_b": 574
+        },
+        {
+          "name": "model.output.weight",
+          "n_dead_rows": 0,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 0,
+          "n_distinct_tokens_in_batch_b": 574
+        }
+      ],
+      "chi_net_p_full": 107821496532992.0,
+      "chi_net_p_live_only": 107422072963072.0,
+      "chi_net_p_ceiling_share": 0.003704489204504609
+    },
+    {
+      "step": 27,
+      "eps": 1e-08,
+      "n_capped": 166080,
+      "n_total": 10981440,
+      "diag_capped_share": 0.015123699624093016,
+      "p_min": 2.317976713180542,
+      "p_max": 100000000.0,
+      "capped_by_param": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_capped": 166080,
+          "numel": 1310720
+        }
+      ],
+      "dead_vocab_rows": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_dead_rows": 519,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 4,
+          "n_distinct_tokens_in_batch_b": 574
+        },
+        {
+          "name": "model.output.weight",
+          "n_dead_rows": 0,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 0,
+          "n_distinct_tokens_in_batch_b": 574
+        }
+      ]
+    },
+    {
+      "step": 37,
+      "eps": 1e-08,
+      "n_capped": 146880,
+      "n_total": 10981440,
+      "diag_capped_share": 0.013375295043273014,
+      "p_min": 3.190011739730835,
+      "p_max": 100000000.0,
+      "capped_by_param": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_capped": 146880,
+          "numel": 1310720
+        }
+      ],
+      "dead_vocab_rows": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_dead_rows": 459,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 4,
+          "n_distinct_tokens_in_batch_b": 574
+        },
+        {
+          "name": "model.output.weight",
+          "n_dead_rows": 0,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 0,
+          "n_distinct_tokens_in_batch_b": 574
+        }
+      ]
+    },
+    {
+      "step": 49,
+      "eps": 1e-08,
+      "n_capped": 133440,
+      "n_total": 10981440,
+      "diag_capped_share": 0.012151411836699013,
+      "p_min": 4.512024879455566,
+      "p_max": 100000000.0,
+      "capped_by_param": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_capped": 133440,
+          "numel": 1310720
+        }
+      ],
+      "dead_vocab_rows": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_dead_rows": 417,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 3,
+          "n_distinct_tokens_in_batch_b": 574
+        },
+        {
+          "name": "model.output.weight",
+          "n_dead_rows": 0,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 0,
+          "n_distinct_tokens_in_batch_b": 574
+        }
+      ]
+    },
+    {
+      "step": 67,
+      "eps": 1e-08,
+      "n_capped": 118080,
+      "n_total": 10981440,
+      "diag_capped_share": 0.010752688172043012,
+      "p_min": 7.346789360046387,
+      "p_max": 100000000.0,
+      "capped_by_param": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_capped": 118080,
+          "numel": 1310720
+        }
+      ],
+      "dead_vocab_rows": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_dead_rows": 369,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 1,
+          "n_distinct_tokens_in_batch_b": 574
+        },
+        {
+          "name": "model.output.weight",
+          "n_dead_rows": 0,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 0,
+          "n_distinct_tokens_in_batch_b": 574
+        }
+      ]
+    },
+    {
+      "step": 90,
+      "eps": 1e-08,
+      "n_capped": 106240,
+      "n_total": 10981440,
+      "diag_capped_share": 0.00967450534720401,
+      "p_min": 13.40342903137207,
+      "p_max": 100000000.0,
+      "capped_by_param": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_capped": 106240,
+          "numel": 1310720
+        }
+      ],
+      "dead_vocab_rows": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_dead_rows": 332,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 1,
+          "n_distinct_tokens_in_batch_b": 574
+        },
+        {
+          "name": "model.output.weight",
+          "n_dead_rows": 0,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 0,
+          "n_distinct_tokens_in_batch_b": 574
+        }
+      ]
+    },
+    {
+      "step": 122,
+      "eps": 1e-08,
+      "n_capped": 97600,
+      "n_total": 10981440,
+      "diag_capped_share": 0.008887723285835009,
+      "p_min": 30.574169158935547,
+      "p_max": 100000000.0,
+      "capped_by_param": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_capped": 97600,
+          "numel": 1310720
+        }
+      ],
+      "dead_vocab_rows": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_dead_rows": 305,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 0,
+          "n_distinct_tokens_in_batch_b": 574
+        },
+        {
+          "name": "model.output.weight",
+          "n_dead_rows": 0,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 0,
+          "n_distinct_tokens_in_batch_b": 574
+        }
+      ]
+    },
+    {
+      "step": 164,
+      "eps": 1e-08,
+      "n_capped": 90560,
+      "n_total": 10981440,
+      "diag_capped_share": 0.008246641606201009,
+      "p_min": 78.1787338256836,
+      "p_max": 100000000.0,
+      "capped_by_param": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_capped": 90560,
+          "numel": 1310720
+        }
+      ],
+      "dead_vocab_rows": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_dead_rows": 283,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 0,
+          "n_distinct_tokens_in_batch_b": 574
+        },
+        {
+          "name": "model.output.weight",
+          "n_dead_rows": 0,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 0,
+          "n_distinct_tokens_in_batch_b": 574
+        }
+      ]
+    },
+    {
+      "step": 221,
+      "eps": 1e-08,
+      "n_capped": 83200,
+      "n_total": 10981440,
+      "diag_capped_share": 0.007576419850220007,
+      "p_min": 107.14501190185547,
+      "p_max": 100000000.0,
+      "capped_by_param": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_capped": 83200,
+          "numel": 1310720
+        }
+      ],
+      "dead_vocab_rows": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_dead_rows": 260,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 0,
+          "n_distinct_tokens_in_batch_b": 574
+        },
+        {
+          "name": "model.output.weight",
+          "n_dead_rows": 0,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 0,
+          "n_distinct_tokens_in_batch_b": 574
+        }
+      ]
+    },
+    {
+      "step": 299,
+      "eps": 1e-08,
+      "n_capped": 78080,
+      "n_total": 10981440,
+      "diag_capped_share": 0.007110178628668007,
+      "p_min": 183.5182342529297,
+      "p_max": 100000000.0,
+      "capped_by_param": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_capped": 78080,
+          "numel": 1310720
+        }
+      ],
+      "dead_vocab_rows": [
+        {
+          "name": "model.tok_embeddings.weight",
+          "n_dead_rows": 244,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 0,
+          "n_distinct_tokens_in_batch_b": 574
+        },
+        {
+          "name": "model.output.weight",
+          "n_dead_rows": 0,
+          "vocab_size": 4096,
+          "n_dead_rows_present_in_batch_b": 0,
+          "n_distinct_tokens_in_batch_b": 574
+        }
+      ],
+      "chi_net_p_full": 7718901802598400.0,
+      "chi_net_p_live_only": 7718901802598400.0,
+      "chi_net_p_ceiling_share": 0.0
+    }
+  ],
+  "non_finite_rows": [],
+  "performance": {
+    "per_checkpoint": [
+      {
+        "checkpoint_id": "bundle@step0",
+        "step": 0,
+        "load_s": 0.43832548800855875,
+        "analysis_s": 6.506892074015923,
+        "peak_gpu_mb": 1642.5283203125
+      },
+      {
+        "checkpoint_id": "bundle@step1",
+        "step": 1,
+        "load_s": 0.44903091195737943,
+        "analysis_s": 4.216625678003766,
+        "peak_gpu_mb": 1770.8125
+      },
+      {
+        "checkpoint_id": "bundle@step2",
+        "step": 2,
+        "load_s": 0.45681475702440366,
+        "analysis_s": 3.5943097450071946,
+        "peak_gpu_mb": 1770.8125
+      },
+      {
+        "checkpoint_id": "bundle@step3",
+        "step": 3,
+        "load_s": 0.4577722499961965,
+        "analysis_s": 4.28757308999775,
+        "peak_gpu_mb": 1770.8125
+      },
+      {
+        "checkpoint_id": "bundle@step4",
+        "step": 4,
+        "load_s": 0.42065008799545467,
+        "analysis_s": 3.9313768119900487,
+        "peak_gpu_mb": 1770.8125
+      },
+      {
+        "checkpoint_id": "bundle@step6",
+        "step": 6,
+        "load_s": 0.4544533689622767,
+        "analysis_s": 3.9443607260473073,
+        "peak_gpu_mb": 1770.8125
+      },
+      {
+        "checkpoint_id": "bundle@step8",
+        "step": 8,
+        "load_s": 0.3890915709780529,
+        "analysis_s": 3.2166049140505493,
+        "peak_gpu_mb": 1770.8125
+      },
+      {
+        "checkpoint_id": "bundle@step11",
+        "step": 11,
+        "load_s": 0.367986214987468,
+        "analysis_s": 3.966472400992643,
+        "peak_gpu_mb": 1770.8125
+      },
+      {
+        "checkpoint_id": "bundle@step15",
+        "step": 15,
+        "load_s": 0.41468750999774784,
+        "analysis_s": 4.039526718028355,
+        "peak_gpu_mb": 1770.8125
+      },
+      {
+        "checkpoint_id": "bundle@step20",
+        "step": 20,
+        "load_s": 0.44631176098482683,
+        "analysis_s": 4.033456158009358,
+        "peak_gpu_mb": 1770.8125
+      },
+      {
+        "checkpoint_id": "bundle@step27",
+        "step": 27,
+        "load_s": 0.4657656620256603,
+        "analysis_s": 3.521403790975455,
+        "peak_gpu_mb": 1770.8125
+      },
+      {
+        "checkpoint_id": "bundle@step37",
+        "step": 37,
+        "load_s": 0.4332143380306661,
+        "analysis_s": 3.493609839002602,
+        "peak_gpu_mb": 1770.8125
+      },
+      {
+        "checkpoint_id": "bundle@step49",
+        "step": 49,
+        "load_s": 0.43494673899840564,
+        "analysis_s": 3.7030068010208197,
+        "peak_gpu_mb": 1770.8125
+      },
+      {
+        "checkpoint_id": "bundle@step67",
+        "step": 67,
+        "load_s": 0.4011531839496456,
+        "analysis_s": 3.3963858200004324,
+        "peak_gpu_mb": 1770.8125
+      },
+      {
+        "checkpoint_id": "bundle@step90",
+        "step": 90,
+        "load_s": 0.42154031596146524,
+        "analysis_s": 3.4867783350055106,
+        "peak_gpu_mb": 1770.8125
+      },
+      {
+        "checkpoint_id": "bundle@step122",
+        "step": 122,
+        "load_s": 0.44588372198631987,
+        "analysis_s": 3.533856729976833,
+        "peak_gpu_mb": 1770.8125
+      },
+      {
+        "checkpoint_id": "bundle@step164",
+        "step": 164,
+        "load_s": 0.461200017016381,
+        "analysis_s": 4.0919878099812195,
+        "peak_gpu_mb": 1770.8125
+      },
+      {
+        "checkpoint_id": "bundle@step221",
+        "step": 221,
+        "load_s": 0.38294872897677124,
+        "analysis_s": 3.3754456160240807,
+        "peak_gpu_mb": 1770.8125
+      },
+      {
+        "checkpoint_id": "bundle@step299",
+        "step": 299,
+        "load_s": 0.4317703240085393,
+        "analysis_s": 3.726475831004791,
+        "peak_gpu_mb": 1770.8125
+      }
+    ],
+    "total_wall_s": 86.79654552403372,
+    "script_wall_s": 99.0258446969674,
+    "peak_gpu_mb": 1770.8125,
+    "n_rows": 840,
+    "table": "      checkpoint   step   load_s  analysis_s  peak_gpu_mb\n    bundle@step0      0     0.44        6.51         1643\n    bundle@step1      1     0.45        4.22         1771\n    bundle@step2      2     0.46        3.59         1771\n    bundle@step3      3     0.46        4.29         1771\n    bundle@step4      4     0.42        3.93         1771\n    bundle@step6      6     0.45        3.94         1771\n    bundle@step8      8     0.39        3.22         1771\n   bundle@step11     11     0.37        3.97         1771\n   bundle@step15     15     0.41        4.04         1771\n   bundle@step20     20     0.45        4.03         1771\n   bundle@step27     27     0.47        3.52         1771\n   bundle@step37     37     0.43        3.49         1771\n   bundle@step49     49     0.43        3.70         1771\n   bundle@step67     67     0.40        3.40         1771\n   bundle@step90     90     0.42        3.49         1771\n  bundle@step122    122     0.45        3.53         1771\n  bundle@step164    164     0.46        4.09         1771\n  bundle@step221    221     0.38        3.38         1771\n  bundle@step299    299     0.43        3.73         1771\n            mean            0.43        3.90         1771\n           total            8.17       74.07             \n\n  checkpoints          : 19\n  result rows          : 840\n  sweep wall time      : 86.8 s  (load + both rulers + sink)\n  script wall time     : 99.0 s  (+ P=I re-check, epsilon split)\n  peak GPU memory      : 1771 MiB (torch allocator, this process)\n  caveat               : the GPU may be shared (the allocator only sees this process); wall times are as-measured, not tuned or best-of-N."
+  },
+  "step0_p_skip_warnings": [
+    "bundle@step0: the saved optimizer state is empty (/tmp/wp0_example/bundle/checkpoints/step_00000000/optim.pt), which is what a step-0 checkpoint looks like under pre-step semantics. No AdamW preconditioner exists there, so the delta_loss_P / chi_net_P / chi_pos_P rows are SKIPPED for this checkpoint (the raw rows are unaffected). P = 1/(sqrt(0) + eps) = 1/eps would be a garbage preconditioner, and P = I would misreport the identity as 'adamw'."
+  ]
+}
