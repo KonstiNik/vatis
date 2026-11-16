@@ -9,11 +9,17 @@ single-GPU baseline.
 ``chi_net`` a *deterministic functional of the shard*. That is what lets the
 driver compare DDP against single-process **exactly** instead of within a
 sampling bound: with the shipped RNG the two runs draw different probes for
-different samples (a rank's generator restarts at the same seed for its own
-shard), so only a statistical comparison is possible and it hides plumbing bugs
-of a few percent. Unbiasedness is tested elsewhere
+the same samples (rank 0 draws the per-call stream for its shard, every other
+rank draws its own rank-derived stream, while a single process runs the per-call
+stream through the whole batch), so DDP and single-process can only be compared
+statistically. Unbiasedness is tested elsewhere
 (``tests/unit/test_chi_net_probe_exactness.py``); here we are testing sharding
 and the all-reduce.
+
+``--duplicate-half`` builds the batch as two copies of a half-size batch, so the
+two ranks of a 2-rank run hold the *same* samples. That is the configuration in
+which ranks replaying one probe stream is visible without any statistics: the
+second rank then reproduces the first rank's number bit for bit.
 """
 
 from __future__ import annotations
@@ -96,6 +102,11 @@ def main() -> int:
         action="store_true",
         help="also measure the P triple, with an explicit spread P",
     )
+    parser.add_argument(
+        "--duplicate-half",
+        action="store_true",
+        help="batch = two copies of a (batch-size // 2)-sample batch: identical shards on 2 ranks",
+    )
     args = parser.parse_args()
 
     if args.pin_probes:
@@ -125,9 +136,15 @@ def main() -> int:
             diag = torch.exp(torch.randn(n_params, generator=gen) * 2.0)
             precond = Preconditioner.from_diagonal(diag, descriptor="explicit")
 
-        batch = make_tiny_lm_batch(
-            batch_size=args.batch_size, seed=args.seed, pad_fraction=0.25, device="cpu"
-        )
+        if args.duplicate_half:
+            half = make_tiny_lm_batch(
+                batch_size=args.batch_size // 2, seed=args.seed, pad_fraction=0.25, device="cpu"
+            )
+            batch = {k: torch.cat([v, v]) for k, v in half.items()}
+        else:
+            batch = make_tiny_lm_batch(
+                batch_size=args.batch_size, seed=args.seed, pad_fraction=0.25, device="cpu"
+            )
         results = analyze(
             model=bundle,
             revisions=["step0"],
