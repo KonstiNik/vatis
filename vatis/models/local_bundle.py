@@ -1214,7 +1214,11 @@ def load_local_bundle(
             training stack lives in that project (or in tests), never here.
         dtype: dtype the weights are loaded *as*. Default ``"fp32"``: bundle
             weights are bf16 on disk and the analysis math wants fp32, so the
-            upcast happens on load (lossless).
+            upcast happens on load. The upcast itself adds no error, but it
+            does not undo the rounding that writing bf16 applied: the loaded
+            values are the run's ``theta_t`` rounded to bf16, not ``theta_t``
+            (see ``docs/SPEC.md`` §"Native checkpoint bundles" for what that
+            does to single-step comparisons).
         device: device for the model and the batches, and for the ``P`` the
             preconditioner factories return. The optimizer state itself is
             read and kept on the CPU (see

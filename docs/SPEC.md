@@ -570,21 +570,48 @@ for ckpt in source:                                    # or drive the loop yours
 - **`batch_a.npy` holds whole token sequences.** The loader turns a row `ids`
   into inputs `ids` and next-token labels (`labels[:, :-1] = ids[:, 1:]`, last
   position ignored), i.e. the pairs `ids[:, :-1] → ids[:, 1:]`. The file carries
-  no padding information, so every position counts; if the training loss
-  ignored some targets (pad tokens), pass a `valid_mask_fn` or the update-batch
-  rows describe a different loss than the one that was descended.
+  no padding information, so every position counts as a target.
+- **Runs whose training loss ignored some targets (pad tokens) are not
+  supported for the update batch on this branch.** The loader does not apply
+  the pad convention a bundle records (`mask_pad_in_loss` / `loss_ignore_index`
+  in `metadata.json`), so for such a run the update-batch rows describe a
+  different loss than the one that was descended. A `valid_mask_fn` that
+  rejects the pad positions does **not** repair this: it restricts the token
+  counts and the probes but not the loss, which leaves `delta_loss` wrong and
+  dependent on `micro_batch_size` (see "Loss handling"). The correct handling —
+  the labels as the single source of truth for which positions count, with the
+  loader applying the run's recorded pad convention to them — is a follow-up
+  change.
 - **Weights are stored as parameters only.** A persistent buffer the model
   factory creates keeps the factory's value, and the loader warns about it:
-  correct for constants, wrong for anything a training run changes. The loader
-  casts whatever floating dtype the file holds (bf16 by default) to the dtype
-  requested from `load_local_bundle(dtype=...)`; note that a bf16 file is a
-  rounded `θ_t`, and that rounding can be a sizeable fraction of one update.
+  correct for constants, wrong for anything a training run changes.
+- **A bf16 weight file holds a rounded `θ_t`.** The loader casts whatever
+  floating dtype the file holds (bf16 by default) to the dtype requested from
+  `load_local_bundle(dtype=...)`; the cast adds no error, but it does not undo
+  the rounding. Measured on a real bundle (an 11M-parameter Llama trained in
+  fp32, weights stored as bf16): the loss gradient at the stored weights agreed
+  with the gradient the optimizer itself used (reconstructed from consecutive
+  first-moment states) to 0.24% relative error, cosine 0.999997, at steps 1 and
+  3 — for a gradient at one checkpoint the rounding is a sub-percent
+  perturbation. The *difference* between consecutive weight files is another
+  matter: early in training it is dominated by the rounding. Against the
+  update predicted from the optimizer state, `θ_{t+1} − θ_t` from the files had
+  a relative error of 0.81 at step 1 and 0.66 at step 3. **Comparisons that
+  need a single step's weight change element by element need fp32 weight
+  files.**
 - **`load_local_bundle(device=..., dtype=...)` decide placement and precision.**
   A bundle source hands the analyzer ready-built models, so `Analyzer(device=,
-  dtype=)` do not move or recast them.
-- **Only Adam / AdamW states are accepted** by `adamw_preconditioner()`. A
-  bundle whose `metadata.json` names another optimizer is refused rather than
-  labelled `"adamw"`; so are an SGD state (use `source.preconditioner()`),
+  dtype=)` do not move or recast them. The optimizer state is read and kept on
+  the CPU whatever `device` is — only the finished `P` is moved — so
+  `flat_state(...)` returns a CPU vector unless called with `device=`.
+- **Only Adam / AdamW states are accepted** by `adamw_preconditioner()`. The
+  optimizer is identified from the saved `param_groups`, not from a name:
+  RAdam, NAdam and Adamax groups also carry `betas`, but only Adam / AdamW
+  groups have the `amsgrad` key, and a state without it is refused whether or
+  not `metadata.json` names an optimizer. A bundle whose `metadata.json` names
+  another optimizer (under `optimizer_name`, `optimizer_type`, `optimizer` or
+  `optimizer_class`) is refused as well rather than labelled `"adamw"`; so are
+  an SGD state (use `source.preconditioner()`),
   `amsgrad=True` in any parameter group, parameter groups that disagree on
   `betas` / `eps` (unless both are passed explicitly) and a parameter that never
   received a gradient. An `eps` / `beta2` override is written into the descriptor, e.g.
@@ -593,8 +620,9 @@ for ckpt in source:                                    # or drive the loop yours
   the checkpoint directories; tensors load on first access, and iterating the
   source releases checkpoint `i−1` before yielding `i`. Building `P` needs the
   loaded optimizer state (two parameter-sized vectors) plus about three more
-  transiently; the state is released as soon as `P` exists. Under DDP every
-  rank does this.
+  transiently, all in host memory: the state is read and `P` is built on the
+  CPU, and only the finished `P` is moved to the device. The state is released
+  as soon as `P` exists. Under DDP every rank does this.
 
 ### Result format (parquet, long)
 
@@ -890,10 +918,10 @@ cross-validation test tier (gated, skipped in CI).
   held-out data or on an update batch with first-seen tokens (see "Coordinates
   at the ceiling").
 - **A resident `P` costs one extra parameter-sized fp32 vector** during a
-  checkpoint's analysis, and building it peaks at about five (see "Native
-  checkpoint bundles"). The cross-pair GPU/host offload heuristic does not
-  account for either; on a borderline card pass `cross_grad_storage="cpu"`
-  explicitly.
+  checkpoint's analysis, and building it peaks at about five in host memory
+  (see "Native checkpoint bundles"). The cross-pair GPU/host offload heuristic
+  does not account for either; on a borderline card pass
+  `cross_grad_storage="cpu"` explicitly.
 - **The `chi_pos` range warning is a weak backstop.** A sum-reduced `loss_fn`
   inflates `chi_pos` by the square of the valid-token count *per micro-batch*,
   and the warning fires only if that pushes `|chi_pos|` past 1.5. With small
