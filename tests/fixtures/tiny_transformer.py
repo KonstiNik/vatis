@@ -32,6 +32,15 @@ class TinyTransformer(nn.Module):
         token_embed -> pos_embed -> N x (LayerNorm -> SelfAttn -> LayerNorm -> MLP) -> LayerNorm -> lm_head
 
     Untied embeddings (so we don't trip the opacus pathway later).
+
+    Initialisation is PyTorch's default for every module, drawn from the global
+    RNG: **call ``torch.manual_seed(...)`` right before constructing the model**,
+    otherwise its weights depend on whatever ran earlier. An earlier version
+    re-initialised every 1-D parameter to zero, LayerNorm gains included, which
+    made the logits identically zero and left the final LayerNorm as the only
+    module with a non-zero Jacobian; a second version (N(0, 0.02) weights, gains
+    at one) left the attention queries and keys far below what any test
+    tolerance can resolve. ``tests/unit/test_fixtures.py`` guards both.
     """
 
     def __init__(
@@ -57,23 +66,8 @@ class TinyTransformer(nn.Module):
         self.final_ln = nn.LayerNorm(d_model)
         # Untied head — different parameter from token_embed.
         self.lm_head = nn.Linear(d_model, vocab_size, bias=False)
-
-        # Reproducible-but-non-trivial init: small Gaussian weights, zero
-        # biases, LayerNorm gains at one.
-        for p in self.parameters():
-            if p.ndim >= 2:
-                nn.init.normal_(p, mean=0.0, std=0.02)
-            else:
-                nn.init.zeros_(p)
-        # The loop above also zeroes the LayerNorm gains (they are 1-D). With
-        # zero gains every block outputs zero, the logits are identically zero
-        # and ``final_ln`` is the only module with a non-zero Jacobian, so put
-        # the gains back to the standard value of one. No random numbers are
-        # drawn here, so the weight matrices are unchanged for a given seed.
-        # ``tests/unit/test_fixtures.py`` guards against a regression.
-        for module in self.modules():
-            if isinstance(module, nn.LayerNorm):
-                nn.init.ones_(module.weight)
+        # No custom initialisation on purpose: the modules keep PyTorch's
+        # defaults. See the class docstring.
 
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
         b, s = input_ids.shape
