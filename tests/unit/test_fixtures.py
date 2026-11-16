@@ -12,7 +12,11 @@ twice with ``TinyTransformer``:
   uniform to within 1%, far below the 1e-5 relative tolerance the exact-Jacobian
   tests assert — a bug in their gradients could not fail a test.
 
-So "live" is tied here to what the suite can detect. The guards run on the very
+So "live" is tied here to what the suite can detect — for the quantities it
+checks exactly (``delta_loss`` and the exact-Jacobian comparisons, at 1e-5). The
+``chi_net`` estimators are only checked statistically, at 2-5%, and the output
+head carries about 80% of the trace on these models, so a bug confined to a
+low-share group can still pass those tests. The guards run on the very
 models the suite builds (``test_observables._build_lm`` is the default
 configuration of the analyzer and DDP tests, ``test_chi_net._build_small_lm``
 the one of the exact-Jacobian tests):
