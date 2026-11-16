@@ -209,13 +209,19 @@ def test_ddp_loopback_matches_single_process(tmp_path: Path) -> None:
         rel = abs(ddp[observable] - base[observable]) / max(abs(base[observable]), 1e-300)
         assert rel < DDP_REL, (observable, ddp[observable], base[observable], rel)
 
-    # The absolute bounds this test carried before it was rewritten, verbatim.
-    # The relative check above is tighter for ``delta_loss`` but ~20x / ~10x
-    # looser than these for ``chi_loss`` / ``chi_loss_normalized`` at their
-    # magnitudes here, so on its own it would have weakened the test. Both hold.
+    # The absolute bounds this test carried before it was rewritten, for the two
+    # observables where they are the tighter check (~20x / ~10x tighter than the
+    # relative one at these magnitudes).
+    #
+    # ``delta_loss`` is deliberately checked relatively only (owner decision,
+    # 2026-11-16). Its DDP-vs-single-process difference is fp32 rounding from a
+    # different summation order, so it scales with the value: the former
+    # absolute ``< 1e-7`` was 1 part in ~8,000 on the toy model this test started
+    # with and asks for more than fp32 resolves once ``delta_loss`` is of order
+    # one. The relative 1e-6 above holds at any magnitude and is still orders of
+    # magnitude below what a sharding or all-reduce defect produces.
     assert abs(ddp["chi_loss"] - base["chi_loss"]) < 1e-9
     assert abs(ddp["chi_loss_normalized"] - base["chi_loss_normalized"]) < 1e-7
-    assert abs(ddp["delta_loss"] - base["delta_loss"]) < 1e-7
 
     rel_chi_net = abs(ddp["chi_net"] - base["chi_net"]) / max(1e-12, abs(base["chi_net"]))
     assert rel_chi_net < 0.5, f"chi_net mismatch: {ddp['chi_net']} vs {base['chi_net']}"
