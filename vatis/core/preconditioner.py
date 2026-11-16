@@ -543,12 +543,15 @@ def weighted_sum_sq_grads(
     ``views`` comes from :meth:`Preconditioner.parameter_views` and must be
     positionally aligned with ``grads`` (same order as ``params``) and on the
     same device — a device mismatch raises rather than transferring silently.
+    The two must have the same length: one entry per parameter, which is what
+    ``torch.autograd.grad(..., params, allow_unused=True)`` returns. A length
+    mismatch raises ``ValueError`` instead of dropping the surplus entries.
     Missing gradients (``None``, for unused parameters) contribute zero, exactly
     as in the raw path. ``min_weight`` restricts the sum to entries with
     ``P >= min_weight`` (see :attr:`Preconditioner.capped_weight_floor`).
     """
     total = torch.zeros((), dtype=torch.float64, device=device)
-    for g, w in zip(grads, views, strict=False):
+    for g, w in zip(grads, views, strict=True):
         if g is None:
             continue
         g64 = g.to(dtype=torch.float64)
