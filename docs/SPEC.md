@@ -411,6 +411,7 @@ results = analyze(
     distributed="ddp",
     sink="results.parquet",                     # str → ParquetSink; or list of sinks
     dtype="bf16",                               # forward dtype; grads in fp32
+    ignore_index=-100,                          # the label value loss_fn ignores (see Loss handling)
 )
 ```
 
@@ -811,6 +812,21 @@ disagree with the labels in two directions, and both are handled:
   This is the HuggingFace `Trainer` / TRL procedure, and a stricter mask gives
   exactly what the same restriction written into the labels gives, at every
   `micro_batch_size`. The caller's batch is never modified.
+
+**The analyzer's `ignore_index` must be the value the `loss_fn` ignores.** It
+is `-100` by default and is an argument of both `Analyzer(...)` and
+`analyze(...)`. The analyzer uses it to decide which positions count and writes
+it into the labels wherever a mask rejects a position; it never guesses a loss's
+own ignore value. A dataset and loss that mark ignored positions with another
+value (say `-1`) therefore need `ignore_index=-1`. Left at the default, such a
+setup is refused: when the labels a mask rejects carry a value that is neither a
+class index nor `ignore_index`, the analyzer raises a `ValueError` that names
+the value to pass — before the loss is called, because on CUDA a loss handed a
+target it does not ignore dies in a device-side assert that cannot be caught.
+If a loss raises on rewritten labels for a reason that cannot be seen in advance
+(its ignore value differs but no label gives that away), the error is re-raised
+as a `RuntimeError` with this explanation and the original exception chained; on
+CUDA that residual case can still surface as the device-side assert itself.
 
 A `loss_fn` therefore has to read its targets from the batch and honour
 `ignore_index`. When labels were rewritten, the analyzer checks that the

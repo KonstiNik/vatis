@@ -221,8 +221,11 @@ class Analyzer:
             overridden by ``cuda:LOCAL_RANK``.
         dtype: forward dtype for HF models loaded by name. Ignored when the
             user passes a fully built ModelBundle.
-        ignore_index: ignore-index for the chi_loss closed form. Defaults to
-            HF's -100.
+        ignore_index: the label value that marks an ignored position. It **must
+            be the value** ``loss_fn`` **ignores**: the analyzer uses it to decide
+            which positions count (also in the ``chi_loss`` closed form), and
+            writes it into the labels ``loss_fn`` sees where a ``valid_mask_fn``
+            rejects a position. Defaults to HF's -100.
     """
 
     def __init__(
@@ -1257,48 +1260,114 @@ def _label_folded_loss_fn(
     there the check has nothing to look at, and "could not verify" must not pass
     for "verified". The check costs one backward through the loss head (not
     through the model) and runs only in this case.
+
+    ``ignore_index`` has to be the value ``loss_fn`` itself ignores; the analyzer
+    does not guess a loss's ignore value. A batch whose rejected labels carry
+    another sentinel (a value that is no class index and not ``ignore_index``) is
+    refused before the loss is called, naming the value to pass as
+    ``ignore_index``; any exception the loss raises on rewritten labels is
+    re-raised with that explanation and the original chained.
     """
 
     def fn(logits: torch.Tensor, batch: Any) -> torch.Tensor:
         mask = effective_mask_fn(batch, logits)
         folded = _fold_mask_into_labels(batch, mask, ignore_index)
-        loss = loss_fn(logits, folded)
-        if folded is not batch:
-            grad_logits = None
-            if loss.requires_grad:
-                (grad_logits,) = torch.autograd.grad(
-                    loss, logits, retain_graph=True, allow_unused=True
+        if folded is batch:
+            return loss_fn(logits, batch)
+
+        # Labels are about to reach ``loss_fn`` with ``ignore_index`` written into
+        # them. That only works if ``ignore_index`` is the value ``loss_fn``
+        # ignores -- the analyzer cannot know the loss's own ignore value and
+        # does not guess it. Two layers, in this order:
+        #
+        # 1. Before the loss is called: a label the mask rejects that cannot be a
+        #    class index and is not ``ignore_index`` is another sentinel, i.e. the
+        #    batch (and so its loss) uses a different ignore value. Refusing here
+        #    matters on CUDA, where the loss would die in a device-side assert
+        #    that cannot be caught and turned into a message.
+        # 2. If the loss raises anyway, say what vatis did to its labels and keep
+        #    the original exception chained.
+        rejected_labels = _extract_targets(batch)[~mask]
+        rejected_labels = rejected_labels[rejected_labels != ignore_index]
+        n_classes = logits.shape[-1]
+        foreign = rejected_labels[(rejected_labels < 0) | (rejected_labels >= n_classes)]
+        if foreign.numel():
+            values = sorted({int(v) for v in torch.unique(foreign).tolist()})
+            if len(values) == 1:
+                diagnosis = (
+                    f"every such label is {values[0]}, so that is presumably the value "
+                    f"loss_fn ignores: pass ignore_index={values[0]} to Analyzer(...) / "
+                    "analyze(...)"
                 )
-            if grad_logits is None:
-                # The loss is not a function of the logits it was handed (a
-                # loss_fn that runs its own forward, or returns a detached
-                # value), so there is nothing to inspect. Not being able to
-                # verify is not the same as verified: refuse.
-                raise ValueError(
-                    "valid_mask_fn rejects positions whose label is valid, so vatis "
-                    f"wrote ignore_index={ignore_index} into the labels at those "
-                    "positions before calling loss_fn -- but the loss returned does not "
-                    "depend on the logits vatis passed in (no gradient reaches them), so "
-                    "vatis cannot verify that loss_fn honours the mask. loss_fn must "
-                    "compute the loss from its `logits` argument. Refusing to continue: "
-                    "an unverified loss could be the unrestricted one, and delta_loss and "
-                    "chi_pos would then describe a loss over positions that n_valid, "
-                    "chi_loss and chi_net exclude."
+            else:
+                diagnosis = (
+                    f"they are {values[:8]}; the labels must use one ignore value, and it "
+                    "must be passed as ignore_index to Analyzer(...) / analyze(...)"
                 )
-            n_leaking = int(torch.count_nonzero(grad_logits[~mask]).item())
-            if n_leaking:
-                raise ValueError(
-                    "valid_mask_fn rejects positions whose label is valid, so vatis "
-                    f"wrote ignore_index={ignore_index} into the labels at those "
-                    "positions before calling loss_fn -- but the loss still depends on "
-                    f"the logits there ({n_leaking} non-zero gradient entries at "
-                    "rejected positions). loss_fn must read its targets from the "
-                    "batch field vatis masks ('labels', else 'targets', for a dict "
-                    "batch; element 1 of a tuple/list batch) and must ignore "
-                    f"ignore_index={ignore_index}. Refusing to continue: delta_loss and "
-                    "chi_pos would describe a loss over positions that n_valid, "
-                    "chi_loss and chi_net exclude."
+            raise ValueError(
+                "valid_mask_fn rejects positions whose label is neither a class index "
+                f"(the model has {n_classes} classes) nor the analyzer's "
+                f"ignore_index={ignore_index}: {diagnosis}. The analyzer's ignore_index must "
+                "be the value loss_fn ignores. vatis would otherwise write "
+                f"ignore_index={ignore_index} over those labels before calling loss_fn, and a "
+                "loss that ignores a different value fails on it (IndexError on the CPU, an "
+                "uncatchable device-side assert on CUDA)."
+            )
+        try:
+            loss = loss_fn(logits, folded)
+        except torch.cuda.OutOfMemoryError:
+            raise
+        except Exception as exc:
+            hint = ""
+            if rejected_labels.numel() and bool((rejected_labels == rejected_labels[0]).all()):
+                constant = int(rejected_labels[0].item())
+                hint = (
+                    f" Every label the mask rejects is {constant}; if that is the value "
+                    f"loss_fn ignores, pass ignore_index={constant}."
                 )
+            raise RuntimeError(
+                f"loss_fn raised {type(exc).__name__} on a batch whose labels vatis had "
+                "rewritten: valid_mask_fn rejects positions whose label is valid, so vatis "
+                f"wrote its ignore_index={ignore_index} into the labels at those positions "
+                "before calling loss_fn. A loss_fn that ignores a different value cannot "
+                "handle that. The analyzer's ignore_index must be the value loss_fn ignores: "
+                f"pass that value as ignore_index to Analyzer(...) / analyze(...).{hint} (If "
+                "the failure has another cause, it is the chained exception.)"
+            ) from exc
+
+        grad_logits = None
+        if loss.requires_grad:
+            (grad_logits,) = torch.autograd.grad(loss, logits, retain_graph=True, allow_unused=True)
+        if grad_logits is None:
+            # The loss is not a function of the logits it was handed (a loss_fn
+            # that runs its own forward, or returns a detached value), so there
+            # is nothing to inspect. Not being able to verify is not the same as
+            # verified: refuse.
+            raise ValueError(
+                "valid_mask_fn rejects positions whose label is valid, so vatis "
+                f"wrote ignore_index={ignore_index} into the labels at those "
+                "positions before calling loss_fn -- but the loss returned does not "
+                "depend on the logits vatis passed in (no gradient reaches them), so "
+                "vatis cannot verify that loss_fn honours the mask. loss_fn must "
+                "compute the loss from its `logits` argument. Refusing to continue: "
+                "an unverified loss could be the unrestricted one, and delta_loss and "
+                "chi_pos would then describe a loss over positions that n_valid, "
+                "chi_loss and chi_net exclude."
+            )
+        n_leaking = int(torch.count_nonzero(grad_logits[~mask]).item())
+        if n_leaking:
+            raise ValueError(
+                "valid_mask_fn rejects positions whose label is valid, so vatis "
+                f"wrote ignore_index={ignore_index} into the labels at those "
+                "positions before calling loss_fn -- but the loss still depends on "
+                f"the logits there ({n_leaking} non-zero gradient entries at "
+                "rejected positions). loss_fn must read its targets from the "
+                "batch field vatis masks ('labels', else 'targets', for a dict "
+                "batch; element 1 of a tuple/list batch) and must ignore "
+                f"ignore_index={ignore_index}. Refusing to continue: delta_loss and "
+                "chi_pos would describe a loss over positions that n_valid, "
+                "chi_loss and chi_net exclude."
+            )
         return loss
 
     return fn
@@ -1399,6 +1468,7 @@ def analyze(
     seed: int = 0,
     device: torch.device | str = "cpu",
     dtype: str = "bf16",
+    ignore_index: int = DEFAULT_IGNORE_INDEX,
     num_gpus: int = 1,  # accepted for parity; the analyzer ignores it inside the worker
     distributed: str = "ddp",  # accepted for parity
 ) -> list[CheckpointResult]:
@@ -1409,6 +1479,9 @@ def analyze(
     ``num_gpus > 1`` will run on a single process; the DDP code paths only
     activate when the process group is already initialized (i.e. when
     launched under torchrun).
+
+    Arguments are those of :class:`Analyzer`; in particular ``ignore_index`` must
+    be the value ``loss_fn`` ignores.
     """
     del num_gpus, distributed  # informational only at this layer
 
@@ -1426,6 +1499,7 @@ def analyze(
         seed=seed,
         device=device,
         dtype=dtype,
+        ignore_index=ignore_index,
     )
 
     revs: list[str | None]

@@ -39,7 +39,7 @@ from tests.fixtures.tiny_transformer import (
     make_tiny_mlp_batch,
 )
 from tests.unit.test_chi_net import _build_full_jacobian_and_u
-from vatis import analyze
+from vatis import Analyzer, analyze
 from vatis.analyzer import _intersected_valid_mask_fn
 from vatis.core.chi_net import HutchinsonEstimator, PerSequenceControlVariateEstimator
 from vatis.core.preconditioner import Preconditioner
@@ -672,3 +672,268 @@ def test_per_sequence_cv_refuses_a_loss_that_leaks_at_one_single_position() -> N
             micro_batch_size=BATCH_SIZE,
             generator=torch.Generator().manual_seed(0),
         )
+
+
+# ------------------------- the analyzer's ignore_index is the loss's ignore value
+
+
+def _loss_ignoring(value: int) -> Any:
+    def loss(logits: torch.Tensor, b: dict[str, torch.Tensor]) -> torch.Tensor:
+        return F.cross_entropy(
+            logits.reshape(-1, logits.shape[-1]), b["labels"].reshape(-1), ignore_index=value
+        )
+
+    return loss
+
+
+def _relabelled(batch: dict[str, torch.Tensor], value: int) -> dict[str, torch.Tensor]:
+    """The same batch with ``value`` instead of ``-100`` as its ignore mark."""
+    labels = batch["labels"].clone()
+    labels[labels == -100] = value
+    return {**batch, "labels": labels}
+
+
+def _rows(
+    entry: str,
+    model: torch.nn.Module,
+    params: list[torch.nn.Parameter],
+    batch: Any,
+    *,
+    loss_fn: Any,
+    mask_fn: Any,
+    method: str,
+    micro: int,
+    **analyzer_kwargs: Any,
+) -> dict[str, float]:
+    """Run through ``analyze()`` or through ``Analyzer(...).run`` — same arguments."""
+    bundle = ModelBundle(
+        model=model,
+        params=params,
+        forward_fn=lambda m, b: m(b["input_ids"]),
+        loss_fn=loss_fn,
+        valid_mask_fn=mask_fn,
+        identifier="toy@step0",
+    )
+    common = {
+        "eval_batches": {"lm": batch},
+        "chi_net_method": method,
+        "n_hutchinson": 2,
+        "micro_batch_size": micro,
+        "sink": None,
+        "seed": 5,
+        **analyzer_kwargs,
+    }
+    if entry == "analyze":
+        rows = analyze(model=bundle, revisions=["step0"], **common)[0].rows
+    else:
+        rows = Analyzer(**common).run([(bundle, "step0")])[0].rows
+    out = {r.observable: r.value for r in rows}
+    out["n_valid"] = float(rows[0].n_valid_a)
+    return out
+
+
+@pytest.mark.parametrize("entry", ["analyze", "Analyzer"])
+@pytest.mark.parametrize("method", ["hutchinson", "per_sequence_cv"])
+def test_a_loss_with_its_own_ignore_value_gets_an_actionable_error_at_the_default(
+    entry: str, method: str
+) -> None:
+    """Labels marked with ``-1``, a loss that ignores ``-1``, the analyzer at ``-100``.
+
+    The analyzer sees the ``-1`` labels as valid labels the mask rejects and would
+    write ``-100`` over them; the loss would then fail on a target it does not
+    ignore (``IndexError: Target -100 is out of bounds`` on the CPU, a device-side
+    assert on CUDA). Instead the run is refused **before the loss is called** —
+    which is what makes it safe on CUDA — with a message that names the value to
+    pass as ``ignore_index``.
+    """
+    model, batch, params = _fixture()
+    calls: list[int] = []
+    ignoring_minus_one = _loss_ignoring(-1)
+
+    def counting_loss(logits: torch.Tensor, b: dict[str, torch.Tensor]) -> torch.Tensor:
+        calls.append(1)
+        return ignoring_minus_one(logits, b)
+
+    with pytest.raises(
+        ValueError, match=r"pass ignore_index=-1 to Analyzer\(\.\.\.\) / analyze"
+    ) as info:
+        _rows(
+            entry,
+            model,
+            params,
+            _relabelled(batch, -1),
+            loss_fn=counting_loss,
+            mask_fn=lambda b, _l: b["labels"] != -1,
+            method=method,
+            micro=2,
+        )
+    assert "ignore_index=-100" in str(info.value)  # states what the analyzer would have written
+    assert calls == []
+
+
+@pytest.mark.parametrize("entry", ["analyze", "Analyzer"])
+@pytest.mark.parametrize("method", ["hutchinson", "per_sequence_cv"])
+@pytest.mark.parametrize("micro", [1, 4])
+def test_passing_the_losss_ignore_value_gives_the_plain_torch_reference(
+    entry: str, method: str, micro: int
+) -> None:
+    """The documented remedy, from both entry points: ``ignore_index=-1``.
+
+    ``delta_loss`` and ``chi_loss`` against plain torch on the ``-1``-marked
+    labels, and every observable bit-identical to the same data marked with
+    ``-100`` under the defaults (the mark is a spelling, not a quantity).
+    """
+    model, batch, params = _fixture()
+    marked = _relabelled(batch, -1)
+    got = _rows(
+        entry,
+        model,
+        params,
+        marked,
+        loss_fn=_loss_ignoring(-1),
+        mask_fn=lambda b, _l: b["labels"] != -1,
+        method=method,
+        micro=micro,
+        ignore_index=-1,
+    )
+
+    logits = model(marked["input_ids"])
+    loss = _loss_ignoring(-1)(logits, marked)
+    (grad_logits,) = torch.autograd.grad(loss, logits, retain_graph=True)
+    grads = torch.autograd.grad(loss, params, allow_unused=True)
+    assert got["n_valid"] == float((marked["labels"] != -1).sum())
+    assert got["chi_loss"] == pytest.approx(float((grad_logits.to(FP64) ** 2).sum()), rel=1e-5)
+    assert got["delta_loss"] == pytest.approx(
+        sum(float((g.to(FP64) ** 2).sum()) for g in grads if g is not None), rel=1e-5
+    )
+
+    default = _rows(
+        entry,
+        model,
+        params,
+        batch,
+        loss_fn=causal_lm_loss,
+        mask_fn=_labels_mask,
+        method=method,
+        micro=micro,
+    )
+    assert got == default
+
+
+@pytest.mark.parametrize("entry", ["analyze", "Analyzer"])
+def test_the_remedy_also_works_with_a_stricter_mask(entry: str) -> None:
+    """``ignore_index=-1`` and a mask stricter than the ``-1``-marked labels.
+
+    The fold then writes ``-1``, which this loss ignores: the result is the one
+    the ``-100`` spelling gives under the defaults, bit for bit.
+    """
+    model, batch, params = _fixture()
+
+    def strict_minus_one(b: dict[str, torch.Tensor], logits: torch.Tensor) -> torch.Tensor:
+        # ``_strict_mask`` reads the ``-100`` spelling; hand it that spelling.
+        return _strict_mask(
+            {**b, "labels": b["labels"].masked_fill(b["labels"] == -1, -100)}, logits
+        )
+
+    for method in ("hutchinson", "per_sequence_cv"):
+        got = _rows(
+            entry,
+            model,
+            params,
+            _relabelled(batch, -1),
+            loss_fn=_loss_ignoring(-1),
+            mask_fn=strict_minus_one,
+            method=method,
+            micro=2,
+            ignore_index=-1,
+        )
+        default = _rows(
+            entry,
+            model,
+            params,
+            batch,
+            loss_fn=causal_lm_loss,
+            mask_fn=_strict_mask,
+            method=method,
+            micro=2,
+        )
+        assert got == default, method
+
+
+@pytest.mark.parametrize("entry", ["analyze", "Analyzer"])
+def test_the_reverse_mismatch_is_refused_just_as_clearly(entry: str) -> None:
+    """The shipped loss (it ignores ``-100``) with the analyzer told ``ignore_index=-1``.
+
+    The ``-100`` labels are then "valid" to the analyzer; a mask that rejects them
+    marks them as another sentinel, and the refusal names ``-100`` as the value
+    to pass.
+    """
+    model, batch, params = _fixture()
+    with pytest.raises(ValueError, match="pass ignore_index=-100 to Analyzer") as info:
+        _rows(
+            entry,
+            model,
+            params,
+            batch,
+            loss_fn=shipped_causal_lm_loss,
+            mask_fn=_strict_mask,
+            method="hutchinson",
+            micro=2,
+            ignore_index=-1,
+        )
+    assert "ignore_index=-1:" in str(info.value)
+
+
+def test_a_loss_that_raises_on_rewritten_labels_is_reported_with_its_cause() -> None:
+    """No foreign mark in the labels to detect up front: the loss's own error is wrapped.
+
+    Every label here is a real token (so nothing gives the mismatch away before
+    the call); the loss ignores ``-1`` while the analyzer writes ``-100`` at the
+    positions the mask rejects. The loss raises; the analyzer says what it did to
+    the labels and keeps the original exception chained.
+    """
+    model, batch, params = _fixture()
+    ids = batch["input_ids"]
+    full = {"input_ids": ids, "labels": torch.roll(ids, shifts=-1, dims=1)}
+    keep = torch.zeros_like(ids, dtype=torch.bool)
+    keep[:, :3] = True
+    with pytest.raises(RuntimeError, match="wrote its ignore_index=-100 into the labels") as info:
+        _rows(
+            "analyze",
+            model,
+            params,
+            full,
+            loss_fn=_loss_ignoring(-1),
+            mask_fn=lambda b, _l: keep[: b["labels"].shape[0]],
+            method="hutchinson",
+            micro=4,
+        )
+    assert "loss_fn raised IndexError" in str(info.value)
+    assert isinstance(info.value.__cause__, IndexError)
+    assert "Target -100 is out of bounds" in str(info.value.__cause__)
+
+
+@pytest.mark.parametrize("method", ["hutchinson", "per_sequence_cv"])
+def test_a_mask_that_rejects_one_ordinary_token_is_not_mistaken_for_a_foreign_mark(
+    method: str,
+) -> None:
+    """``valid_mask_fn = labels != <pad id>`` is a legitimate stricter mask.
+
+    Every label it rejects is one constant, but that constant is a class index,
+    not a sentinel: the labels are folded as usual and the result equals the same
+    restriction written into the labels.
+    """
+    model, batch, params = _fixture()
+    pad_id = int(batch["labels"][batch["labels"] != -100].mode().values)
+    assert 0 <= pad_id < VOCAB
+    n_rejected = int((batch["labels"] == pad_id).sum())
+    assert n_rejected > 0
+
+    def not_the_pad(b: dict[str, torch.Tensor], logits: torch.Tensor) -> torch.Tensor:  # noqa: ARG001
+        return (b["labels"] != -100) & (b["labels"] != pad_id)
+
+    restricted = {**batch, "labels": batch["labels"].masked_fill(batch["labels"] == pad_id, -100)}
+    got = _run(model, params, batch, not_the_pad, method=method, micro=2)
+    reference = _run(model, params, restricted, _labels_mask, method=method, micro=2)
+    assert got["n_valid"] == float((batch["labels"] != -100).sum()) - n_rejected
+    assert got == reference
