@@ -217,8 +217,52 @@ The exact first-order response of one AdamW step on batch `B` is
 of which vatis currently measures the first dot product, with `P_t` in place of
 `P_{t+1}` and without its prefactor. The other two terms — and a comparison of
 the sum against realized loss changes — are not implemented yet. Until they are,
-treat `chi_pos_P` as a statement about the *geometry* the optimizer imposes, and
-use `η · delta_loss_P` as a loss-change predictor only with that caveat.
+treat `chi_pos_P` as a statement about the *geometry* the optimizer imposes.
+`−η · delta_loss_P` is the first-order prediction for the *hypothetical* update
+`−η P_t ∇L^A`. **Do not use it as the loss change of the step that was taken.**
+
+How far apart the two are was measured on a real bundle (an 11M-parameter
+Llama trained with AdamW, `β = (0.9, 0.95)`, `ε = 1e-8`; `B` = the step's own
+update batch, fp32 on the CPU). "Step taken" is the sum of the three terms
+above, built from the optimizer states saved before and after the step and the
+loss gradient at the stored weights:
+
+| step | step taken, first order | current-gradient term | momentum term | `−η · delta_loss_P` | `delta_loss_P` with `P_t` instead of `P_{t+1}` |
+| --- | --- | --- | --- | --- | --- |
+| 1 | −1.098 | −0.577 | −0.522 | −1.272 (16% larger in magnitude) | 16% larger |
+| 3 | −1.393 | −0.429 | −0.964 | −1.845 (32% larger in magnitude) | 25% larger |
+
+The weight-decay term was below `1e-4` in magnitude at both steps. The same
+change computed as `∇L^B · (θ_{t+1} − θ_t)` from the two stored weight files was
+−1.097 and −1.392. Momentum already carries nearly half of the step at step 1
+and more than two thirds at step 3, so the gap is not a small correction. This
+is one bundle: do not read the percentages as constants.
+
+**Step 0 is missing from the P rows, and it is the least SGD-like step.** No
+pre-step `P` exists at step 0 (the optimizer state is empty), so the P rows
+start at the first checkpoint after it. Yet the first update is the most
+non-SGD one: `v̂_1 = g_0²`, so it is essentially sign descent,
+`Δθ ≈ −η · sign(g_0)`.
+
+#### Reading the P rows
+
+- **`|chi_pos_P| ≤ 1` for any non-negative `P`**: `delta_loss_P` is an inner
+  product of `P^{1/2}`-weighted gradients, and Cauchy–Schwarz bounds it by
+  `chi_loss · chi_net_P`. The published value divides by an *estimate* of
+  `chi_net_P` and can overshoot, hence a warning rather than an error (see
+  "Loss handling").
+- **`chi_pos_P` does not change when `P` is multiplied by a constant;
+  `delta_loss_P` and `chi_net_P` do.** They carry the units of `P`, so their
+  values are not comparable between `adamw` rows and `sgd` rows.
+- **To isolate the effect of the geometry, compare `chi_pos_P` with `chi_pos`
+  on the same checkpoint.** An `adamw` run and an `sgd` run are different
+  trajectories; a difference between their rows mixes the geometry with where
+  each run went.
+- **`sgd` rows equal the raw rows by construction** (`P = I`); they carry no
+  information beyond them.
+- **No standard error is reported.** `chi_net_P` comes from the same probes as
+  `chi_net` and is typically the noisier of the two, because `P` is very
+  uneven and a few heavily weighted coordinates carry much of the estimate.
 
 ### How `χ_loss` and `δL` are computed (cheap, fixed cost)
 
