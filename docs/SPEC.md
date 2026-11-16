@@ -492,11 +492,11 @@ is invariant under the normalization.
   the last rank gets a smaller shard — the all-reduce handles this because we
   accumulate token-weighted sums, not means.
 - Per micro-batch: forward → `χ_loss` accumulator. For `χ_net` Hutchinson, each
-  rank draws `n` probe vectors **for its own shard** from a generator seeded
-  identically across ranks and estimates the trace over its shard; all-reduce
-  sums them, which is correct because `Tr(Θ)` is a sum over rows and the shards
-  partition the rows. For `δL`, each rank computes its partial gradient and
-  all-reduce-sums.
+  rank draws `n` probe vectors **for its own shard** from **its own stream**
+  (see "Probe vector details") and estimates the trace over its shard;
+  all-reduce sums them, which is correct because `Tr(Θ)` is a sum over rows and
+  the shards partition the rows. For `δL`, each rank computes its partial
+  gradient and all-reduce-sums.
 - All-reduce happens **once per checkpoint × eval-batch**, never in inner loops.
 - `micro_batch_size=1` is the always-safe fallback. The launcher does not
   attempt OOM auto-tuning — the user picks a size that fits.
@@ -509,10 +509,22 @@ is invariant under the normalization.
   `torch.Generator("cuda")` yield different sequences from the same seed).
   `make_probe` refuses a CUDA generator. The Rademacher draw is bit-packed
   (one random bit per entry) to keep the CPU draw affordable.
-- Probe seed is **shared across ranks** within one `(checkpoint, batch)` call;
-  different across calls. Each rank draws a full probe for its own shard, so
-  ranks do not partition one global probe: a DDP run is reproducible, but its
-  `χ_net` is a different unbiased estimate from the single-process one.
+- Probe streams are **per rank**, and different across `(checkpoint, batch)`
+  calls. The per-call seed (`seed` mixed with the checkpoint id and the batch
+  name; this is the `hutchinson_seed` column) seeds rank 0 — and therefore every
+  single-process run — directly. Rank `r > 0` seeds its generator with
+  `sha256("{hutchinson_seed}|rank={r}")` reduced to 31 bits. So `seed`, the rank
+  and the world size (which fixes the shards) determine every probe, and a DDP
+  run is reproducible. Each rank draws full probes for its own shard — ranks do
+  not partition one global probe — so the DDP `χ_net` is a different unbiased
+  estimate from the single-process one, with the same variance.
+- Ranks must **not** share one stream. A Rademacher probe `v` applied to sample
+  `a` errs by `Σ_{i≠j} v_i v_j M_a[i,j]` (`M_a = J_a J_aᵀ`), so the same `v` on
+  two samples gives errors with covariance `2⟨offdiag M_a, offdiag M_b⟩_F`
+  (Gaussian probes: `2⟨M_a, M_b⟩_F`, never negative), and the Gram matrices of
+  different inputs are far from orthogonal. With a shared seed the
+  per-rank errors add almost coherently and the variance of the all-reduced
+  `χ_net` grows by up to the world size (that was the behaviour through 0.2.1).
 - Probe vector shape matches the local micro-batch output `(M, S, V)`. **Padding
   positions are zeroed** so masked tokens contribute to neither `χ_net` nor
   `χ_loss`. The mask is the intersection described under "Loss handling".
