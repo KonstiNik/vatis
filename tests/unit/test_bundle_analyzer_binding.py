@@ -385,6 +385,25 @@ def test_param_groups_that_disagree_on_eps_are_refused_with_the_reason(tmp_path:
     assert precond.descriptor == "adamw(beta2=0.999,eps=1e-08)"
 
 
+@pytest.mark.parametrize("amsgrad_everywhere", [True, False])
+@pytest.mark.parametrize("explicit_hparams", [False, True])
+def test_amsgrad_is_refused_in_any_group_and_under_an_override(
+    tmp_path: Path, amsgrad_everywhere: bool, explicit_hparams: bool
+) -> None:
+    def groups(named: dict[str, nn.Parameter], order: list[str]) -> list[dict[str, Any]]:
+        half = len(order) // 2
+        return [
+            {"params": [named[n] for n in order[:half]], "amsgrad": True},
+            {"params": [named[n] for n in order[half:]], "amsgrad": amsgrad_everywhere},
+        ]
+
+    run_dir = _real_adamw_bundle(tmp_path, BundleTinyLM(seed=0), param_groups=groups)
+    source = load_local_bundle(run_dir, tiny_lm_factory)
+    overrides = {"beta2": 0.999, "eps": 1e-8} if explicit_hparams else {}
+    with pytest.raises(ValueError, match="amsgrad=True"):
+        source.adamw_preconditioner(**overrides)(source.checkpoints[0].identifier)
+
+
 @pytest.mark.parametrize("optimizer_cls", [torch.optim.RAdam, torch.optim.NAdam])
 def test_non_adam_optimizer_state_is_not_labelled_adamw(
     tmp_path: Path, optimizer_cls: type[torch.optim.Optimizer]

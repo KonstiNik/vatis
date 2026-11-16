@@ -1177,6 +1177,20 @@ def adamw_preconditioner_from_state(
             "...) apply a different update, and labelling their rows 'adamw' would be "
             "wrong. Build the P you mean with Preconditioner.from_diagonal(...)."
         )
+    # Looked up on every saved group, not on the collapsed ``state.hparams`` (which
+    # drops a key the groups disagree on) and regardless of a beta2 / eps override:
+    # an AMSGrad group divides by max_exp_avg_sq, which no choice of beta2 / eps
+    # turns into the documented P.
+    amsgrad_groups = [
+        index for index, group in enumerate(state.param_groups) if bool(group.get("amsgrad", False))
+    ]
+    if amsgrad_groups:
+        raise ValueError(
+            f"{context}: saved param_groups {amsgrad_groups} have amsgrad=True. AMSGrad "
+            "preconditions with max_exp_avg_sq, so the documented v_hat = exp_avg_sq / "
+            "(1 - beta2**t) convention would build the wrong P for those parameters. "
+            "Refusing rather than reporting a plausible wrong number."
+        )
     if not state.has_state(state_key):
         if state_key not in state.state_keys():
             raise BundleSchemaError(
