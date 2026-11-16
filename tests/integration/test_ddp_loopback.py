@@ -22,6 +22,10 @@ Also covered: ``B % world_size != 0`` (batch 5 over 2 ranks), which exercises th
 token-weighted rank re-weighting rather than an even split, plus padding so the
 per-rank valid-token counts differ.
 
+The ``*_capped`` rows have their own pinned-probe test, because the ``P`` of the
+test above has no ceiling and therefore no capped rows: with it, dropping the
+all-reduce of ``chi_net_P_capped`` changed nothing any tier asserts.
+
 The multi-GPU path remains unvalidated: this is a CPU gloo loopback
 (``CUDA_VISIBLE_DEVICES=""``), because NCCL wants one device per rank.
 """
@@ -45,7 +49,7 @@ from tests.fixtures.tiny_transformer import (
     causal_lm_valid_mask,
     make_tiny_lm_batch,
 )
-from tests.integration._ddp_worker import ShapeKeyedProbe
+from tests.integration._ddp_worker import ShapeKeyedProbe, ceiling_preconditioner
 from vatis import analyze
 from vatis.core.preconditioner import Preconditioner
 from vatis.models.hf import ModelBundle
@@ -66,6 +70,7 @@ def _run_ddp(
     method: str | None = None,
     pin_probes: bool = False,
     preconditioner: bool = False,
+    ceiling: bool = False,
 ) -> dict[str, float]:
     """Spawn a 2-rank torchrun pinned to CPU, return rank 0's observables."""
     env = os.environ.copy()
@@ -93,6 +98,8 @@ def _run_ddp(
         cmd.append("--pin-probes")
     if preconditioner:
         cmd.append("--preconditioner")
+    if ceiling:
+        cmd.append("--ceiling")
     result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
     if result.returncode != 0:
         raise RuntimeError(
@@ -113,6 +120,7 @@ def _baseline(
     method: str | None = None,
     pin_probes: bool = False,
     preconditioner: bool = False,
+    ceiling: bool = False,
 ) -> dict[str, float]:
     """The same computation in one process, with the same probe treatment."""
     real_hutch, real_cv = hutch_mod.make_probe, cv_mod.make_probe
@@ -134,7 +142,9 @@ def _baseline(
             identifier="toy@step0",
         )
         precond = None
-        if preconditioner:
+        if preconditioner and ceiling:
+            precond = ceiling_preconditioner(sum(p.numel() for p in model.parameters()))
+        elif preconditioner:
             n_params = sum(p.numel() for p in model.parameters())
             gen = torch.Generator().manual_seed(5)
             precond = Preconditioner.from_diagonal(
@@ -185,6 +195,42 @@ def test_ddp_matches_single_process_exactly_with_pinned_probes(
         preconditioner=True,
     )
     assert set(ddp) == set(base)
+    for observable, expected in base.items():
+        got = ddp[observable]
+        rel = abs(got - expected) / max(abs(expected), 1e-300)
+        assert rel < DDP_REL, (method, batch_size, observable, got, expected, rel)
+
+
+@pytest.mark.parametrize("method", ["hutchinson", "per_sequence_cv"])
+@pytest.mark.parametrize("batch_size", [4, 5])
+def test_ddp_matches_single_process_for_the_capped_rows(
+    tmp_path: Path, method: str, batch_size: int
+) -> None:
+    """A ``P`` with a ceiling and entries at it: the two ``*_capped`` rows as well.
+
+    ``chi_net_P_capped`` is a per-rank partial like ``chi_net_P`` and needs its
+    own all-reduce; ``delta_loss_P_capped`` is a reduction of the all-reduced
+    gradient. Both must equal the single-process values, like every other row.
+    """
+    out = tmp_path / f"ddp_capped_{method}_{batch_size}.json"
+    kwargs = {
+        "seed": 0,
+        "batch_size": batch_size,
+        "n_h": 8,
+        "method": method,
+        "pin_probes": True,
+        "preconditioner": True,
+        "ceiling": True,
+    }
+    ddp = _run_ddp(out, **kwargs)
+    base = _baseline(**kwargs)
+    assert set(ddp) == set(base)
+    capped_rows = {"delta_loss_P_capped": "delta_loss_P", "chi_net_P_capped": "chi_net_P"}
+    assert set(capped_rows) <= set(base)
+    # vacuity guard: the capped part is a real share of each observable, neither
+    # nothing nor all of it, so a wrong capped row cannot hide behind a zero.
+    for capped, full in capped_rows.items():
+        assert 0.05 * base[full] < base[capped] < 0.95 * base[full], (capped, base[capped])
     for observable, expected in base.items():
         got = ddp[observable]
         rel = abs(got - expected) / max(abs(expected), 1e-300)
