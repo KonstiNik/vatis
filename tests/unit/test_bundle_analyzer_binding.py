@@ -327,6 +327,7 @@ def _real_adamw_bundle(
     metadata_optimizer: str = "adamw",
     param_groups: Any = None,
     n_steps: int = 3,
+    optimizer_kwargs: dict[str, Any] | None = None,
 ) -> Path:
     run_dir = tmp_path / "run"
     order = write_run_files(
@@ -334,7 +335,7 @@ def _real_adamw_bundle(
     )
     named = dict(model.named_parameters())
     params = param_groups(named, order) if param_groups else [named[n] for n in order]
-    optimizer = optimizer_cls(params, lr=1e-3)
+    optimizer = optimizer_cls(params, lr=1e-3, **(optimizer_kwargs or {}))
     ids = torch.from_numpy(make_batch_a(seed=0)).long()
     for _ in range(n_steps):
         optimizer.zero_grad(set_to_none=True)
@@ -417,6 +418,113 @@ def test_non_adam_optimizer_state_is_not_labelled_adamw(
     source = load_local_bundle(run_dir, tiny_lm_factory)
     with pytest.raises(BundleSchemaError, match="names the optimizer"):
         source.adamw_preconditioner()(source.checkpoints[0].identifier)
+
+
+# ------------------------------------------------- one P source for both optimizers
+
+
+def _sgd_bundle(tmp_path: Path, *, momentum: float, n_steps: int) -> Path:
+    return _real_adamw_bundle(
+        tmp_path,
+        BundleTinyLM(seed=0),
+        optimizer_cls=torch.optim.SGD,
+        metadata_optimizer="sgd",
+        n_steps=n_steps,
+        optimizer_kwargs={"momentum": momentum, "weight_decay": 0.1},
+    )
+
+
+@pytest.mark.parametrize("momentum", [0.0, 0.9])
+@pytest.mark.parametrize("n_steps", [0, 3])
+def test_sgd_bundle_gets_identity_rows_under_the_sgd_descriptor(
+    tmp_path: Path, momentum: float, n_steps: int
+) -> None:
+    """SGD's geometry factor is ``P = I``: its P rows repeat the raw ones exactly.
+
+    Step 0 included -- unlike AdamW, SGD needs no saved state to have a ``P``.
+    """
+    source = load_local_bundle(
+        _sgd_bundle(tmp_path, momentum=momentum, n_steps=n_steps), tiny_lm_factory, dtype="fp32"
+    )
+    val = torch.from_numpy(make_batch_a(seed=999)).long()
+    analyzer = Analyzer(
+        eval_batches={
+            "train": source.batch_a_spec(),
+            "val": {"input_ids": val, "labels": shifted_lm_targets(val)},
+        },
+        preconditioner=source.preconditioner(),
+        cross_pairs=[("train", "val")],
+        chi_net_method="hutchinson",
+        n_hutchinson=4,
+        micro_batch_size=2,
+        dtype="fp32",
+        sink=None,
+    )
+    rows = [r for result in analyzer.run(source.model_specs()) for r in result.rows]
+    values = {(r.batch_a, r.batch_b, r.observable): r.value for r in rows}
+    descriptors = {r.observable: r.preconditioner for r in rows}
+    for name in ("delta_loss_P", "chi_net_P", "chi_pos_P"):
+        assert descriptors[name] == "sgd"
+        assert descriptors[name.removesuffix("_P")] == "none"
+    for pair in (("train", "train"), ("val", "val"), ("train", "val")):
+        for name in ("delta_loss", "chi_net", "chi_pos"):
+            assert values[(*pair, f"{name}_P")] == values[(*pair, name)], (pair, name)
+    assert values[("train", "train", "delta_loss")] > 0.0
+
+
+@pytest.mark.parametrize("momentum", [0.0, 0.9])
+@pytest.mark.parametrize("n_steps", [0, 3])
+def test_the_adamw_source_names_an_sgd_bundle_as_such(
+    tmp_path: Path, momentum: float, n_steps: int
+) -> None:
+    """Not the step-0 "empty state" skip: plain SGD has an empty state at every step."""
+    source = load_local_bundle(
+        _sgd_bundle(tmp_path, momentum=momentum, n_steps=n_steps), tiny_lm_factory
+    )
+    with pytest.raises(BundleSchemaError, match="SGD optimizer"):
+        source.adamw_preconditioner()(source.checkpoints[0].identifier)
+
+
+def test_the_unified_source_returns_the_adamw_p_for_an_adamw_bundle(
+    trained_bundle: dict[str, Any],
+) -> None:
+    source = load_local_bundle(trained_bundle["run_dir"], tiny_lm_factory, dtype="fp32")
+    ident = source.checkpoint_for(BUNDLED_STEPS[0]).identifier
+    direct = source.adamw_preconditioner()(ident)
+    unified = source.preconditioner()(ident)
+    assert direct is not None and unified is not None
+    assert unified.descriptor == "adamw"
+    assert torch.equal(unified.diag, direct.diag)
+    assert not torch.equal(unified.diag, torch.ones_like(unified.diag))
+
+
+def test_the_unified_source_refuses_what_it_cannot_name(tmp_path: Path) -> None:
+    # RMSprop also keeps a second moment and has a ``momentum`` key, but it is
+    # neither Adam nor SGD: it must not come back as "adamw" or as "sgd".
+    run_dir = _real_adamw_bundle(
+        tmp_path,
+        BundleTinyLM(seed=0),
+        optimizer_cls=torch.optim.RMSprop,
+        metadata_optimizer="rmsprop",
+    )
+    source = load_local_bundle(run_dir, tiny_lm_factory)
+    with pytest.raises(BundleSchemaError, match="cannot tell which geometry factor"):
+        source.preconditioner()(source.checkpoints[0].identifier)
+
+
+def test_sgd_state_under_metadata_that_names_adamw_is_refused(tmp_path: Path) -> None:
+    run_dir = _real_adamw_bundle(
+        tmp_path, BundleTinyLM(seed=0), optimizer_cls=torch.optim.SGD, metadata_optimizer="adamw"
+    )
+    source = load_local_bundle(run_dir, tiny_lm_factory)
+    with pytest.raises(BundleSchemaError, match="do not belong together"):
+        source.preconditioner()(source.checkpoints[0].identifier)
+
+
+def test_adamw_overrides_are_refused_for_an_sgd_bundle(tmp_path: Path) -> None:
+    source = load_local_bundle(_sgd_bundle(tmp_path, momentum=0.9, n_steps=3), tiny_lm_factory)
+    with pytest.raises(ValueError, match="AdamW overrides"):
+        source.preconditioner(eps=1e-6)(source.checkpoints[0].identifier)
 
 
 def test_an_override_is_visible_in_the_descriptor(trained_bundle: dict[str, Any]) -> None:

@@ -91,7 +91,12 @@ def test_cauchy_schwarz_predicate() -> None:
 
 
 def test_non_mean_reduced_loss_fn_warns_that_chi_pos_left_its_range() -> None:
-    """A sum-reduced CE inflates chi_pos by exactly ``N_valid^2``; that must warn.
+    """A loss scaled by ``N_valid`` inflates chi_pos by ``N_valid^2``; that must warn.
+
+    The ``loss_fn`` here is the mean loss times the *global* valid-token count. A
+    genuinely ``reduction="sum"`` loss is scaled per micro-batch instead and
+    inflates by the square of the per-micro-batch count
+    (``test_bundle_analyzer_binding.py::test_a_really_sum_reduced_loss_...``).
 
     ``chi_loss`` always uses the mean-reduced closed form (a documented v1
     restriction), so ``delta_loss`` and ``chi_loss`` end up describing different
@@ -142,9 +147,10 @@ def test_the_range_warning_is_a_backstop_not_a_detector() -> None:
     """Honest limit of the guard: it fires only when ``N^2 * chi_pos > 1.5``.
 
     The inconsistency scales the *published* value by ``N_valid^2``, so the guard
-    sees it only if the result actually leaves ``[-1, 1]``. On a realistic batch
-    (``N`` in the thousands) that is true for essentially any ``chi_pos``. On a tiny
-    toy it is not: measured on this fixture at ``B=2, S=8`` — ``N = 14``,
+    sees it only if the result actually leaves ``[-1, 1]``. That is not guaranteed
+    on real models either: a ``reduction="sum"`` loss scales by the per-micro-batch
+    count, and real ``chi_pos`` values are small. On a tiny toy it visibly fails:
+    measured on this fixture at ``B=2, S=8`` — ``N = 14``,
     ``N^2 = 196``, ``chi_pos = 4.34e-03`` — the sum-reduced run lands at
     ``8.5e-01``, still inside the bound, and **no warning fires** even though the
     numbers are just as wrong. Recorded so nobody reads a silent run as a clean

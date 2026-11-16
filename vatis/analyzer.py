@@ -24,8 +24,10 @@ Preconditioned ruler
 
 When a ``preconditioner`` is configured the analyzer measures the **second**
 ruler in the same pass: ``delta_loss_P``, ``chi_net_P`` and ``chi_pos_P``, the
-LNP triple of the effective kernel ``Theta_P = J P J^T`` the optimizer actually
-trains on (``docs/SPEC.md`` §"The preconditioned ruler"). It costs no extra
+LNP triple of the effective kernel ``Theta_P = J P J^T`` of a preconditioned
+update ``-eta P grad L`` (``docs/SPEC.md`` §"The preconditioned ruler"; for AdamW
+this is the geometry factor only, not the step that was taken — see §"What
+``delta_loss_P`` is not" there). It costs no extra
 backward — ``delta_loss_P`` re-reduces the gradient vector step 3 already built
 with the elementwise ``P`` weight, and ``chi_net_P`` comes out of the same
 estimator call and the same probes as ``chi_net``. ``chi_loss`` is
