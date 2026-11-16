@@ -125,6 +125,40 @@ def test_analyzer_chi_loss_invariant_to_micro_batch_size() -> None:
             )
 
 
+def test_analyzer_delta_loss_is_exact_on_an_unevenly_padded_batch() -> None:
+    """``delta_loss`` is ``||grad_theta L||^2`` of the mean CE over all valid
+    tokens, whatever the micro-batch size.
+
+    The sequences of the padded batch hold different numbers of valid tokens,
+    so the micro-batches do too, and the analyzer has to weight each
+    micro-batch's gradient by its share of the *tokens*. Weighting by its share
+    of the sequences — the same thing on an evenly padded batch — gives a
+    different number here. The reference is one autograd call on the whole
+    batch, independent of the analyzer's accumulation.
+    """
+    bundle = _build_lm_bundle()
+    batch = make_tiny_lm_batch(batch_size=4, seed=0, pad_fraction=0.25)
+    valid_per_sequence = (batch["labels"] != -100).sum(dim=1).tolist()
+    assert len(set(valid_per_sequence)) == 4, valid_per_sequence
+
+    loss = causal_lm_loss(bundle.model(batch["input_ids"]), batch)
+    grads = torch.autograd.grad(loss, bundle.params)
+    exact = sum(float((g.to(torch.float64) ** 2).sum()) for g in grads)
+
+    for mb in (1, 2, 4):
+        rows = analyze(
+            model=bundle,
+            revisions=["step0"],
+            eval_batches={"val_pad": batch},
+            n_hutchinson=2,
+            micro_batch_size=mb,
+            sink=None,
+        )[0].rows
+        delta_loss = next(r.value for r in rows if r.observable == "delta_loss")
+        assert delta_loss == pytest.approx(exact, rel=1e-5), (mb, delta_loss, exact)
+        assert next(r.n_valid_a for r in rows) == sum(valid_per_sequence)
+
+
 def test_analyzer_with_padding_uses_attention_mask() -> None:
     bundle = _build_lm_bundle()
     batch = make_tiny_lm_batch(batch_size=4, seed=0, pad_fraction=0.25)

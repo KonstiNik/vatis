@@ -104,8 +104,8 @@ def test_non_mean_reduced_loss_fn_warns_that_chi_pos_left_its_range() -> None:
     8-valid-token batch, i.e. exactly 64x, with nothing to alert the user.
     """
     model = _model()
-    # n_valid = 56 here, so the N^2 = 3136 inflation carries chi_pos from ~1.1e-03
-    # to ~3.4e+00 and crosses the bound. See
+    # n_valid = 56 here, so the N^2 = 3136 inflation carries chi_pos from ~1.5e-03
+    # to ~4.8e+00 and crosses the bound. See
     # test_the_range_warning_is_a_backstop_not_a_detector for why the batch has to
     # be this big.
     batch = make_tiny_lm_batch(batch_size=8, seq_len=8, vocab_size=16, seed=9)
@@ -151,8 +151,8 @@ def test_the_range_warning_is_a_backstop_not_a_detector() -> None:
     on real models either: a ``reduction="sum"`` loss scales by the per-micro-batch
     count, and real ``chi_pos`` values are small. On a tiny toy it visibly fails:
     measured on this fixture at ``B=2, S=8`` — ``N = 14``,
-    ``N^2 = 196``, ``chi_pos = 4.34e-03`` — the sum-reduced run lands at
-    ``8.5e-01``, still inside the bound, and **no warning fires** even though the
+    ``N^2 = 196``, ``chi_pos = 3.8e-03`` — the sum-reduced run lands at
+    ``7.4e-01``, still inside the bound, and **no warning fires** even though the
     numbers are just as wrong. Recorded so nobody reads a silent run as a clean
     bill of health.
     """

@@ -246,11 +246,12 @@ def test_valid_count_tripwire_fires_when_the_masks_drift_apart(
 class _CausalMeanLM(torch.nn.Module):
     """A causal toy: position ``s`` sees tokens ``0..s`` only.
 
-    ``TinyTransformer`` is *not* causal (it has no attention mask), so a token at
-    a padded tail position leaks into earlier positions and the bit-identity test
-    below could not be written with it. This model is the minimum that makes
-    "later tokens cannot influence earlier logits" true, which is what turns the
-    masking check into an exact statement instead of a tolerance.
+    A hand-written model whose logits at position ``s`` depend on tokens
+    ``0..s`` by construction. That makes "later tokens cannot influence earlier
+    logits" true exactly, which is what turns the masking check below into an
+    exact statement instead of a tolerance. (``TinyTransformer`` is causal as
+    well — it applies a causal attention mask; an earlier version of this
+    comment said otherwise.)
     """
 
     def __init__(self, *, vocab: int = 8, dim: int = 6, hidden: int = 8, seed: int = 0) -> None:
