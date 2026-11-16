@@ -219,7 +219,9 @@ class Analyzer:
             recorded as ``hutchinson_seed``. A single process draws its probes
             from that seed. Under DDP rank 0 does too, and every other rank
             draws from its own stream, seeded from that seed and its rank — so
-            ``seed`` and the world size determine a run's probes.
+            ``seed``, the checkpoint id, the batch name and the world size
+            determine a run's probes, and a multi-rank ``chi_net`` depends on
+            the number of ranks.
         device: model device for single-GPU mode. In DDP mode this is
             overridden by ``cuda:LOCAL_RANK``.
         dtype: forward dtype for HF models loaded by name. Ignored when the
@@ -655,11 +657,17 @@ class Analyzer:
         # random vectors on the k-th sample of every shard. A Rademacher probe v
         # errs on sample a by sum_{i != j} v_i v_j M_a[i, j] with M_a = J_a J_a^T,
         # hence the same v on two samples gives errors with covariance
-        # 2 <offdiag(M_a), offdiag(M_b)>_F (Gaussian: 2 <M_a, M_b>_F) -- and the
-        # Gram matrices of different inputs are far from orthogonal (measured
-        # error correlation between shards: 0.4 to 0.9). The per-rank errors then
-        # add almost coherently and the variance of the all-reduced chi_net grows
-        # by up to the world size.
+        # 2 <offdiag(M_a), offdiag(M_b)>_F (Gaussian: 2 <M_a, M_b>_F, which also
+        # counts the diagonals and is never negative). The Gram matrices of
+        # different inputs are not orthogonal, so the per-rank errors are
+        # positively correlated and the variance of the all-reduced chi_net lies
+        # between 1x and world-size x that of INDEPENDENT rank streams on the same
+        # shards (not: of a single process -- the two references coincide only
+        # when every micro-batch holds one sequence). Where in that range depends
+        # on the model and on the probe distribution. Measured only on CPU test
+        # models of at most 1.25M parameters, nothing larger: 1.3x at 2 ranks and
+        # 2.1x-2.6x at 4 ranks with Rademacher probes, 1.4x-1.9x and 2.6x-3.3x
+        # with Gaussian probes.
         #
         # The generator is deliberately on the CPU even for a CUDA run: probes are
         # drawn on the CPU and copied to the device
@@ -1268,10 +1276,10 @@ def _rank_probe_seed(call_seed: int, rank: int) -> int:
     rank 0 of a world of one — draws exactly the stream that column names, and
     separating the ranks' streams did not change any single-process result.
     Every other rank gets its own seed, ``sha256(f"{call_seed}|rank={rank}")``
-    reduced to 31 bits like the per-call seed. The world size does not enter:
-    it already determines which samples a rank holds.
+    reduced modulo ``2**31 - 1`` like the per-call seed. The world size does not
+    enter: it already determines which samples a rank holds.
 
-    Distinct ranks collide only by a 31-bit hash accident (~``R^2 / 2^32`` for
+    Distinct ranks collide only by a hash accident (~``R^2 / 2^32`` for
     ``R`` ranks); a collision would cost that one call the variance the separate
     streams buy, never correctness — the estimate is unbiased either way.
     """
