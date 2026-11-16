@@ -20,6 +20,7 @@ training run's own form, ``inputs = ids[:, :-1]``, ``targets = ids[:, 1:]``.
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import Any
 
@@ -275,3 +276,111 @@ def test_contradictory_pad_metadata_is_refused_when_the_bundle_is_opened(
     _write_bundle(tmp_path / "run", **keys)
     with pytest.raises(BundleSchemaError, match=match):
         load_local_bundle(tmp_path / "run", tiny_lm_factory)
+
+
+# ------------------------------- deciding the convention from the bundle itself
+
+RECIPE_STEPS = (0, 20, 60)
+
+
+def _train_and_write_bundle(run_dir: Path, *, pad_masked: bool) -> dict[int, BundleTinyLM]:
+    """A short plain-torch AdamW run, bundled WITHOUT the two pad keys.
+
+    This is the state of a bundle whose contradictory pad keys were removed: the
+    data say nothing about the convention, but every ``meta.json`` holds the
+    ``train_loss`` the run computed on its update batch — here
+    ``F.cross_entropy`` on ``ids[:, :-1] -> ids[:, 1:]`` with
+    ``ignore_index=PAD_ID`` iff ``pad_masked``, taken at the fp32 weights before
+    the step (pre-step semantics). Weights go to disk rounded to bf16, as the
+    schema's default has it. Returns the unrounded fp32 model at each step.
+    """
+    model = BundleTinyLM(seq_len=7, seed=0)
+    write_run_files(run_dir, model, metadata=bundle_metadata(model, batch_size=4))
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-2, weight_decay=0.0)
+    unrounded: dict[int, BundleTinyLM] = {}
+    for step in range(RECIPE_STEPS[-1] + 1):
+        ids_np = _padded_batch(step)
+        ids = torch.from_numpy(ids_np).to(torch.int64)
+        logits = model(ids[:, :-1])
+        flat_logits, flat_targets = logits.reshape(-1, logits.shape[-1]), ids[:, 1:].reshape(-1)
+        loss = (
+            F.cross_entropy(flat_logits, flat_targets, ignore_index=PAD_ID)
+            if pad_masked
+            else F.cross_entropy(flat_logits, flat_targets)
+        )
+        if step in RECIPE_STEPS:
+            write_checkpoint(
+                run_dir,
+                step,
+                model=model,
+                optim_state=optimizer.state_dict(),
+                batch_a=ids_np,
+                meta={"train_loss": float(loss.detach())},
+            )
+            unrounded[step] = copy.deepcopy(model)
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        optimizer.step()
+    return unrounded
+
+
+def _candidate_losses(model: torch.nn.Module, ids: torch.Tensor) -> tuple[float, float]:
+    """The update batch's loss with all targets counted, and with ``PAD_ID`` ignored."""
+    with torch.no_grad():
+        logits = model(ids[:, :-1])
+    flat_logits, flat_targets = logits.reshape(-1, logits.shape[-1]), ids[:, 1:].reshape(-1)
+    return (
+        float(F.cross_entropy(flat_logits, flat_targets)),
+        float(F.cross_entropy(flat_logits, flat_targets, ignore_index=PAD_ID)),
+    )
+
+
+@pytest.mark.parametrize("pad_masked", [True, False], ids=["pad-masked-run", "unmasked-run"])
+def test_recorded_train_loss_tells_which_pad_convention_a_run_used(
+    tmp_path: Path, pad_masked: bool
+) -> None:
+    """The recipe of ``docs/SPEC.md`` for a bundle whose pad keys cannot be trusted.
+
+    Recompute the loss of ``batch_a.npy`` at a checkpoint's stored weights once
+    with every target counted and once with the candidate pad id ignored; the
+    one that matches ``meta.json``'s ``train_loss`` is the convention the run
+    used. Only ``batch_a_tokens`` (raw ids, independent of the pad keys), the
+    weights and ``meta.train_loss`` are used.
+
+    Measured on this fixture (16-token vocabulary, 7 of 24 targets are pad), at
+    the two trained checkpoints (steps 20 and 60): the matching candidate is
+    within 2.6e-5 to 1.9e-4 of the recorded value, the other one is off by
+    0.167 to 0.668. The residual of the matching one is entirely the bf16 rounding of
+    the stored weights: recomputed at the run's unrounded fp32 weights it equals
+    the recorded value (asserted below at 1e-6).
+
+    The limit, also visible here: at step 0 nothing has been trained and the
+    non-matching candidate is off by only 8e-5 to 9e-5, which is no more than
+    the rounding residual seen at the other steps — an untrained checkpoint
+    cannot decide the question on this fixture, so the separation is asserted
+    on the trained ones only.
+    """
+    unrounded = _train_and_write_bundle(tmp_path / "run", pad_masked=pad_masked)
+    source = load_local_bundle(tmp_path / "run", tiny_lm_factory)
+    assert source.loss_ignore_index is None  # nothing recorded: the keys are of no help
+
+    for checkpoint in source:
+        recorded = checkpoint.meta.train_loss
+        assert recorded is not None
+        ids = checkpoint.batch_a_tokens
+        all_counted, pad_ignored = _candidate_losses(checkpoint.model_bundle.model, ids)
+        matching, other = (pad_ignored, all_counted) if pad_masked else (all_counted, pad_ignored)
+
+        # At the weights the run actually had (fp32), the matching candidate IS
+        # the recorded value; the bundle's bf16-rounded weights move it a little.
+        exact_all, exact_ignored = _candidate_losses(unrounded[checkpoint.step], ids)
+        assert (exact_ignored if pad_masked else exact_all) == pytest.approx(recorded, abs=1e-6)
+        rounding_error = abs(matching - recorded)
+        assert rounding_error < 2e-3, (checkpoint.step, rounding_error)
+
+        gap = abs(other - recorded)
+        if checkpoint.step > 0:
+            # Once the run has trained, the wrong convention is off by far more
+            # than the rounding of the weights can explain.
+            assert gap > 0.1, (checkpoint.step, gap)
+            assert gap > 100 * rounding_error, (checkpoint.step, gap, rounding_error)

@@ -61,7 +61,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     non-pad targets (they used to count every target). Bundles without the two
     fields are read exactly as before. Contradictory fields
     (`mask_pad_in_loss: true` without an index, or an index without
-    `mask_pad_in_loss: true`) raise `BundleSchemaError` when the bundle is opened.
+    `mask_pad_in_loss: true`) raise `BundleSchemaError` when the bundle is opened;
+    `docs/SPEC.md` ("Repairing contradictory pad fields") describes how to
+    correct them, and how each checkpoint's recorded `train_loss` settles which
+    entry is wrong. `examples/two_rulers_llama.py` applies the same recorded
+    convention to its held-out batches (it used to count every target there).
   - With a `valid_mask_fn` stricter than the labels, `loss_fn` is evaluated on a
     batch whose labels carry the mask, so a custom `loss_fn` must read its
     targets from the batch and honour `ignore_index`; if the loss still depends

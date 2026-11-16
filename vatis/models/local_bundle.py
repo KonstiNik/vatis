@@ -103,6 +103,12 @@ _ADAM_FAMILY = frozenset({"adam", "adamw"})
 _SGD_GROUP_KEYS = frozenset({"momentum", "dampening", "nesterov"})
 # Descriptor of the rows measured with SGD's geometry factor, ``P = I``.
 SGD_DESCRIPTOR = "sgd"
+# Appended to the two "contradictory pad keys" refusals: what to do about it.
+_PAD_KEYS_REMEDY = (
+    " The bundle's data are untouched: correct the two keys in metadata.json to what the "
+    "run did; if that is not known, each checkpoint's recorded train_loss decides it -- "
+    "see docs/SPEC.md, 'Native checkpoint bundles', 'Repairing contradictory pad fields'."
+)
 CHECKPOINT_BATCH_A_FILE = "batch_a.npy"
 CHECKPOINT_META_FILE = "meta.json"
 
@@ -240,7 +246,10 @@ class BundleMetadata:
         an index while ``mask_pad_in_loss`` is false or absent, or a value of the
         wrong JSON type raise :class:`BundleSchemaError`: either reading of such
         metadata would put a number on a loss that may not be the one the run
-        descended, and nothing in the bundle says which.
+        descended, and the two keys alone do not say which. The remedy is to
+        correct ``metadata.json``; ``docs/SPEC.md`` ("Repairing contradictory pad
+        fields") describes how each checkpoint's recorded ``train_loss`` settles
+        which entry is wrong.
         """
         where = f"{self.path}: " if self.path is not None else ""
         masked = self.raw.get("mask_pad_in_loss")
@@ -264,7 +273,7 @@ class BundleMetadata:
                 f"{spelled('loss_ignore_index')}: the run says its "
                 "loss ignored pad targets but not which token id that was, so the loss it "
                 "descended cannot be reconstructed for the update batch. Record the pad id "
-                "as 'loss_ignore_index'."
+                "as 'loss_ignore_index'." + _PAD_KEYS_REMEDY
             )
         if index is not None and not masked:
             raise BundleSchemaError(
@@ -272,7 +281,7 @@ class BundleMetadata:
                 f"{'false' if masked is False else spelled('mask_pad_in_loss')}: the two keys "
                 "contradict each "
                 "other about whether the training loss ignored that target. Record "
-                "'mask_pad_in_loss': true, or 'loss_ignore_index': null."
+                "'mask_pad_in_loss': true, or 'loss_ignore_index': null." + _PAD_KEYS_REMEDY
             )
         return index
 

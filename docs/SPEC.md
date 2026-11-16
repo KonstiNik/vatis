@@ -573,8 +573,63 @@ for ckpt in source:                                    # or drive the loop yours
   (`BundleSchemaError`): `mask_pad_in_loss: true` without an index, an index
   while `mask_pad_in_loss` is false or absent, or a value of the wrong JSON type.
   Either reading of such metadata could put a number on a loss the run did not
-  descend, and nothing in the bundle says which. The fields describe the
-  *update* batch only; an eval batch you pass yourself carries its own labels.
+  descend, and the two fields alone do not say which. The fields describe the
+  *update* batch only; an eval batch you pass yourself carries its own labels
+  (to score a held-out batch under the run's objective, write `-100` where its
+  target equals `source.loss_ignore_index`, as `examples/two_rulers_llama.py`
+  does).
+
+  **Repairing contradictory pad fields.** The refusal is about two entries of
+  `metadata.json`; the weights, optimizer states and batches are untouched and
+  remain usable. The remedy is to correct the two fields to what the run
+  actually did: remove both (or `false` / `null`) if its loss counted every
+  target, `true` plus the pad id if it ignored pad targets. When it is not known
+  which entry is wrong, the bundle itself can decide, because each checkpoint's
+  `meta.json` records `train_loss` — the loss the run computed on its update
+  batch at `θ_t`:
+
+  1. Make the bundle loadable under either reading (for instance, remove both
+     fields for the duration of the check).
+  2. For a checkpoint, recompute the loss of `batch_a.npy` at that checkpoint's
+     weights twice — every target counted, and the candidate pad id ignored:
+
+     ```python
+     ids = ckpt.batch_a_tokens                      # raw ids; not ckpt.batch_a, whose labels follow the fields
+     logits = ckpt.model_bundle.model(ids[:, :-1])
+     flat, targets = logits.reshape(-1, logits.shape[-1]), ids[:, 1:].reshape(-1)
+     all_counted = F.cross_entropy(flat, targets)
+     pad_ignored = F.cross_entropy(flat, targets, ignore_index=pad_id)
+     ```
+  3. The one that matches `ckpt.meta.train_loss` is the convention the run used;
+     write the fields accordingly.
+
+  What "matches" can and cannot mean:
+
+  - **Closer by a wide margin, not equal.** A bf16 weight file holds a rounded
+    `θ_t`, so the matching value is only approximately the recorded one. On
+    bundles of an 11M-parameter transformer the matching candidate was within
+    `2e-5` to `3e-3` of `train_loss` with bf16 weight files and within `7e-7`
+    with fp32 weight files (also under gradient accumulation), while the other
+    candidate was off by `0.04` to `9` on update batches with 40–50% pad targets.
+    (`tests/unit/test_bundle_pad_convention.py` shows the same on a toy bundle
+    with bf16 weights: `≤ 2e-4` against `≥ 0.16` once it has trained.)
+  - **The margin shrinks with the share of pad targets.** On a run whose update
+    batches held about 1% pad targets the other candidate was off by only
+    `2e-3` to `8e-3` in its first steps — decisive with fp32 weight files, not
+    with bf16 ones.
+  - **Use trained checkpoints, and more than one.** The two candidates are the
+    same number when the batch contains no target equal to the candidate id, and
+    close to each other while little has been learned (on the toy bundle the
+    wrong candidate is off by about `9e-5` at step 0, no more than the bf16
+    rounding). All checkpoints
+    examined must give the same verdict; if neither candidate is close, the run
+    used some other convention and the fields should not be guessed.
+  - **`train_loss` must be the loss of the stored batch at the stored weights.**
+    Under gradient accumulation that is the token-weighted loss of the whole
+    window (sum of the per-token losses over the number of counted targets),
+    which is what makes it the loss of the concatenated batch `batch_a.npy`
+    holds. A writer that records something else there — a mean of micro-batch
+    means under masking, a smoothed or post-step value — defeats the recipe.
 - **Weights are stored as parameters only.** A persistent buffer the model
   factory creates keeps the factory's value, and the loader warns about it:
   correct for constants, wrong for anything a training run changes. The loader
