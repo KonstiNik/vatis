@@ -24,9 +24,10 @@ Per `(checkpoint, eval-batch)`, four scalars:
 | `chi_pos`    | δL/(χ_loss·χ_net)  | spectral **position**: bulk (→1) vs tail (→0)      | combinator |
 | `delta_loss` | ⟨∇_θ Lᴬ, ∇_θ Lᴮ⟩   | gradient alignment of two batches (A=B → ‖∇_θ L‖²) | 1–2 backwards |
 
-With a checkpoint that carries its optimizer state, the same three scalars can
+With a checkpoint that carries its optimizer state, three of them can
 additionally be measured on the optimizer's preconditioned kernel
-(`delta_loss_P`, `chi_net_P`, `chi_pos_P`) — see
+(`delta_loss_P`, `chi_net_P`, `chi_pos_P`; `chi_loss` does not depend on the
+kernel) — see
 [Optimizer-aware ruler](#optimizer-aware-ruler).
 
 ## Setup
@@ -125,7 +126,7 @@ from vatis import Analyzer, load_local_bundle
 source = load_local_bundle(run_dir, "my_project.models:build_model")
 analyzer = Analyzer(
     eval_batches={"train": source.batch_a_spec(), "val": val_batch},
-    preconditioner=source.adamw_preconditioner(),  # P = 1/(√v̂ + ε), per checkpoint
+    preconditioner=source.preconditioner(),  # AdamW: 1/(√v̂ + ε) per checkpoint; SGD: I
     cross_pairs=[("train", "val")],
     sink="results.parquet",
 )
@@ -146,14 +147,17 @@ Three things to know before using it:
   is the geometry factor only: momentum and weight decay are excluded, and it is
   built from the second moment *before* the step
   ([`docs/SPEC.md` → What `delta_loss_P` is not](docs/SPEC.md)).
-- Coordinates the optimizer never updated sit at `P = 1/ε` and can dominate
-  `chi_net_P` on held-out data; `vatis.core.preconditioner.epsilon_cap_mask`
-  lets you check their share.
+- Coordinates that never received a non-zero gradient sit at `P = 1/ε` and can
+  dominate `chi_net_P` — on held-out data, and equally on the update batch
+  itself when it contains a token the run has not seen before (`P` is the
+  pre-step one). `vatis.core.preconditioner.epsilon_cap_mask` lets you check
+  their share.
 
 ## Output
 
 Long-format parquet: one row per `(checkpoint, batch_a, batch_b, preconditioner,
-observable)`, each raw observable in raw and `_normalized` form. Load with pandas/pyarrow and pivot. The
+observable)`; `chi_loss` and `chi_net` are written both unnormalized and as
+`_normalized`. Load with pandas/pyarrow and pivot. The
 schema is the contract between vatis and any downstream analysis — see
 [`docs/SPEC.md` → Result format](docs/SPEC.md).
 

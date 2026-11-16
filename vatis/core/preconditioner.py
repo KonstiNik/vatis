@@ -299,8 +299,9 @@ class Preconditioner:
         gradient never touched keeps ``v = 0`` exactly — unused vocabulary rows
         of an embedding are the obvious population (measured on a real bundle:
         ``exp_avg_sq.min() == 0`` at every checkpoint). With ``eps = 1e-8`` those
-        entries get ``P = 1e8``, of order ``1e6`` times a live coordinate's
-        weight. Consequences to be aware of when reading a number:
+        entries get ``P = 1e8``; relative to a coordinate with history the
+        weight ratio is ``sqrt(v_hat) / eps`` (``1e6`` for ``sqrt(v_hat) = 1e-2``).
+        Consequences to be aware of when reading a number:
 
         - ``chi_net^P = Tr(J P J^T) = sum_i P_i ||J_{:,i}||^2``, so a dead
           coordinate is harmless *only if* its Jacobian column also vanishes on
@@ -308,8 +309,15 @@ class Preconditioner:
           tokens the training batches used — and **fails in general**: a token
           present in a held-out measurement batch but absent from the batches
           that built ``v`` has a non-zero Jacobian column *and* ``P = 1/eps``, so
-          it enters ``chi_net^P`` with ~``1e6`` times the weight of a live
-          direction. On held-out data that is the normal case, not a corner case.
+          it enters ``chi_net^P`` with ``sqrt(v_hat) / eps`` times the weight of
+          a live direction. On held-out data that is the normal case, not a
+          corner case.
+        - **The update batch is exposed in the same way.** ``P`` is the pre-step
+          one, so a coordinate that receives its first non-zero gradient at step
+          ``t`` (a token the run has not seen before) still has ``v = 0`` when
+          ``batch_a`` of step ``t`` is measured: it enters ``delta_loss^P`` and
+          ``chi_net^P`` at ``1/eps``, whereas the step itself divides by a
+          ``v_hat`` that already contains that gradient.
         - No clipping, flooring or dead-coordinate mask is applied: the
           convention ``P = 1/(sqrt(v_hat) + eps)`` is a frozen project decision
           (``docs/SPEC.md`` §"The preconditioned ruler"), and quietly
@@ -379,9 +387,10 @@ def epsilon_cap_mask(
     ``P_i = 1/(sqrt(v_hat_i) + eps)`` is maximal, and equal to ``1/eps``, exactly
     where ``v_hat_i == 0`` — a parameter coordinate no gradient ever touched (see
     :meth:`Preconditioner.adamw` for why those exist in real runs and why they
-    are *not* clipped). Such coordinates carry ~``1/eps`` times the weight of a
-    converged one, so a ``chi_net^P`` that happens to be dominated by them is
-    saying something about dead directions rather than about learning.
+    are *not* clipped). Such a coordinate carries ``sqrt(v_hat_j) / eps`` times
+    the weight of a coordinate ``j`` with history, so a ``chi_net^P`` that
+    happens to be dominated by them is saying something about dead directions
+    rather than about learning.
 
     This helper exists so that fact can be **surfaced** — count the mask, or use
     it to split ``chi_net^P`` into a live and a capped part (run the estimator

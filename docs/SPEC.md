@@ -31,7 +31,8 @@ with
 ### The preconditioned ruler (`chi_pos_P`)
 
 An optimizer with update `Δθ = −η P ∇L` does not train on the raw eNTK but on
-the **effective kernel** `Θ_P = J P Jᵀ`. vatis measures the same LNP triple on
+the **effective kernel** `Θ_P = J P Jᵀ`, with `J = ∇_θ f` the parameter Jacobian
+of the outputs (so `Θ = J Jᵀ`). vatis measures the same LNP triple on
 that kernel, alongside the raw one:
 
 ```
@@ -65,6 +66,16 @@ P sources:
 | `identity` | `I` | `preconditioner="identity"` |
 | `explicit` | user-supplied 1-D tensor | `Preconditioner.from_diagonal(...)` |
 | `adamw` | `diag(1/(√v̂ + ε))`, `v̂ = exp_avg_sq/(1−β2^t)` | `source.adamw_preconditioner()` on a checkpoint bundle |
+| `sgd` | `I` | `source.preconditioner()` on a bundle written by `torch.optim.SGD` |
+
+`source.preconditioner()` picks between the last two from the bundle's saved
+optimizer `param_groups`, so an optimizer comparison reads the same three
+observables for both and the `preconditioner` column says which geometry a row
+used. For SGD (with or without momentum) the geometry factor is the identity:
+its `sgd` rows repeat the raw values exactly and exist at every checkpoint,
+step 0 included. Momentum and weight decay are excluded for SGD for the same
+reason as for AdamW (see "What `delta_loss_P` is not"). Any other optimizer is
+refused.
 
 **AdamW conventions.**
 
@@ -80,11 +91,15 @@ P sources:
   `P = I` would publish `chi_pos_P == chi_pos` under the `adamw` descriptor.
 - **Untouched coordinates sit at `P = 1/ε`, by design.** Any parameter element
   the gradient never touched keeps `exp_avg_sq == 0` (unused vocabulary rows are
-  the obvious population), which is ~`1e6`× a live coordinate's weight at
-  `ε = 1e-8`. Since `chi_net_P = Σ_i P_i ‖J_{:,i}‖²`, such a coordinate is
-  harmless only if its Jacobian column also vanishes on the *measurement* batch;
-  a token present in a held-out batch but absent from the batches that built `v`
-  is not harmless. vatis applies no clipping or mask —
+  the obvious population); relative to a coordinate with history that is a
+  weight ratio of `√v̂/ε` (`1e6` for `√v̂ = 1e-2` at `ε = 1e-8`). Since
+  `chi_net_P = Σ_i P_i ‖J_{:,i}‖²`, such a coordinate is harmless only if its
+  Jacobian column also vanishes on the *measurement* batch; a token present in a
+  held-out batch but absent from the batches that built `v` is not harmless.
+  **The update batch is exposed in the same way:** `P` is the pre-step one, so a
+  token the run sees for the first time at step `t` enters that step's
+  `batch_a` rows at `1/ε`, while the step itself divides by a `v̂` that already
+  contains its gradient. vatis applies no clipping or mask —
   `vatis.core.preconditioner.epsilon_cap_mask` identifies those coordinates so
   you can report the share of `chi_net_P` they carry.
 
@@ -383,7 +398,7 @@ source = load_local_bundle(run_dir, "my_project.models:build_model")  # or a cal
 
 analyzer = Analyzer(
     eval_batches={"train": source.batch_a_spec(), "val": val_batch},
-    preconditioner=source.adamw_preconditioner(),      # P per checkpoint, from its saved state
+    preconditioner=source.preconditioner(),            # P per checkpoint, from its saved state
     cross_pairs=[("train", "val")],
     sink="results.parquet",
 )
@@ -440,9 +455,10 @@ for ckpt in source:                                    # or drive the loop yours
   dtype=)` do not move or recast them.
 - **Only Adam / AdamW states are accepted** by `adamw_preconditioner()`. A
   bundle whose `metadata.json` names another optimizer is refused rather than
-  labelled `"adamw"`; so are parameter groups that disagree on `betas` / `eps`
-  (unless both are passed explicitly) and a parameter that never received a
-  gradient. An `eps` / `beta2` override is written into the descriptor, e.g.
+  labelled `"adamw"`; so are an SGD state (use `source.preconditioner()`),
+  `amsgrad=True` in any parameter group, parameter groups that disagree on
+  `betas` / `eps` (unless both are passed explicitly) and a parameter that never
+  received a gradient. An `eps` / `beta2` override is written into the descriptor, e.g.
   `adamw(eps=0.001)`.
 - **Lazy per checkpoint.** Opening a bundle reads the two JSON files and stats
   the checkpoint directories; tensors load on first access, and iterating the
@@ -661,8 +677,9 @@ cross-validation test tier (gated, skipped in CI).
 - **Optimizer state is read from native checkpoint bundles only**, and the
   loader cannot detect a same-shape parameter permutation between
   `param_names.json` and the optimizer state (see "Native checkpoint bundles").
-- **AdamW's `P` puts never-updated coordinates at `1/ε`.** Check their share of
-  `chi_net_P` with `epsilon_cap_mask` before interpreting it on held-out data.
+- **AdamW's `P` puts coordinates that never received a non-zero gradient at
+  `1/ε`.** Check their share of `chi_net_P` with `epsilon_cap_mask` before
+  interpreting it on held-out data or on an update batch with first-seen tokens.
 - **A resident `P` costs one extra parameter-sized fp32 vector** during a
   checkpoint's analysis, and building it peaks at about five (see "Native
   checkpoint bundles"). The cross-pair GPU/host offload heuristic does not
