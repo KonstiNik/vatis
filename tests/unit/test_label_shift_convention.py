@@ -240,6 +240,35 @@ def test_only_unambiguous_rows_are_flagged() -> None:
         assert bool(single[0]) == (row in (0, 6))
 
 
+def test_labels_that_follow_neither_convention_are_not_flagged() -> None:
+    """ "Aligned" means EVERY counted label equals its own input token, not some.
+
+    Rows whose labels are neither the input tokens nor the next tokens (noisy
+    labels, per-position class ids, ...) are no evidence of the HF/TRL form, even
+    when a label happens to coincide with the input token at its position or
+    some positions are ignored. The guard must leave them alone.
+    """
+    ids = torch.tensor(
+        [
+            [1, 2, 3, 4, 5],  # 0: one label coincides with its own input token
+            [5, 4, 3, 2, 1],  # 1: no label coincides with anything
+            [2, 2, 7, 7, 1],  # 2: coincidence plus ignored positions
+            [6, 5, 4, 3, 2],  # 3: all but one label aligned, and not next-token
+        ]
+    )
+    labels = torch.tensor(
+        [
+            [9, 9, 3, 9, 9],
+            [8, 8, 8, 8, 8],
+            [-100, 2, 9, 9, -100],
+            [6, 5, 4, 9, 2],
+        ]
+    )
+    assert unshifted_label_rows(ids, labels).tolist() == [False, False, False, False]
+    logits = torch.randn(4, 5, 12, generator=torch.Generator().manual_seed(0))
+    assert torch.isfinite(causal_lm_loss(logits, {"input_ids": ids, "labels": labels}))
+
+
 def test_an_ambiguous_batch_is_scored_not_refused() -> None:
     """A constant sequence satisfies both conventions; that is not an error."""
     ids = torch.full((2, SEQ), 4)
