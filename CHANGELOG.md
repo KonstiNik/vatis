@@ -37,6 +37,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `golden` test tier (`pytest -m golden`): trains a tiny transformer, writes a
   bundle, runs the raw and preconditioned observables end to end.
 - New hard dependency: `safetensors` (to read bundle weights).
+- `analyze()` accepts `ignore_index` (default `-100`) and passes it to
+  `Analyzer`, which already did.
 - `vatis.data.shift_hf_labels(labels)`: converts HuggingFace / TRL-style labels
   (aligned with `input_ids`, shifted by the model) to the pre-shifted labels
   vatis expects, with the same one-position shift `transformers`' causal-LM loss
@@ -47,42 +49,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ignored a target id. Exposed as `BundleMetadata.loss_ignore_index` and
   `LocalBundleSource.loss_ignore_index`.
 
+### Changed (breaking)
+The labels are the single source of truth for what enters the loss
+(`docs/SPEC.md`: "Batch format and the label convention", "Loss handling",
+"Native checkpoint bundles"). For code that ran before:
+- **A `valid_mask_fn` stricter than the labels now restricts the loss**, so `delta_loss` and `chi_pos` (and `chi_net` under `per_sequence_cv`) change for such a mask. *To do:* nothing if the restricted loss is what the mask meant; the result now equals the same restriction written into the labels.
+- **A loss that cannot be verified under a stricter mask raises** a `ValueError` (it still depends on a rejected position, or no gradient reaches the logits it was handed). *To do:* make `loss_fn` read its targets from the batch, honour `ignore_index`, and compute the loss from its `logits` argument.
+- **The analyzer's `ignore_index` must be the value `loss_fn` ignores.** With a different value and a stricter mask the run is refused with a message naming the value (it used to work when the mask happened to equal that loss's own ignore mark). *To do:* pass `ignore_index=<that value>` to `Analyzer(...)` or `analyze(...)` (which now accepts it).
+- **A direct `PerSequenceControlVariateEstimator.compute` call raises** a `ValueError` when `loss_fn` counts positions its `valid_mask_fn` rejects (it used to return a biased `chi_net`). *To do:* write the mask into the labels the loss reads, as `Analyzer` does.
+- **Unshifted (HuggingFace / TRL-style) labels are refused** by the shipped `causal_lm_loss` when they are provably unshifted (they used to be scored one position off). *To do:* `batch["labels"] = vatis.data.shift_hf_labels(batch["labels"])`.
+- **The update-batch rows of a bundle that records pad masking change**: `batch_a` ignores the targets equal to the recorded `loss_ignore_index` (they used to be counted), and `examples/two_rulers_llama.py` scores its held-out batches the same way. *To do:* re-run analyses of such bundles; bundles without the two fields are read exactly as before.
+- **Contradictory or impossible pad metadata is refused** with `BundleSchemaError` when the bundle is opened, also for uses that never touch the update batch (`mask_pad_in_loss: true` without an index, an index without it, a wrong JSON type, a negative index or one not below the model config's `vocab_size`). *To do:* correct the two fields in `metadata.json`; "Repairing contradictory pad fields" in the SPEC says how, including how the recorded `train_loss` settles which entry is wrong.
+
 ### Changed
-- **The labels are the single source of truth for what enters the loss.** What
-  can now raise, or give a different number, for code that ran before:
-  - **A `valid_mask_fn` stricter than the labels changes `delta_loss` and
-    `chi_pos`** (and `chi_net` under `per_sequence_cv`): they are now those of
-    the loss restricted to the accepted positions (see Fixed). To get there,
-    `loss_fn` is evaluated on a batch whose labels carry the mask, so with such
-    a mask a custom `loss_fn` must read its targets from the batch, honour
-    `ignore_index`, and compute the loss from the `logits` it is handed. The
-    analyzer raises a `ValueError` if the loss still depends on a rejected
-    position, or if no gradient reaches the logits and it therefore cannot
-    verify the loss.
-  - **A direct `PerSequenceControlVariateEstimator.compute` call raises** a
-    `ValueError` when `loss_fn` counts positions its `valid_mask_fn` rejects (it
-    used to return a biased `chi_net`).
-  - **Unshifted labels are refused.** `causal_lm_loss` raises a `ValueError` for
-    labels that are provably in the HuggingFace / TRL form (every non-ignored
-    label equals the input token at its own position and at least one is not
-    the next token). Such a batch used to be scored with every target one
-    position off, in the loss and in `chi_loss` alike, without an error.
-    Ambiguous sequences (both readings hold) are scored as before.
-  - **The update-batch rows of a bundle that records pad masking change.**
-    `LocalBundleCheckpoint.batch_a` applies the recorded convention: with
-    `loss_ignore_index` set, labels are `-100` wherever the next-token target
-    equals it, so those rows are computed over the non-pad targets (they used
-    to count every target). `examples/two_rulers_llama.py` applies the same
-    convention to its held-out batches. Bundles without the two fields are read
-    exactly as before.
-  - **Contradictory pad metadata is refused** with `BundleSchemaError` when the
-    bundle is opened — also for uses that never touch the update batch:
-    `mask_pad_in_loss: true` without an index, an index without
-    `mask_pad_in_loss: true`, a wrong JSON type, or an index no target can equal
-    (negative, or not below the model config's `vocab_size`). `docs/SPEC.md`
-    ("Repairing contradictory pad fields") describes how to correct the fields,
-    and how each checkpoint's recorded `train_loss` settles which entry is
-    wrong.
 - **Hutchinson probes are drawn on the CPU** and copied to the device, so a seed
   now identifies one probe set on every device, and the default Rademacher draw
   is bit-packed. Consequence: for a given `seed`, `chi_net` (and therefore
