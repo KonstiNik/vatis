@@ -97,9 +97,12 @@ from vatis.data import shift_hf_labels
 batch["labels"] = shift_hf_labels(batch["labels"])
 ```
 
-The shipped loss refuses labels that are provably unshifted rather than scoring
-them one position off ([`docs/SPEC.md` → Batch format and the label
-convention](docs/SPEC.md)).
+Labels that are already shifted — what `transformers` calls `shift_labels` —
+are in vatis's form and need no conversion. The shipped loss refuses labels that
+are provably unshifted rather than scoring them one position off; it cannot
+catch every case (a single labelled token at the very end of a sequence looks
+the same in both conventions), so convert knowingly rather than rely on it
+([`docs/SPEC.md` → Batch format and the label convention](docs/SPEC.md)).
 
 `cross_grad_storage="auto"` (the default) lets cross-pair analysis scale to
 models whose two full gradients won't co-reside on the GPU: it offloads the

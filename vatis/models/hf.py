@@ -50,7 +50,10 @@ class ModelBundle:
             over valid tokens (HF convention).
         valid_mask_fn: ``valid_mask_fn(batch, logits) -> bool tensor`` of
             shape ``logits.shape[:-1]``, identifying valid output positions.
-            ``None`` is allowed for "all positions valid". The analyzer
+            The function may *return* ``None`` for "all positions valid";
+            the field itself must be a callable (``valid_mask_fn=None`` is not
+            supported and fails with a ``TypeError`` when the analyzer calls
+            it). The analyzer
             intersects it with ``labels != ignore_index`` and, where it
             rejects a position whose label is valid, writes ``ignore_index``
             into the labels ``loss_fn`` is evaluated on — so ``loss_fn`` must

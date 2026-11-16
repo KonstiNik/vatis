@@ -48,30 +48,41 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `LocalBundleSource.loss_ignore_index`.
 
 ### Changed
-- **The labels are the single source of truth for what enters the loss.**
-  - `causal_lm_loss` raises a `ValueError` for labels that are provably in the
-    unshifted HuggingFace / TRL form (every non-ignored label equals the input
-    token at its own position and at least one is not the next token). Such a
-    batch used to be scored with every target one position off, in the loss and
-    in `chi_loss` alike, without an error. Ambiguous sequences (both readings
-    hold) are scored as before.
-  - `LocalBundleCheckpoint.batch_a` applies the pad convention the bundle
-    records: with `loss_ignore_index` set, labels are `-100` wherever the
-    next-token target equals it, so the update-batch rows are computed over the
-    non-pad targets (they used to count every target). Bundles without the two
-    fields are read exactly as before. Contradictory fields
-    (`mask_pad_in_loss: true` without an index, or an index without
-    `mask_pad_in_loss: true`) raise `BundleSchemaError` when the bundle is opened;
-    `docs/SPEC.md` ("Repairing contradictory pad fields") describes how to
-    correct them, and how each checkpoint's recorded `train_loss` settles which
-    entry is wrong. `examples/two_rulers_llama.py` applies the same recorded
-    convention to its held-out batches (it used to count every target there).
-  - With a `valid_mask_fn` stricter than the labels, `loss_fn` is evaluated on a
-    batch whose labels carry the mask, so a custom `loss_fn` must read its
-    targets from the batch and honour `ignore_index`; if the loss still depends
-    on a rejected position the analyzer raises a `ValueError`.
-    `PerSequenceControlVariateEstimator.compute`, called directly, raises a
-    `ValueError` when `loss_fn` counts positions its `valid_mask_fn` rejects.
+- **The labels are the single source of truth for what enters the loss.** What
+  can now raise, or give a different number, for code that ran before:
+  - **A `valid_mask_fn` stricter than the labels changes `delta_loss` and
+    `chi_pos`** (and `chi_net` under `per_sequence_cv`): they are now those of
+    the loss restricted to the accepted positions (see Fixed). To get there,
+    `loss_fn` is evaluated on a batch whose labels carry the mask, so with such
+    a mask a custom `loss_fn` must read its targets from the batch, honour
+    `ignore_index`, and compute the loss from the `logits` it is handed. The
+    analyzer raises a `ValueError` if the loss still depends on a rejected
+    position, or if no gradient reaches the logits and it therefore cannot
+    verify the loss.
+  - **A direct `PerSequenceControlVariateEstimator.compute` call raises** a
+    `ValueError` when `loss_fn` counts positions its `valid_mask_fn` rejects (it
+    used to return a biased `chi_net`).
+  - **Unshifted labels are refused.** `causal_lm_loss` raises a `ValueError` for
+    labels that are provably in the HuggingFace / TRL form (every non-ignored
+    label equals the input token at its own position and at least one is not
+    the next token). Such a batch used to be scored with every target one
+    position off, in the loss and in `chi_loss` alike, without an error.
+    Ambiguous sequences (both readings hold) are scored as before.
+  - **The update-batch rows of a bundle that records pad masking change.**
+    `LocalBundleCheckpoint.batch_a` applies the recorded convention: with
+    `loss_ignore_index` set, labels are `-100` wherever the next-token target
+    equals it, so those rows are computed over the non-pad targets (they used
+    to count every target). `examples/two_rulers_llama.py` applies the same
+    convention to its held-out batches. Bundles without the two fields are read
+    exactly as before.
+  - **Contradictory pad metadata is refused** with `BundleSchemaError` when the
+    bundle is opened — also for uses that never touch the update batch:
+    `mask_pad_in_loss: true` without an index, an index without
+    `mask_pad_in_loss: true`, a wrong JSON type, or an index no target can equal
+    (negative, or not below the model config's `vocab_size`). `docs/SPEC.md`
+    ("Repairing contradictory pad fields") describes how to correct the fields,
+    and how each checkpoint's recorded `train_loss` settles which entry is
+    wrong.
 - **Hutchinson probes are drawn on the CPU** and copied to the device, so a seed
   now identifies one probe set on every device, and the default Rademacher draw
   is bit-packed. Consequence: for a given `seed`, `chi_net` (and therefore
