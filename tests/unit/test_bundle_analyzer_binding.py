@@ -15,6 +15,14 @@ or to an input the bundle path mishandled:
   persistent buffer the file does not hold, a 0-dim parameter, a parameter that
   never received a gradient, per-group ``eps``, a non-Adam optimizer, and an
   ``eps`` / ``beta2`` override that used to leave the descriptor at ``"adamw"``.
+
+A second review added three things. The fixture has **three** bundled
+checkpoints: with two, a loader that hands the third and later checkpoints the
+previous checkpoint's optimizer state changed no asserted value. RAdam and NAdam
+states are refused **whether or not** ``metadata.json`` names the optimizer —
+their param groups have ``betas`` like Adam's, and without a name they used to
+come back labelled ``"adamw"``. And the optimizer state is read on the CPU also
+when the source places its model on a GPU.
 """
 
 from __future__ import annotations
@@ -60,7 +68,9 @@ from vatis.models.local_bundle import (
 BETAS = (0.9, 0.95)
 EPS = 1e-8
 LR = 1e-2
-BUNDLED_STEPS = (2, 5)
+# Three, not two: a defect that only shows from the third checkpoint on (e.g. a
+# state that lags one checkpoint behind) needs a third checkpoint to be seen.
+BUNDLED_STEPS = (2, 5, 9)
 
 
 def _lm_loss(model: nn.Module, ids: torch.Tensor) -> torch.Tensor:
@@ -165,6 +175,14 @@ def test_each_checkpoint_is_measured_with_its_own_theta_state_and_batch(
     (raw_a, p_a), (raw_b, p_b) = expected[BUNDLED_STEPS[0]], expected[BUNDLED_STEPS[1]]
     assert abs(raw_a - raw_b) > 0.02 * max(raw_a, raw_b)
     assert abs(p_a - p_b) > 0.02 * max(p_a, p_b)
+    # ... and so must every pair of the three
+    assert len(expected) == len(BUNDLED_STEPS) == 3
+    for first in BUNDLED_STEPS:
+        for second in BUNDLED_STEPS:
+            if first < second:
+                (raw_a, p_a), (raw_b, p_b) = expected[first], expected[second]
+                assert abs(raw_a - raw_b) > 0.02 * max(raw_a, raw_b), (first, second)
+                assert abs(p_a - p_b) > 0.02 * max(p_a, p_b), (first, second)
 
     for step, (raw, weighted) in expected.items():
         rev = f"step{step}"
@@ -181,6 +199,40 @@ def test_a_p_built_from_another_checkpoints_state_would_be_seen(
     own = float((first["p"] * first["g"] * first["g"]).sum())
     swapped = float((last["p"] * first["g"] * first["g"]).sum())
     assert abs(own - swapped) > 0.02 * own
+
+
+def test_a_p_built_from_the_previous_checkpoints_state_would_be_seen_at_every_checkpoint(
+    trained_bundle: dict[str, Any],
+) -> None:
+    """Each later checkpoint, measured with the state of the one before it, gives
+    a ``delta_loss_P`` the value assertion above rejects (it asserts ``rel=1e-5``).
+
+    This is what a state that lags one checkpoint behind produces. With two
+    bundled checkpoints a loader doing that from the third checkpoint on is not
+    exercised at all.
+    """
+    ref = trained_bundle["reference"]
+    assert len(BUNDLED_STEPS) >= 3
+    for previous, current in zip(BUNDLED_STEPS, BUNDLED_STEPS[1:], strict=False):
+        g = ref[current]["g"]
+        own = float((ref[current]["p"] * g * g).sum())
+        lagging = float((ref[previous]["p"] * g * g).sum())
+        assert abs(own - lagging) > 0.02 * own, (previous, current)
+
+
+def test_the_third_checkpoints_p_is_the_one_from_its_own_state(
+    trained_bundle: dict[str, Any],
+) -> None:
+    """The same binding, asserted on ``P`` itself rather than through a row."""
+    source = load_local_bundle(trained_bundle["run_dir"], tiny_lm_factory, dtype="fp32")
+    factory = source.adamw_preconditioner()
+    ref = trained_bundle["reference"]
+    for step in BUNDLED_STEPS:
+        precond = factory(source.checkpoint_for(step).identifier)
+        assert precond is not None
+        assert torch.allclose(precond.diag.double(), ref[step]["p"], rtol=1e-6, atol=0.0), step
+    second, third = ref[BUNDLED_STEPS[1]]["p"], ref[BUNDLED_STEPS[2]]["p"]
+    assert not torch.allclose(second, third, rtol=1e-3, atol=0.0)
 
 
 # ------------------------------------------------------- cross-pair P rows
