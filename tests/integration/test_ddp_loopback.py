@@ -102,8 +102,12 @@ def test_ddp_loopback_matches_single_process(tmp_path: Path) -> None:
     assert abs(by_obs["chi_loss_normalized"] - base["chi_loss_normalized"]) < 1e-7
 
     # delta_loss: must match the single-process value (re-weighting + reduce
-    # is exact).
-    assert abs(by_obs["delta_loss"] - base["delta_loss"]) < 1e-7
+    # is exact) up to fp32 rounding — the two runs add the same fp32 gradients
+    # in a different order. The bound is relative so that it means the same at
+    # every magnitude of delta_loss; a sharding or all-reduce defect is orders
+    # of magnitude above it.
+    rel_err_dl = abs(by_obs["delta_loss"] - base["delta_loss"]) / abs(base["delta_loss"])
+    assert rel_err_dl < 1e-6, f"delta_loss mismatch: {by_obs['delta_loss']} vs {base['delta_loss']}"
 
     # chi_net + chi_pos: stochastic, but with the same probe seed shared
     # across ranks the Hutchinson estimator should give CLOSE values.
