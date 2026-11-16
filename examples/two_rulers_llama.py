@@ -30,6 +30,11 @@ What is measured, and why it is shaped this way:
   held-out tail of the shard, all frozen across checkpoints so a trajectory is a
   trajectory and not a resampling artifact. ``cross_pairs`` adds
   ``delta_loss(A_i, B)`` and ``chi_pos(A_i, B)`` at zero extra backward cost.
+- **One objective for every row.** The held-out batches are scored with the pad
+  convention the bundle records (``source.loss_ignore_index``), the same one the
+  loader applies to the update batch: pad targets are ignored iff the training
+  loss ignored them. The run behind the committed output masks nothing in its
+  criterion, and its numbers count every position.
 - **Both rulers in one pass.** ``preconditioner=source.adamw_preconditioner()``
   builds ``P = diag(1/(sqrt(v_hat) + eps))`` from each checkpoint's own saved
   (pre-step) optimizer state; the P observables come out of the same probes as
@@ -154,6 +159,23 @@ def llama_factory(metadata: Any) -> torch.nn.Module:
 # ------------------------------------------------------------------- batches
 
 
+def lm_batch_from_tokens(
+    ids: torch.Tensor, loss_ignore_index: int | None
+) -> dict[str, torch.Tensor]:
+    """``[B, seq_len]`` token ids -> a vatis LM batch under the run's pad convention.
+
+    The same construction the bundle loader applies to ``batch_a.npy``
+    (``LocalBundleCheckpoint.batch_a``): pre-shifted next-token labels, last
+    position ignored, and — when the training run recorded that its loss ignored
+    a target id (``loss_ignore_index``, the pad id) — ``-100`` wherever the target
+    equals that id. With ``loss_ignore_index=None`` every target counts.
+    """
+    labels = shifted_lm_targets(ids)
+    if loss_ignore_index is not None:
+        labels = labels.masked_fill(labels == loss_ignore_index, -100)
+    return {"input_ids": ids, "labels": labels}
+
+
 def load_measurement_batches(
     directory: Path,
     *,
@@ -161,15 +183,23 @@ def load_measurement_batches(
     vocab_size: int,
     batch_size: int,
     device: torch.device,
+    loss_ignore_index: int | None = None,
 ) -> tuple[dict[str, dict[str, torch.Tensor]], bool]:
     """The held-out measurement batches, or a loud random-token fallback.
 
     Files are ``[B, seq_len]`` int32 token ids in the same whole-sequence
     convention as the bundle's ``batch_a.npy``, so a batch is turned into an LM
     batch the same way the loader does it (``labels`` = shift by one, last
-    position ignored). Padding is *not* masked: this training stack's criterion
-    masks nothing and ``batch_a.npy`` carries no mask, so masking here would
-    measure a different objective than the one that was trained.
+    position ignored).
+
+    Padding follows the **bundle's recorded pad convention**
+    (``loss_ignore_index = source.loss_ignore_index``), exactly as the loader
+    applies it to the update batch — so the held-out rows and the update-batch
+    rows describe the same objective, the one the run descended. A bundle whose
+    run masked padding in its loss gets the pad targets ignored here too; a
+    bundle that records no such index gets every target counted, as before.
+    Measuring a different objective than
+    the one that was trained would be the larger error in either direction.
 
     Returns ``(batches, used_random_fallback)``.
     """
@@ -183,7 +213,7 @@ def load_measurement_batches(
                 raise ValueError(
                     f"{path}: expected a 2-D [B, seq_len] token array, got {ids.shape}"
                 )
-            batches[name] = {"input_ids": ids, "labels": shifted_lm_targets(ids)}
+            batches[name] = lm_batch_from_tokens(ids, loss_ignore_index)
             print(f"    {name}: {path.name} shape={tuple(ids.shape)}")
         return batches, False
 
@@ -213,7 +243,7 @@ def load_measurement_batches(
         ids = torch.randint(
             0, vocab_size, (batch_size, seq_len), generator=generator, dtype=torch.int64
         ).to(device)
-        fallback[name] = {"input_ids": ids, "labels": shifted_lm_targets(ids)}
+        fallback[name] = lm_batch_from_tokens(ids, loss_ignore_index)
     return fallback, True
 
 
@@ -678,6 +708,18 @@ def main(argv: list[str] | None = None) -> int:
         f"micro_batch_size={args.micro_batch_size} seed={args.seed}"
     )
 
+    # The pad convention the training run recorded (None = its loss masked
+    # nothing). The loader applies it to the update batch; the held-out batches
+    # below get the same one, so every row describes the same objective.
+    loss_ignore_index = source.loss_ignore_index
+    print(
+        "  loss padding    : "
+        + (
+            "unmasked -- every target counts (the bundle records no loss_ignore_index)"
+            if loss_ignore_index is None
+            else f"MASKED -- targets equal to {loss_ignore_index} are ignored, as in training"
+        )
+    )
     print("  measurement batches (k=2 fixed A + 1 eval B, held-out tail of the shard):")
     eval_batches, used_random_batches = load_measurement_batches(
         args.eval_batches,
@@ -685,6 +727,7 @@ def main(argv: list[str] | None = None) -> int:
         vocab_size=int(metadata["model_config"]["vocab_size"]),
         batch_size=int(metadata.get("B_train") or 8),
         device=args.device,
+        loss_ignore_index=loss_ignore_index,
     )
     training_fallback = (args.bundle.parent / FALLBACK_MARKER).is_file()
     if training_fallback:
@@ -840,6 +883,7 @@ def main(argv: list[str] | None = None) -> int:
             "tokenizer": metadata.get("tokenizer"),
             "B_train": metadata.get("B_train"),
             "seq_len": metadata.get("seq_len"),
+            "loss_ignore_index": loss_ignore_index,
             "total_steps_planned": metadata.get("total_steps_planned"),
             "bundle_steps_spec": metadata.get("bundle_steps_spec"),
             "learning_rate": metadata.get("learning_rate"),
