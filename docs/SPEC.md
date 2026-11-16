@@ -678,7 +678,11 @@ is invariant under the normalization.
 - Probe seed is **shared across ranks** within one `(checkpoint, batch)` call;
   different across calls. Each rank draws a full probe for its own shard, so
   ranks do not partition one global probe: a DDP run is reproducible, but its
-  `χ_net` is a different unbiased estimate from the single-process one.
+  `chi_net` is a different unbiased estimate from the single-process one — and
+  a noisier one. Every rank draws the *same* probe stream, so the ranks'
+  estimation errors are correlated instead of independent, and the variance of
+  the multi-rank `chi_net` / `chi_net_P` is larger than that of a
+  single-process run with the same `n_hutchinson` (see "Known limitations").
 - Probe vector shape matches the local micro-batch output `(M, S, V)`. **Padding
   positions are zeroed** so masked tokens contribute to neither `χ_net` nor
   `χ_loss`. The mask is the intersection described under "Loss handling".
@@ -692,14 +696,35 @@ path is supported for `chi_loss`.** The bundle exposes a `loss_fn(logits, batch)
 a non-CE `loss_fn`, `delta_loss` is correct but `chi_loss` is wrong.
 
 The bundle's `valid_mask_fn` and the `labels=-100` (`ignore_index`) sentinel are
-**intersected once**, and that one mask is used by **every** accumulator: the
-`chi_loss` sum and its `n_valid` denominator, the per-micro-batch weighting that
-reassembles `∇_θ L` for `delta_loss`, and the probe mask of the `χ_net` /
-`χ_net^P` estimator. A position whose label is `ignore_index` contributes
-nothing to the loss, so its Jacobian rows are excluded from `χ_net` as well. The
-shipped loaders' `valid_mask_fn` already equals `labels != ignore_index`, so for
-them the intersection is a no-op; it matters for a custom `valid_mask_fn` that
-accepts positions the labels ignore.
+**intersected once**, and that one mask is used for the **counts, the gradient
+weights and the probes**: the `chi_loss` sum and its `n_valid` denominator, the
+per-micro-batch weighting that reassembles `∇_θ L` for `delta_loss`, and the
+probe mask of the `chi_net` / `chi_net_P` estimator. **It does not reach the
+loss itself**: `loss_fn` decides from the labels alone which positions it
+averages over. The two ways the mask and the labels can disagree therefore
+behave differently:
+
+- **`valid_mask_fn` wider than the labels** (it accepts positions whose label
+  is `ignore_index`) — handled; this is the direction that was fixed. Such a
+  position contributes nothing to the loss, and the intersection now also
+  removes it from the counts, the weights and the probes, so its Jacobian rows
+  are excluded from `chi_net` as well.
+- **`valid_mask_fn` stricter than the labels** (it rejects positions the labels
+  keep) — **not handled.** The loss still averages over the rejected positions
+  while the counts, weights and probes leave them out, so `delta_loss` is wrong
+  and depends on `micro_batch_size`, and the `chi_net` of `per_sequence_cv`
+  (whose control variate is built from that loss) is biased. A position that
+  must not count has to carry `ignore_index` in the labels. See "Known
+  limitations".
+
+The shipped loaders' `valid_mask_fn` already equals `labels != ignore_index`,
+so for them the intersection is a no-op.
+
+Labels are **pre-shifted**: `labels[b, s]` is the target of the logits at
+position `s` (the next token), with `ignore_index` where there is none. A batch
+whose `labels` equal its `input_ids` — the HuggingFace / TRL convention, where
+the model shifts internally — is not detected and is scored one position off
+(see "Known limitations").
 
 As a backstop against an inconsistent `loss_fn` (e.g. a sum-reduced CE), the
 analyzer warns when a published `chi_pos` / `chi_pos_P` leaves `[−1, 1]` by more
@@ -819,6 +844,38 @@ cross-validation test tier (gated, skipped in CI).
 - **Multi-GPU DDP is exercised only by a 2-rank CPU loopback test** — the
   real-GPU DDP path is validated by the `examples/benchmark/ddp_scaling/` job but
   has no automated test.
+- **Under DDP every rank draws the same probe stream for its own shard.** A run
+  is reproducible that way, but the ranks' estimation errors are correlated
+  instead of independent, so a multi-rank `chi_net` / `chi_net_P` (and the
+  `chi_pos` / `chi_pos_P` built on it) has a larger variance than a
+  single-process run with the same `n_hutchinson`. The estimate stays unbiased;
+  the size of the inflation depends on the model, the data and the number of
+  ranks. On two small test transformers (ranks emulated in one process, 8
+  sequences, `n_hutchinson = 4`, 400 seeds) the variance of `chi_net` was about
+  1.5× the single-process one at 2 ranks and 2.5–2.8× at 4 ranks, with both
+  estimators. `chi_loss` and `delta_loss` do not use probes and are not
+  affected. Fixed in a follow-up pull request.
+- **A `valid_mask_fn` stricter than the labels does not reach the loss.** The
+  mask restricts the token counts, the gradient weights and the probes, but
+  `loss_fn` still averages over every position the labels keep. For such a mask
+  `delta_loss` is wrong and in general depends on `micro_batch_size`, and the
+  `chi_net` of `per_sequence_cv` is biased; `chi_pos` inherits both. Nothing
+  warns. Until the follow-up pull request that makes the labels the single
+  source of truth, exclude a position by giving it the label `ignore_index`,
+  not through `valid_mask_fn` alone (see "Loss handling").
+- **Unshifted labels are scored one position off, without an error.** vatis
+  expects pre-shifted labels (`labels[:, :-1] = input_ids[:, 1:]`, last position
+  `ignore_index`). A batch in the HuggingFace / TRL convention — `labels` equal
+  to `input_ids`, shifted inside the model — is taken at face value: each
+  position's logits are scored against its own input token instead of the next
+  one, and every observable describes that loss. Fixed in a follow-up pull
+  request; until then shift the labels yourself.
+- **A bundle's recorded pad convention is not applied to the update batch.**
+  `mask_pad_in_loss` / `loss_ignore_index` in `metadata.json` are not read, so
+  `batch_a` counts every position as a target. For a run whose training loss
+  ignored pad targets, the update-batch rows describe a different loss than the
+  one that was descended (see "Native checkpoint bundles"). Fixed in a follow-up
+  pull request.
 - **Custom (non-CE) `loss_fn` is not fully supported** — `chi_loss` always uses
   the closed-form CE shortcut (see Loss handling).
 - **`OpacusEstimator` is a stub**, and has no `chi_net_P` path.

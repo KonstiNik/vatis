@@ -60,12 +60,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   as before.
 
 ### Fixed
-- The `valid_mask_fn ∧ labels != ignore_index` intersection is now applied by
-  **every** accumulator, not only `chi_loss`. With a `valid_mask_fn` that accepts
-  positions whose label is `ignore_index`, `delta_loss` was rescaled and depended
-  on `micro_batch_size`, and `chi_net` included the Jacobian rows of ignored
-  positions. The shipped loaders were not affected (their mask already equals
-  `labels != ignore_index`).
+- The `valid_mask_fn ∧ labels != ignore_index` intersection is now applied to
+  the token counts, the gradient weights and the probes, not only to `chi_loss`.
+  With a `valid_mask_fn` *wider* than the labels (one that accepts positions
+  whose label is `ignore_index`), `delta_loss` was rescaled and depended on
+  `micro_batch_size`, and `chi_net` included the Jacobian rows of ignored
+  positions. That direction is fixed. The intersection does not reach the loss
+  itself, so a `valid_mask_fn` *stricter* than the labels is not fixed (see
+  Known limitations). The shipped loaders were not affected (their mask already
+  equals `labels != ignore_index`).
 - The analyzer restores the `requires_grad` flags it changes on the model's parameters.
 
 ### Known limitations
@@ -73,6 +76,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   momentum, weight decay and the step's own second-moment update are excluded.
 - AdamW's `P` can only be built from native checkpoint bundles; optimizer states
   published with hub checkpoints are not read.
+- **DDP: every rank draws the same probe stream for its own shard.** The ranks'
+  estimation errors are therefore correlated, and a multi-rank `chi_net` /
+  `chi_net_P` (hence `chi_pos` / `chi_pos_P`) has a larger variance than a
+  single-process run with the same `n_hutchinson`, by a factor that depends on
+  the model, the data and the number of ranks. The estimate stays unbiased;
+  `chi_loss` and `delta_loss` are not affected. Fixed in a follow-up pull
+  request.
+- **A `valid_mask_fn` stricter than the labels does not reach the loss.** It
+  restricts the counts, the gradient weights and the probes only, so for such a
+  mask `delta_loss` is wrong and depends on `micro_batch_size`, and
+  `per_sequence_cv`'s `chi_net` is biased. Exclude positions through the labels
+  (`ignore_index`). Fixed in a follow-up pull request.
+- **Unshifted labels are not detected.** vatis expects pre-shifted labels; a
+  batch whose `labels` equal its `input_ids` (the HuggingFace / TRL convention)
+  is scored one position off without an error. Fixed in a follow-up pull
+  request.
+- **A bundle's recorded pad convention is not applied to the update batch**
+  (`mask_pad_in_loss` / `loss_ignore_index` in `metadata.json` are not read):
+  update-batch rows of a run whose loss ignored pad targets describe a
+  different loss than the one that was descended. Fixed in a follow-up pull
+  request.
 
 ## [0.2.1] — 2026-10-19
 
