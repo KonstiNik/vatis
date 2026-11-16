@@ -28,7 +28,7 @@ With a checkpoint that carries its optimizer state, three of them can
 additionally be measured on the optimizer's preconditioned kernel
 (`delta_loss_P`, `chi_net_P`, `chi_pos_P`; `chi_loss` does not depend on the
 kernel) — see
-[Optimizer-aware ruler](#optimizer-aware-ruler).
+[Optimizer-aware measurement](#optimizer-aware-measurement).
 
 ## Setup
 
@@ -107,7 +107,7 @@ and edit it — the example scripts read it via `run_config.py`. SLURM benchmark
 jobs are submitted with `examples/benchmark/submit.sh <script>.sbatch`, which
 pulls `SBATCH_PARTITION`/`SBATCH_ACCOUNT` from the same `.env`.
 
-## Optimizer-aware ruler
+## Optimizer-aware measurement
 
 An optimizer with update `Δθ = −η P ∇L` trains on the effective kernel
 `Θ_P = J P Jᵀ` rather than on the raw eNTK. Pass a diagonal `P` and vatis
@@ -118,7 +118,7 @@ backward:
 |----------------|----------------------|---------|
 | `delta_loss_P` | ∇_θ Lᴮ · P ∇_θ Lᴬ    | preconditioned gradient alignment |
 | `chi_net_P`    | Tr(J P Jᵀ)           | trace of the effective kernel |
-| `chi_pos_P`    | δLᴾ/(χ_loss·χ_netᴾ)  | spectral position on the optimizer's ruler |
+| `chi_pos_P`    | δLᴾ/(χ_loss·χ_netᴾ)  | spectral position on the preconditioned kernel |
 
 ```python
 from vatis import Analyzer, load_local_bundle
@@ -150,14 +150,19 @@ Three things to know before using it:
 - Coordinates that never received a non-zero gradient sit at `P = 1/ε` and can
   dominate `chi_net_P` — on held-out data, and equally on the update batch
   itself when it contains a token the run has not seen before (`P` is the
-  pre-step one). `vatis.core.preconditioner.epsilon_cap_mask` lets you check
-  their share.
+  pre-step one). Nothing is clipped; instead every AdamW row comes with a
+  `delta_loss_P_capped` / `chi_net_P_capped` companion giving the part that
+  those coordinates contribute, so you can see when a value is carried by a
+  handful of untouched coordinates
+  ([`docs/SPEC.md` → Coordinates at the ceiling](docs/SPEC.md)).
 
 ## Output
 
 Long-format parquet: one row per `(checkpoint, batch_a, batch_b, preconditioner,
 observable)`; `chi_loss` and `chi_net` are written both unnormalized and as
-`_normalized`. Load with pandas/pyarrow and pivot. The
+`_normalized`. Load with pandas/pyarrow and pivot on `observable` to get one
+line per checkpoint and batch pair with all values side by side (recipe in the
+spec); the `preconditioner` column says which `P` the `_P` values used. The
 schema is the contract between vatis and any downstream analysis — see
 [`docs/SPEC.md` → Result format](docs/SPEC.md).
 

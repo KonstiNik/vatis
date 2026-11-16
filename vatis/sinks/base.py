@@ -19,10 +19,10 @@ class ResultRow:
 
     Field names match the parquet schema in ``CLAUDE.md``.
 
-    ``preconditioner`` is a *descriptor*, not a value: it names which ruler the
-    row was measured with. Raw (un-preconditioned) rows carry
-    :data:`~vatis.core.preconditioner.RAW_DESCRIPTOR` (``"none"``); rows of the
-    preconditioned ruler carry the preconditioner's descriptor (``"adamw"``,
+    ``preconditioner`` is a *descriptor*, not a value: it names which kernel the
+    row was measured on. Raw (un-preconditioned) rows carry
+    :data:`~vatis.core.preconditioner.RAW_DESCRIPTOR` (``"none"``); the
+    preconditioned observables carry the preconditioner's descriptor (``"adamw"``,
     ``"identity"``, ``"explicit"``, ...). The P observables are additional
     ``observable`` *values* (``delta_loss_P``, ``chi_net_P``, ``chi_pos_P``) in
     the same long format — the schema grows by one descriptor column, not by one

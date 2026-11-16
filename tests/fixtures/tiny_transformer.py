@@ -32,6 +32,15 @@ class TinyTransformer(nn.Module):
         token_embed -> pos_embed -> N x (LayerNorm -> SelfAttn -> LayerNorm -> MLP) -> LayerNorm -> lm_head
 
     Untied embeddings (so we don't trip the opacus pathway later).
+
+    Initialisation is PyTorch's default for every module, drawn from the global
+    RNG: **call ``torch.manual_seed(...)`` right before constructing the model**,
+    otherwise its weights depend on whatever ran earlier. An earlier version
+    re-initialised every 1-D parameter to zero, LayerNorm gains included, which
+    made the logits identically zero and left the final LayerNorm as the only
+    module with a non-zero Jacobian; a second version (N(0, 0.02) weights, gains
+    at one) left the attention queries and keys far below what any test
+    tolerance can resolve. ``tests/unit/test_fixtures.py`` guards both.
     """
 
     def __init__(
@@ -57,13 +66,8 @@ class TinyTransformer(nn.Module):
         self.final_ln = nn.LayerNorm(d_model)
         # Untied head — different parameter from token_embed.
         self.lm_head = nn.Linear(d_model, vocab_size, bias=False)
-
-        # Reproducible-but-non-trivial init: small Gaussian + zero biases.
-        for p in self.parameters():
-            if p.ndim >= 2:
-                nn.init.normal_(p, mean=0.0, std=0.02)
-            else:
-                nn.init.zeros_(p)
+        # No custom initialisation on purpose: the modules keep PyTorch's
+        # defaults. See the class docstring.
 
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
         b, s = input_ids.shape
@@ -135,16 +139,31 @@ def make_tiny_lm_batch(
     seed: int = 0,
     device: torch.device | str = "cpu",
 ) -> dict[str, torch.Tensor]:
-    """Build a reproducible (input_ids, attention_mask, labels) dict."""
+    """Build a reproducible (input_ids, attention_mask, labels) dict.
+
+    With ``pad_fraction > 0`` the sequences are padded at the end by **unequal**
+    amounts: the first one loses ``round(seq_len * pad_fraction)`` positions
+    (at least one) and every later one a position less, down to none. So the
+    sequences of a padded batch hold different numbers of valid tokens, and so
+    do its micro-batches and DDP shards — which is what makes token-weighted
+    aggregation distinguishable from sequence-weighted aggregation. The rule
+    is a fixed staircase rather than a random draw so that this holds for
+    every contiguous cut of a batch with at most ``n_pad + 1`` sequences (the
+    batches the tests use); in a larger batch the sequences beyond that are
+    all unpadded and pieces made only of them have equal counts.
+    ``pad_fraction`` is therefore the largest padded share of a sequence, not
+    the mean. ``input_ids`` do not depend on ``pad_fraction``.
+    """
     g = torch.Generator(device="cpu")
     g.manual_seed(seed)
     input_ids = torch.randint(0, vocab_size, (batch_size, seq_len), generator=g)
     attention_mask = torch.ones_like(input_ids)
     if pad_fraction > 0:
-        # Pad some trailing positions in some sequences.
         n_pad = max(1, int(round(seq_len * pad_fraction)))
         for b in range(batch_size):
-            attention_mask[b, -n_pad:] = 0
+            n_pad_b = max(n_pad - b, 0)
+            if n_pad_b > 0:
+                attention_mask[b, -n_pad_b:] = 0
     # HF causal-LM convention: labels = next-token; -100 at positions that
     # should be ignored. We mark padded tokens AND the very last position.
     labels = torch.full_like(input_ids, fill_value=-100)
