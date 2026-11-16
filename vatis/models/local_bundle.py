@@ -103,7 +103,7 @@ _ADAM_FAMILY = frozenset({"adam", "adamw"})
 _SGD_GROUP_KEYS = frozenset({"momentum", "dampening", "nesterov"})
 # Descriptor of the rows measured with SGD's geometry factor, ``P = I``.
 SGD_DESCRIPTOR = "sgd"
-# Appended to the two "contradictory pad keys" refusals: what to do about it.
+# Appended to the pad-key refusals: what to do about it.
 _PAD_KEYS_REMEDY = (
     " The bundle's data are untouched: correct the two keys in metadata.json to what the "
     "run did; if that is not known, each checkpoint's recorded train_loss decides it -- "
@@ -246,7 +246,10 @@ class BundleMetadata:
         an index while ``mask_pad_in_loss`` is false or absent, or a value of the
         wrong JSON type raise :class:`BundleSchemaError`: either reading of such
         metadata would put a number on a loss that may not be the one the run
-        descended, and the two keys alone do not say which. The remedy is to
+        descended, and the two keys alone do not say which. So does an index
+        that cannot be a target — negative, or not below the ``vocab_size`` of the
+        metadata's model config when one is stated — because it would be
+        accepted and then mask nothing. The remedy is to
         correct ``metadata.json``; ``docs/SPEC.md`` ("Repairing contradictory pad
         fields") describes how each checkpoint's recorded ``train_loss`` settles
         which entry is wrong.
@@ -283,6 +286,25 @@ class BundleMetadata:
                 "other about whether the training loss ignored that target. Record "
                 "'mask_pad_in_loss': true, or 'loss_ignore_index': null." + _PAD_KEYS_REMEDY
             )
+        if index is not None:
+            # An index no target can equal would be accepted and then mask
+            # nothing: the rows would silently be those of the unmasked loss
+            # under metadata that says "masked".
+            config = self.model_config
+            vocab_size = _opt_int(config.get("vocab_size")) if isinstance(config, Mapping) else None
+            if index < 0:
+                raise BundleSchemaError(
+                    f"{where}'loss_ignore_index' is {index}: a token id cannot be negative, so "
+                    "no target would be ignored although 'mask_pad_in_loss' is true. Record "
+                    "the pad token id the training loss ignored." + _PAD_KEYS_REMEDY
+                )
+            if vocab_size is not None and index >= vocab_size:
+                raise BundleSchemaError(
+                    f"{where}'loss_ignore_index' is {index} but the model config states "
+                    f"vocab_size = {vocab_size}: no target can equal it, so no target would "
+                    "be ignored although 'mask_pad_in_loss' is true. Record the pad token "
+                    "id the training loss ignored." + _PAD_KEYS_REMEDY
+                )
         return index
 
     def _first(self, *keys: str) -> Any:

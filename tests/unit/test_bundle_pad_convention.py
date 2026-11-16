@@ -39,7 +39,7 @@ from tests.fixtures.synthetic_bundle import (
     write_run_files,
 )
 from vatis import Analyzer, load_local_bundle
-from vatis.models.local_bundle import BundleSchemaError
+from vatis.models.local_bundle import BundleMetadata, BundleSchemaError
 
 PAD_ID = 3
 STEPS = (1, 2)
@@ -276,6 +276,44 @@ def test_contradictory_pad_metadata_is_refused_when_the_bundle_is_opened(
     _write_bundle(tmp_path / "run", **keys)
     with pytest.raises(BundleSchemaError, match=match):
         load_local_bundle(tmp_path / "run", tiny_lm_factory)
+
+
+@pytest.mark.parametrize(
+    ("index", "match"),
+    [
+        (-100, "a token id cannot be negative"),
+        (-5, "a token id cannot be negative"),
+        (-1, "a token id cannot be negative"),
+        (DEFAULT_VOCAB_SIZE, f"vocab_size = {DEFAULT_VOCAB_SIZE}"),
+        (10**9, f"vocab_size = {DEFAULT_VOCAB_SIZE}"),
+    ],
+)
+def test_an_index_no_target_can_equal_is_refused(tmp_path: Path, index: int, match: str) -> None:
+    """Accepted, such an index would mask nothing under metadata that says "masked".
+
+    Pre-fix every one of these loaded and the update-batch rows were silently
+    those of the unmasked loss.
+    """
+    _write_bundle(tmp_path / "run", mask_pad_in_loss=True, loss_ignore_index=index)
+    with pytest.raises(BundleSchemaError, match=match):
+        load_local_bundle(tmp_path / "run", tiny_lm_factory)
+
+
+def test_the_range_of_the_index_is_the_vocabulary(tmp_path: Path) -> None:
+    """``0`` and ``vocab_size - 1`` are token ids; without a stated size only the sign is known."""
+    for name, index in (("first", 0), ("last", DEFAULT_VOCAB_SIZE - 1)):
+        _write_bundle(tmp_path / name, mask_pad_in_loss=True, loss_ignore_index=index)
+        assert load_local_bundle(tmp_path / name, tiny_lm_factory).loss_ignore_index == index
+
+    # A model config that states no vocabulary size: nothing to compare against,
+    # so only a negative index can be refused.
+    metadata = bundle_metadata(BundleTinyLM(seq_len=7, seed=0), batch_size=4)
+    del metadata["model_config"]["vocab_size"]
+    metadata.update({"mask_pad_in_loss": True, "loss_ignore_index": 10**9})
+    assert BundleMetadata(raw=metadata).loss_ignore_index == 10**9
+    metadata["loss_ignore_index"] = -1
+    with pytest.raises(BundleSchemaError, match="cannot be negative"):
+        _ = BundleMetadata(raw=metadata).loss_ignore_index
 
 
 # ------------------------------- deciding the convention from the bundle itself
