@@ -139,16 +139,28 @@ def make_tiny_lm_batch(
     seed: int = 0,
     device: torch.device | str = "cpu",
 ) -> dict[str, torch.Tensor]:
-    """Build a reproducible (input_ids, attention_mask, labels) dict."""
+    """Build a reproducible (input_ids, attention_mask, labels) dict.
+
+    With ``pad_fraction > 0`` the sequences are padded at the end by **unequal**
+    amounts: the first one loses ``round(seq_len * pad_fraction)`` positions
+    (at least one) and every later one a position less, down to none. So the
+    sequences of a padded batch hold different numbers of valid tokens, and so
+    do its micro-batches and DDP shards — which is what makes token-weighted
+    aggregation distinguishable from sequence-weighted aggregation. The rule
+    is a fixed staircase rather than a random draw so that this holds for
+    every way of cutting the batch into contiguous pieces. ``input_ids`` do
+    not depend on ``pad_fraction``.
+    """
     g = torch.Generator(device="cpu")
     g.manual_seed(seed)
     input_ids = torch.randint(0, vocab_size, (batch_size, seq_len), generator=g)
     attention_mask = torch.ones_like(input_ids)
     if pad_fraction > 0:
-        # Pad some trailing positions in some sequences.
         n_pad = max(1, int(round(seq_len * pad_fraction)))
         for b in range(batch_size):
-            attention_mask[b, -n_pad:] = 0
+            n_pad_b = max(n_pad - b, 0)
+            if n_pad_b > 0:
+                attention_mask[b, -n_pad_b:] = 0
     # HF causal-LM convention: labels = next-token; -100 at positions that
     # should be ignored. We mark padded tokens AND the very last position.
     labels = torch.full_like(input_ids, fill_value=-100)
