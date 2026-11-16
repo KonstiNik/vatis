@@ -97,6 +97,11 @@ CHECKPOINT_OPTIM_FILE = "optim.pt"
 # ``Preconditioner.adamw`` assumes. Adam and AdamW differ only in how weight
 # decay enters, which P excludes anyway.
 _ADAM_FAMILY = frozenset({"adam", "adamw"})
+# Hyper-parameter keys that identify a ``torch.optim.Adam`` / ``AdamW`` param
+# group. ``betas`` alone does not: RAdam, NAdam, Adamax and SparseAdam groups
+# carry it too, and their updates are not ``m_hat / (sqrt(v_hat) + eps)``.
+# ``amsgrad`` is the key only Adam and AdamW groups have.
+_ADAM_GROUP_KEYS = frozenset({"betas", "amsgrad"})
 # Hyper-parameter keys every ``torch.optim.SGD`` param group carries and no
 # Adam-family or RMSprop group does (RMSprop has ``momentum`` but neither
 # ``dampening`` nor ``nesterov``).
@@ -161,13 +166,20 @@ class BundleMetadata:
     def optimizer_name(self) -> str | None:
         """Optimizer type: ``optimizer_name`` | ``optimizer_type`` | ``optimizer``.
 
-        If ``optimizer`` is a dict, its ``name``/``type`` entry is used.
+        If ``optimizer`` is a dict, its ``name``/``type`` entry is used. When
+        none of these yields a name, ``optimizer_class`` is read (the class
+        name a writer records, e.g. ``"AdamW"``; a dotted path such as
+        ``"torch.optim.adamw.AdamW"`` is reduced to its last component).
         """
         value = self._first("optimizer_name", "optimizer_type", "optimizer")
         if isinstance(value, Mapping):
-            inner = value.get("name", value.get("type"))
-            return str(inner) if inner is not None else None
-        return str(value) if value is not None else None
+            value = value.get("name", value.get("type"))
+        if value is not None:
+            return str(value)
+        recorded_class = self.raw.get("optimizer_class")
+        if recorded_class is None:
+            return None
+        return str(recorded_class).rpartition(".")[2]
 
     @property
     def optimizer_hparams(self) -> Mapping[str, Any] | None:
@@ -1014,7 +1026,11 @@ class LocalBundleSource:
         A bundle written by ``torch.optim.SGD`` is refused here with that reason
         (its saved ``param_groups`` identify it even at step 0, where every
         optimizer's state is empty); use :meth:`preconditioner`, which handles
-        both optimizers.
+        both optimizers. A state written by any optimizer other than
+        ``torch.optim.Adam`` / ``AdamW`` is refused as well, at every step and
+        whether or not ``metadata.json`` names the optimizer: RAdam, NAdam and
+        Adamax also save ``betas`` and an ``exp_avg_sq``, but their param groups
+        lack the ``amsgrad`` key every Adam / AdamW group has.
 
         Returns:
             ``fn(checkpoint_id) -> Preconditioner | None``.
@@ -1023,7 +1039,8 @@ class LocalBundleSource:
         def build(checkpoint_id: str) -> Preconditioner | None:
             checkpoint = self.checkpoint_for(checkpoint_id)
             state = checkpoint.optimizer_state
-            if _optimizer_family(state) == "sgd":
+            family = _optimizer_family(state)
+            if family == "sgd":
                 raise BundleSchemaError(
                     f"{checkpoint.identifier}: the saved param_groups are those of an SGD "
                     "optimizer, which has no second moment and hence no AdamW "
@@ -1032,6 +1049,11 @@ class LocalBundleSource:
                     "preconditioner=None for the raw rows only."
                 )
             if state.is_empty:
+                if family != "adam":
+                    # The groups identify the optimizer even without any state, so
+                    # a non-Adam bundle is refused at step 0 as well, not skipped
+                    # there and refused one checkpoint later.
+                    raise BundleSchemaError(_not_adam_message(state, checkpoint.identifier))
                 warnings.warn(
                     f"{checkpoint.identifier}: the saved optimizer state is empty "
                     f"({checkpoint.path / CHECKPOINT_OPTIM_FILE}), which is what a step-0 "
@@ -1218,15 +1240,34 @@ def _optimizer_family(state: OptimizerStateView) -> str | None:
     The per-parameter state cannot answer this: it is empty at step 0 for every
     optimizer, and at every step for SGD without momentum. The hyper-parameter
     keys of the groups are always saved and differ by optimizer class.
+
+    ``"adam"`` means ``torch.optim.Adam`` or ``AdamW`` and nothing else: the
+    groups must carry ``amsgrad`` next to ``betas`` (:data:`_ADAM_GROUP_KEYS`).
+    RAdam, NAdam, Adamax and SparseAdam groups have ``betas`` but no
+    ``amsgrad`` and come back as ``None``.
     """
     groups = state.param_groups
     if not groups:
         return None
-    if all("betas" in group for group in groups):
+    if all(group.keys() >= _ADAM_GROUP_KEYS for group in groups):
         return "adam"
     if all(group.keys() >= _SGD_GROUP_KEYS and "betas" not in group for group in groups):
         return "sgd"
     return None
+
+
+def _not_adam_message(state: OptimizerStateView, context: str) -> str:
+    """Why a state whose ``param_groups`` are not Adam's / AdamW's is refused."""
+    group_keys = sorted({key for group in state.param_groups for key in group} - {"params"})
+    return (
+        f"{context}: the saved param_groups are not those of torch.optim.Adam / AdamW "
+        f"(hyper-parameter keys: {group_keys}; an Adam / AdamW group carries "
+        f"{sorted(_ADAM_GROUP_KEYS)}). P = 1/(sqrt(v_hat) + eps) is the preconditioner "
+        "of those two only; other optimizers that keep 'betas' and an 'exp_avg_sq' "
+        "(RAdam, NAdam, Adamax, ...) apply a different update, and labelling their rows "
+        "'adamw' would be wrong. Build the P you mean with "
+        "Preconditioner.from_diagonal(...)."
+    )
 
 
 def adamw_preconditioner_from_state(
@@ -1261,8 +1302,12 @@ def adamw_preconditioner_from_state(
 
     Raises:
         BundleSchemaError: the state is empty, has no ``exp_avg_sq`` (e.g. an
-            SGD run — no second moment exists, use ``preconditioner=None``), or has
-            no ``step`` counter to bias-correct with.
+            SGD run — no second moment exists, use ``preconditioner=None``), has
+            no ``step`` counter to bias-correct with, or was not written by
+            ``torch.optim.Adam`` / ``AdamW`` — judged by ``metadata.json``'s
+            optimizer name when there is one and, independently of it, by the
+            saved ``param_groups`` (RAdam, NAdam and Adamax keep an
+            ``exp_avg_sq`` too, but their groups have no ``amsgrad`` key).
         ValueError: ``betas``/``eps`` missing from the saved ``param_groups``, or
             ``amsgrad=True`` (which preconditions with ``max_exp_avg_sq``).
     """
@@ -1316,6 +1361,11 @@ def adamw_preconditioner_from_state(
             f"{context}: the saved optimizer state has no 'step' counter, so "
             "exp_avg_sq cannot be bias-corrected. Refusing to guess the exponent."
         )
+    # Decided by the saved groups, not by metadata.json: a bundle that names no
+    # optimizer (or names it under a key vatis does not read) must not turn a
+    # RAdam / NAdam state into rows labelled "adamw".
+    if _optimizer_family(state) != "adam":
+        raise BundleSchemaError(_not_adam_message(state, context))
     disagreeing = [
         key
         for key in ("betas", "eps")

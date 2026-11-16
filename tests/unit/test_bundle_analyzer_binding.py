@@ -19,6 +19,7 @@ or to an input the bundle path mishandled:
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 from typing import Any
@@ -45,10 +46,16 @@ from tests.fixtures.tiny_transformer import (
     make_tiny_lm_batch,
 )
 from vatis import Analyzer, analyze, load_local_bundle
+from vatis.core.param_layout import ParameterLayout
 from vatis.core.preconditioner import Preconditioner, weighted_dot_fp64, weighted_sum_sq_fp64
 from vatis.data.collate import shifted_lm_targets
 from vatis.models.hf import ModelBundle
-from vatis.models.local_bundle import BundleSchemaError
+from vatis.models.local_bundle import (
+    BundleMetadata,
+    BundleSchemaError,
+    OptimizerStateView,
+    _optimizer_family,
+)
 
 BETAS = (0.9, 0.95)
 EPS = 1e-8
@@ -417,6 +424,208 @@ def test_non_adam_optimizer_state_is_not_labelled_adamw(
     )
     source = load_local_bundle(run_dir, tiny_lm_factory)
     with pytest.raises(BundleSchemaError, match="names the optimizer"):
+        source.adamw_preconditioner()(source.checkpoints[0].identifier)
+
+
+# ------------------------------- which optimizer wrote the state: groups, not names
+
+NAME_VARIANTS = ("no name", "optimizer_class", "optimizer")
+ADAM_BETAS, ADAM_EPS = (0.9, 0.95), 1e-8  # what ``bundle_metadata`` records by default
+
+
+def _bundle_written_by(
+    tmp_path: Path,
+    optimizer_cls: type[torch.optim.Optimizer],
+    *,
+    name_variant: str,
+    n_steps: int,
+    optimizer_kwargs: dict[str, Any] | None = None,
+) -> Path:
+    """A bundle holding a real ``optimizer_cls`` state; ``metadata.json`` names the
+    optimizer under ``optimizer`` (lower case), under ``optimizer_class`` only
+    (the class name, as the project's bundle writer records it), or not at all."""
+    assert name_variant in NAME_VARIANTS
+    run_dir = _real_adamw_bundle(
+        tmp_path,
+        BundleTinyLM(seed=0),
+        optimizer_cls=optimizer_cls,
+        metadata_optimizer=optimizer_cls.__name__.lower(),
+        n_steps=n_steps,
+        optimizer_kwargs=optimizer_kwargs,
+    )
+    metadata_path = run_dir / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    assert metadata["optimizer"] == optimizer_cls.__name__.lower()
+    if name_variant != "optimizer":
+        del metadata["optimizer"]
+    if name_variant == "optimizer_class":
+        metadata["optimizer_class"] = optimizer_cls.__name__
+    metadata_path.write_text(json.dumps(metadata))
+    return run_dir
+
+
+@pytest.mark.parametrize(
+    ("optimizer_cls", "expected"),
+    [
+        (torch.optim.Adam, "adam"),
+        (torch.optim.AdamW, "adam"),
+        (torch.optim.SGD, "sgd"),
+        (torch.optim.RAdam, None),
+        (torch.optim.NAdam, None),
+        (torch.optim.Adamax, None),
+        (torch.optim.RMSprop, None),
+        (torch.optim.Adagrad, None),
+    ],
+)
+@pytest.mark.parametrize("n_steps", [0, 2])
+def test_the_optimizer_family_is_read_off_real_param_groups(
+    optimizer_cls: type[torch.optim.Optimizer], expected: str | None, n_steps: int
+) -> None:
+    """``betas`` does not identify Adam: RAdam, NAdam and Adamax groups carry it too."""
+    torch.manual_seed(0)
+    model = BundleTinyLM(seed=0)
+    optimizer = optimizer_cls(model.parameters(), lr=1e-3)
+    ids = torch.from_numpy(make_batch_a(seed=0)).long()
+    for _ in range(n_steps):
+        optimizer.zero_grad(set_to_none=True)
+        _lm_loss(model, ids).backward()
+        optimizer.step()
+    state = OptimizerStateView(
+        optimizer.state_dict(), ParameterLayout.from_named_parameters(model), source="<live>"
+    )
+    assert _optimizer_family(state) == expected
+    if optimizer_cls in (torch.optim.RAdam, torch.optim.NAdam, torch.optim.Adamax):
+        # the case this test exists for: a non-Adam group that has 'betas'
+        assert "betas" in optimizer.state_dict()["param_groups"][0]
+
+
+@pytest.mark.parametrize(
+    "optimizer_cls",
+    [torch.optim.RAdam, torch.optim.NAdam, torch.optim.Adamax, torch.optim.RMSprop],
+)
+@pytest.mark.parametrize("name_variant", NAME_VARIANTS)
+@pytest.mark.parametrize("n_steps", [0, 3])
+def test_a_non_adam_state_gets_no_adamw_rows_whatever_the_metadata_names(
+    tmp_path: Path,
+    optimizer_cls: type[torch.optim.Optimizer],
+    name_variant: str,
+    n_steps: int,
+) -> None:
+    """Refused by both P sources, at step 0 too, with or without a recorded name."""
+    run_dir = _bundle_written_by(
+        tmp_path, optimizer_cls, name_variant=name_variant, n_steps=n_steps
+    )
+    source = load_local_bundle(run_dir, tiny_lm_factory)
+    ident = source.checkpoints[0].identifier
+    with pytest.raises(BundleSchemaError):
+        source.adamw_preconditioner()(ident)
+    with pytest.raises(BundleSchemaError, match="cannot tell which geometry factor"):
+        source.preconditioner()(ident)
+
+
+@pytest.mark.parametrize("optimizer_cls", [torch.optim.RAdam, torch.optim.NAdam])
+def test_an_unnamed_radam_or_nadam_state_is_refused_because_of_its_param_groups(
+    tmp_path: Path, optimizer_cls: type[torch.optim.Optimizer]
+) -> None:
+    """The reproduced defect: nothing in ``metadata.json`` names the optimizer, the
+    state has ``betas``, ``eps``, ``exp_avg_sq`` and ``step`` — and is not AdamW's."""
+    run_dir = _bundle_written_by(tmp_path, optimizer_cls, name_variant="no name", n_steps=3)
+    source = load_local_bundle(run_dir, tiny_lm_factory)
+    checkpoint = source.checkpoints[0]
+    assert source.metadata.optimizer_name is None
+    state = checkpoint.optimizer_state
+    assert state.has_state("exp_avg_sq") and state.step_count == 3
+    assert {"betas", "eps"} <= set(state.hparams)
+    with pytest.raises(BundleSchemaError, match="not those of torch.optim.Adam / AdamW"):
+        source.adamw_preconditioner()(checkpoint.identifier)
+
+
+@pytest.mark.parametrize("optimizer_cls", [torch.optim.Adam, torch.optim.AdamW])
+@pytest.mark.parametrize("name_variant", NAME_VARIANTS)
+def test_adam_and_adamw_states_are_accepted_whatever_the_metadata_names(
+    tmp_path: Path, optimizer_cls: type[torch.optim.Optimizer], name_variant: str
+) -> None:
+    n_steps = 3
+    run_dir = _bundle_written_by(
+        tmp_path,
+        optimizer_cls,
+        name_variant=name_variant,
+        n_steps=n_steps,
+        optimizer_kwargs={"betas": ADAM_BETAS, "eps": ADAM_EPS},
+    )
+    source = load_local_bundle(run_dir, tiny_lm_factory)
+    checkpoint = source.checkpoints[0]
+    saved = torch.load(checkpoint.path / "optim.pt", weights_only=True)["state"]
+    v = torch.cat([saved[i]["exp_avg_sq"].reshape(-1) for i in range(len(source.layout))])
+    by_hand = 1.0 / ((v / (1.0 - ADAM_BETAS[1] ** n_steps)).sqrt() + ADAM_EPS)
+    for factory in (source.adamw_preconditioner(), source.preconditioner()):
+        precond = factory(checkpoint.identifier)
+        assert precond is not None
+        assert precond.descriptor == "adamw"
+        assert torch.equal(precond.diag, by_hand)
+
+
+@pytest.mark.parametrize("optimizer_cls", [torch.optim.Adam, torch.optim.AdamW])
+@pytest.mark.parametrize("name_variant", NAME_VARIANTS)
+def test_an_adam_or_adamw_step_zero_checkpoint_is_still_skipped_with_a_warning(
+    tmp_path: Path, optimizer_cls: type[torch.optim.Optimizer], name_variant: str
+) -> None:
+    run_dir = _bundle_written_by(tmp_path, optimizer_cls, name_variant=name_variant, n_steps=0)
+    source = load_local_bundle(run_dir, tiny_lm_factory)
+    for factory in (source.adamw_preconditioner(), source.preconditioner()):
+        with pytest.warns(UserWarning, match="SKIPPED"):
+            assert factory(source.checkpoints[0].identifier) is None
+
+
+@pytest.mark.parametrize("name_variant", NAME_VARIANTS)
+@pytest.mark.parametrize("n_steps", [0, 3])
+def test_an_sgd_state_is_recognised_whatever_the_metadata_names(
+    tmp_path: Path, name_variant: str, n_steps: int
+) -> None:
+    run_dir = _bundle_written_by(
+        tmp_path,
+        torch.optim.SGD,
+        name_variant=name_variant,
+        n_steps=n_steps,
+        optimizer_kwargs={"momentum": 0.9},
+    )
+    source = load_local_bundle(run_dir, tiny_lm_factory)
+    ident = source.checkpoints[0].identifier
+    precond = source.preconditioner()(ident)
+    assert precond is not None
+    assert precond.descriptor == "sgd"
+    assert torch.equal(precond.diag, torch.ones(source.layout.total_numel))
+    with pytest.raises(BundleSchemaError, match="SGD optimizer"):
+        source.adamw_preconditioner()(ident)
+
+
+def test_optimizer_name_also_reads_optimizer_class() -> None:
+    """``optimizer_class`` is the key the project's own bundle writer records."""
+    name = lambda raw: BundleMetadata(raw=raw).optimizer_name  # noqa: E731
+    assert name({"optimizer_class": "AdamW"}) == "AdamW"
+    assert name({"optimizer_class": "torch.optim.radam.RAdam"}) == "RAdam"
+    assert name({}) is None
+    # the keys read before keep their precedence and their values
+    assert name({"optimizer": "adamw", "optimizer_class": "RAdam"}) == "adamw"
+    assert name({"optimizer_name": "sgd", "optimizer_class": "AdamW"}) == "sgd"
+    assert name({"optimizer_type": "adam", "optimizer": "sgd"}) == "adam"
+    assert name({"optimizer": {"name": "nadam", "lr": 1e-3}}) == "nadam"
+    assert name({"optimizer": {"type": "adamax"}}) == "adamax"
+    # a dict without a name falls through to the class
+    assert name({"optimizer": {"lr": 1e-3}, "optimizer_class": "AdamW"}) == "AdamW"
+    assert name({"optimizer": {"lr": 1e-3}}) is None
+
+
+def test_a_recorded_optimizer_class_other_than_adam_is_refused_by_name(tmp_path: Path) -> None:
+    """With ``optimizer_class`` read, the metadata cross-check sees the writer's own
+    record: an AdamW state under metadata that says ``"RAdam"`` do not belong together."""
+    run_dir = _bundle_written_by(tmp_path, torch.optim.AdamW, name_variant="no name", n_steps=3)
+    metadata_path = run_dir / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["optimizer_class"] = "RAdam"
+    metadata_path.write_text(json.dumps(metadata))
+    source = load_local_bundle(run_dir, tiny_lm_factory)
+    with pytest.raises(BundleSchemaError, match="names the optimizer 'RAdam'"):
         source.adamw_preconditioner()(source.checkpoints[0].identifier)
 
 
