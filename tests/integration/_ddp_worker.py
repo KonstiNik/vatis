@@ -1,9 +1,10 @@
 """Worker script invoked under torchrun by ``test_ddp_loopback``.
 
-Each rank initializes a process group, runs the analyzer on a fixed shared
-batch, and writes its result row dict to a JSON file at the path passed via
-``--out``. The driver test reads back rank 0's file and compares against the
-single-GPU baseline.
+Each rank initializes a process group and runs the analyzer on a fixed shared
+batch. Rank 0 writes its result rows to the JSON file passed via ``--out``; the
+driver test reads that file back and compares against the single-GPU baseline.
+Every other rank writes its (in-memory) rows to ``<out>.rank<r>``, for the tests
+that check what each rank records.
 
 ``--pin-probes`` swaps ``make_probe`` for :class:`ShapeKeyedProbe`, which makes
 ``chi_net`` a *deterministic functional of the shard*. That is what lets the
@@ -156,9 +157,14 @@ def main() -> int:
             sink=None,
             device="cpu",
         )
+        rows = [r.to_dict() for r in results[0].rows]
         if get_rank() == 0:
-            rows = [r.to_dict() for r in results[0].rows]
             Path(args.out).write_text(json.dumps(rows))
+        else:
+            # The in-memory rows of the other ranks, for the tests that check what
+            # every rank records (the ``hutchinson_seed`` column). The values are
+            # the same all-reduced totals rank 0 holds.
+            Path(f"{args.out}.rank{get_rank()}").write_text(json.dumps(rows))
     finally:
         shutdown_distributed()
     return 0

@@ -6,11 +6,16 @@ sample of every shard was probed with the same random vectors. A Rademacher
 probe's error on a sample is ``sum_{i != j} v_i v_j M_ij`` with
 ``M = J J^T`` the sample's output-space Gram matrix, so two samples probed with
 the same ``v`` have error covariance ``2 <offdiag(M_a), offdiag(M_b)>_F``. That
-is far from zero: the Gram matrices of different inputs share much of their
+is not zero: the Gram matrices of different inputs share part of their
 off-diagonal structure (the same unembedding, the same input-independent
-parameters). The per-rank errors therefore added almost coherently and the
-variance of the all-reduced ``chi_net`` grew by up to the world size — the
-extreme, exactly ``R``, being reached when the shards hold the same samples.
+parameters), how much depends on the model. The per-rank errors were therefore
+positively correlated, and the variance of the all-reduced ``chi_net`` was up
+to the world size times what ranks drawing **independent** streams give for the
+same shards and micro-batches — the extreme, exactly ``R``, being reached when
+the shards hold the same samples. (The reference is independent rank streams,
+not a single process: the two coincide only at ``micro_batch_size=1``, because
+a probe spans its whole micro-batch and a single process cuts the batch into
+different micro-batches than the ranks do.)
 
 The tests below emulate the per-rank calls in one process by patching the rank
 and world size the analyzer sees. ``is_distributed()`` stays ``False``, so the
@@ -43,19 +48,23 @@ from vatis.core.preconditioner import Preconditioner
 from vatis.core.probes import make_probe
 from vatis.distributed.sharding import shard_batch
 from vatis.models.hf import ModelBundle
+from vatis.sinks.base import ResultRow
 
 _VOCAB, _SEQ = 32, 8
 
 
 def _bundle() -> ModelBundle:
-    """A small transformer in which **every** parameter is live.
+    """A small transformer with every parameter set here, none left to an initialiser.
 
-    This test was written when ``TinyTransformer`` still zero-initialised all
-    1-D parameters, LayerNorm gains included (logits identically zero, only the
-    final LayerNorm live), and therefore sets its own initialisation: gains at
-    1 and weight matrices at an ordinary ``N(0, 1/fan_in)`` scale. The fixture
-    has since been repaired; the override is kept so that the statistics pinned
-    below stay those of one fixed model.
+    Only the architecture comes from the ``TinyTransformer`` fixture. LayerNorm
+    gains are set to 1, every other 1-D parameter (all biases) to 0, and every
+    weight matrix is drawn from a private generator at an ordinary
+    ``N(0, 1/fan_in)`` scale. So the numbers the statistical test below quotes
+    are those of one fixed model: they do not move when the fixture's
+    initialisation or PyTorch's default initialisers change. (The test was
+    written when the fixture zero-initialised its LayerNorm gains, which made
+    the logits identically zero; that is why it never relied on the fixture's
+    weights.)
     """
     torch.manual_seed(0)
     model = TinyTransformer(
@@ -64,10 +73,12 @@ def _bundle() -> ModelBundle:
     gen = torch.Generator().manual_seed(123)
     with torch.no_grad():
         for name, p in model.named_parameters():
-            if "ln" in name and name.endswith("weight"):
-                p.fill_(1.0)
-            elif p.ndim >= 2:
+            if p.ndim >= 2:
                 p.copy_(torch.randn(p.shape, generator=gen) / p.shape[-1] ** 0.5)
+            elif "ln" in name and name.endswith("weight"):
+                p.fill_(1.0)
+            else:
+                p.zero_()
     return ModelBundle(
         model=model,
         params=list(model.parameters()),
@@ -90,16 +101,16 @@ def _explicit_p(bundle: ModelBundle) -> Preconditioner:
     )
 
 
-def _rank_partials(
+def _rank_rows(
     monkeypatch: pytest.MonkeyPatch,
     bundle: ModelBundle,
     batch: dict[str, torch.Tensor],
     *,
     world_size: int,
     **analyze_kwargs: Any,
-) -> list[dict[str, float]]:
-    """Per rank, the observables that rank computes on its shard (see module docstring)."""
-    partials = []
+) -> list[list[ResultRow]]:
+    """Per rank, the rows that rank computes on its shard (see module docstring)."""
+    per_rank = []
     for rank in range(world_size):
         with monkeypatch.context() as patch:
             patch.setattr(analyzer_mod, "get_rank", lambda rank=rank: rank)
@@ -111,8 +122,21 @@ def _rank_partials(
                 sink=None,
                 **analyze_kwargs,
             )
-        partials.append({r.observable: r.value for r in results[0].rows})
-    return partials
+        per_rank.append(results[0].rows)
+    return per_rank
+
+
+def _rank_partials(
+    monkeypatch: pytest.MonkeyPatch,
+    bundle: ModelBundle,
+    batch: dict[str, torch.Tensor],
+    *,
+    world_size: int,
+    **analyze_kwargs: Any,
+) -> list[dict[str, float]]:
+    """Per rank, the observables that rank computes on its shard, by name."""
+    per_rank = _rank_rows(monkeypatch, bundle, batch, world_size=world_size, **analyze_kwargs)
+    return [{r.observable: r.value for r in rows} for rows in per_rank]
 
 
 # --------------------------------------------------------------------------- the defect
@@ -304,6 +328,36 @@ def test_rank_probe_seed_rule() -> None:
     assert rank_seed(1293874550, 1) == 1468076391
     with pytest.raises(ValueError, match="rank"):
         rank_seed(0, -1)
+
+
+@pytest.mark.parametrize("world_size", [1, 2, 3])
+def test_hutchinson_seed_column_is_the_per_call_seed_on_every_rank(
+    monkeypatch: pytest.MonkeyPatch, world_size: int
+) -> None:
+    """The ``hutchinson_seed`` column names the *call*, not the stream a rank drew from.
+
+    Every row of every rank carries ``_per_call_seed(seed, checkpoint id, batch
+    name)``, whatever the world size. Rank ``r > 0`` seeds its generator from a
+    value derived from it, but that derived seed must not leak into the column:
+    the column would then differ between the ranks of one run, and between a
+    multi-rank and a single-process run of the same call.
+    """
+    bundle = _bundle()
+    call_seed = analyzer_mod._per_call_seed(5, "toy@step0", "val")
+    per_rank = _rank_rows(
+        monkeypatch,
+        bundle,
+        _batch(6),
+        world_size=world_size,
+        seed=5,
+        chi_net_method="hutchinson",
+        n_hutchinson=2,
+        micro_batch_size=1,
+        preconditioner=_explicit_p(bundle),
+    )
+    for rank, rows in enumerate(per_rank):
+        assert rows, rank
+        assert {r.hutchinson_seed for r in rows} == {call_seed}, (world_size, rank)
 
 
 @pytest.mark.parametrize("method", ["hutchinson", "per_sequence_cv"])

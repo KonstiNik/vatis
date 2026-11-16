@@ -12,8 +12,8 @@ native-RNG gap it tolerates is ~6%).
 
 Until this was fixed every rank seeded its generator *identically*. The same
 random vectors then landed on the ``k``-th sample of every shard, the shards'
-estimation errors were strongly positively correlated, and the variance of the
-summed ``chi_net`` grew by up to the world size.
+estimation errors were positively correlated, and the variance of the summed
+``chi_net`` was up to the world size times what independent rank streams give.
 ``test_ddp_ranks_do_not_replay_one_probe_stream`` pins that on the real
 ``torchrun`` path, and ``test_ddp_shipped_rng_equals_the_per_rank_streams`` pins
 the seeding rule exactly; the statistics are in
@@ -43,6 +43,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 import torch
@@ -71,7 +72,7 @@ pytestmark = pytest.mark.integration
 DDP_REL = 1e-6
 
 
-def _run_ddp(
+def _run_ddp_rows(
     out_path: Path,
     *,
     seed: int,
@@ -81,8 +82,8 @@ def _run_ddp(
     pin_probes: bool = False,
     preconditioner: bool = False,
     duplicate_half: bool = False,
-) -> dict[str, float]:
-    """Spawn a 2-rank torchrun pinned to CPU, return rank 0's observables."""
+) -> list[list[dict[str, Any]]]:
+    """Spawn a 2-rank torchrun pinned to CPU, return every rank's rows (as dicts)."""
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = ""  # force CPU even if a GPU is around
     cmd = [
@@ -118,8 +119,16 @@ def _run_ddp(
             + "\n--- stderr ---\n"
             + result.stderr
         )
-    rows = json.loads(out_path.read_text())
-    return {r["observable"]: r["value"] for r in rows}
+    return [
+        json.loads(out_path.read_text()),
+        json.loads(Path(f"{out_path}.rank1").read_text()),
+    ]
+
+
+def _run_ddp(out_path: Path, **kwargs: Any) -> dict[str, float]:
+    """Spawn a 2-rank torchrun pinned to CPU, return rank 0's observables."""
+    rank0_rows = _run_ddp_rows(out_path, **kwargs)[0]
+    return {r["observable"]: r["value"] for r in rank0_rows}
 
 
 def _baseline(
@@ -310,12 +319,17 @@ def test_ddp_shipped_rng_equals_the_per_rank_streams(
     """The shipped RNG, exactly: DDP ``chi_net`` is the sum over ranks of the
     estimator on that rank's shard, each on its documented stream.
 
-    This is the reproducibility contract — ``seed``, rank and world size determine
-    every probe — checked against the real ``torchrun`` run rather than within a
-    sampling bound. ``batch_size=5`` is the uneven split (shards of 3 and 2).
+    This is the reproducibility contract — ``seed``, checkpoint id, batch name,
+    rank and world size determine every probe — checked against the real
+    ``torchrun`` run rather than within a sampling bound. ``batch_size=5`` is the
+    uneven split (shards of 3 and 2).
+
+    It also pins what the ``hutchinson_seed`` column of a multi-rank run holds:
+    the per-call seed, on every row of every rank — not the rank-derived seed a
+    rank ``r > 0`` actually seeds its generator with.
     """
     world_size, n_h = 2, 8
-    ddp = _run_ddp(
+    rank_rows = _run_ddp_rows(
         tmp_path / f"ddp_rng_{method}_{batch_size}.json",
         seed=0,
         batch_size=batch_size,
@@ -323,9 +337,14 @@ def test_ddp_shipped_rng_equals_the_per_rank_streams(
         method=method,
         preconditioner=True,
     )
+    ddp = {r["observable"]: r["value"] for r in rank_rows[0]}
     bundle, precond = _toy_bundle(0)
     batch = make_tiny_lm_batch(batch_size=batch_size, seed=0, pad_fraction=0.25, device="cpu")
     call_seed = analyzer_mod._per_call_seed(0, "toy@step0", "val")
+    assert len(rank_rows) == world_size
+    for rank, rows in enumerate(rank_rows):
+        assert rows, rank
+        assert {r["hutchinson_seed"] for r in rows} == {call_seed}, (rank, call_seed)
     estimator = build_estimator(method, n_hutchinson=n_h, distribution="rademacher")
     expected = {"chi_net": 0.0, "chi_net_P": 0.0}
     for rank in range(world_size):
