@@ -160,7 +160,9 @@ Three things to know before using it:
 
 Long-format parquet: one row per `(checkpoint, batch_a, batch_b, preconditioner,
 observable)`; `chi_loss` and `chi_net` are written both unnormalized and as
-`_normalized`. Load with pandas/pyarrow and pivot. The
+`_normalized`. Load with pandas/pyarrow and pivot on `observable` to get one
+line per checkpoint and batch pair with all values side by side (recipe in the
+spec); the `preconditioner` column says which `P` the `_P` values used. The
 schema is the contract between vatis and any downstream analysis — see
 [`docs/SPEC.md` → Result format](docs/SPEC.md).
 

@@ -559,6 +559,24 @@ which `P` a row's value was computed with: `"none"` on the raw rows — includin
 `chi_loss`, which does not depend on the kernel and is written once — and the
 descriptor (`"adamw"`, `"sgd"`, ...) on the P rows. A run without a
 preconditioner emits exactly the rows it always did.
+
+The observable names already tell the raw and the preconditioned values apart,
+so the usual way to read a file is one pivot, which puts everything measured for
+a checkpoint and batch pair on one line:
+
+```python
+import pandas as pd
+
+df = pd.read_parquet("results.parquet")
+key = ["checkpoint_id", "batch_a", "batch_b"]
+wide = df.pivot(index=key, columns="observable", values="value")
+wide["preconditioner"] = df[df.preconditioner != "none"].groupby(key).preconditioner.first()
+# columns: chi_loss, chi_net, delta_loss, chi_pos, ..., chi_net_P, delta_loss_P, chi_pos_P, ...
+```
+
+Do not select the preconditioned values by filtering on `preconditioner`: that
+drops `chi_loss`, which they share with the raw ones. A checkpoint without P
+rows (an AdamW step-0 checkpoint) shows up as empty cells in the `_P` columns.
 There is no `chi_net_P_normalized` row: it is `chi_net_P / √(n_valid_a ·
 n_valid_b)` from the same row's own columns, and `chi_pos_P` — like `chi_pos` —
 is invariant under the normalization.
