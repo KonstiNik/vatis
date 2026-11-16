@@ -286,6 +286,48 @@ def select_chi_net_method(B_total: int, requested: str | None) -> str:
     return "hutchinson"
 ```
 
+#### `micro_batch_size` is a noise setting, not only a memory setting
+
+Both estimators draw `n_hutchinson` probes **per micro-batch**, and one probe
+spans the whole micro-batch (shape `(M, S, V)`). Its error therefore contains
+not only each sequence's own off-diagonal Gram entries but also every
+cross-sequence block `J_b J_{b'}ᵀ` of the micro-batch. `χ_net` stays unbiased,
+but at fixed `n_hutchinson` its variance grows about linearly with the
+micro-batch size, `≈ 1 + c·(M − 1)` times the variance at `micro_batch_size=1`,
+with a model-dependent slope `c` (for plain Hutchinson with Rademacher probes
+`c = mean_{b≠b'} ‖J_b J_{b'}ᵀ‖²_F / mean_b ‖offdiag J_b J_bᵀ‖²_F`, the mean over
+the pairs that share a micro-batch). `χ_pos` and the `_P` observables built on
+`χ_net` inherit it.
+
+Measured in a single process (`B = 8`, `n_hutchinson = 4`, Rademacher, variance
+relative to `micro_batch_size=1`; 400 seeds, 200 for the hub model; the same for
+`hutchinson` and `per_sequence_cv` to within 0.07):
+
+| model | micro-batch 2 | micro-batch 4 | micro-batch 8 |
+|---|---|---|---|
+| toy transformer trained 3000 AdamW steps | ×1.7 | ×3.4 | ×6.5 |
+| `SimpleStories-1.25M` (pretrained hub model), real text | ×1.1 | ×1.6 | ×1.9 |
+| toy transformer, untrained | ×2.3 | ×5.2 | ×10.6 |
+
+These are three CPU test models of at most 1.25M parameters; the slope differs
+several-fold between them (about 0.8, 0.1–0.2 and 1.4 in the order of the
+table), and nothing larger has been measured — do not read a number for a
+production model off this table.
+
+What follows for use:
+
+- `micro_batch_size=1` (the default) is the least noisy setting as well as the
+  one that needs the least memory.
+- The variance is proportional to `1/n_hutchinson` (the estimate is a mean of
+  independent probes per micro-batch). Raising `n_hutchinson` by the same factor
+  as `micro_batch_size` keeps the number of probe backwards unchanged and, in
+  the measurements above, at least restored the noise level on the trained toy
+  and on the hub model (×6.5 and ×1.9 at micro-batch 8, both below 8) but not
+  quite on the untrained toy (×10.6).
+- A multi-rank run shards the batch before micro-batching, so at
+  `micro_batch_size > 1` its noise differs from a single process's — see
+  "Probe vector details".
+
 ### Sample unit and normalization
 
 There is **one** observable, computed at token granularity, normalized by the
@@ -406,7 +448,7 @@ results = analyze(
     chi_net_method=None,                        # None = auto: per_seq_cv if B≤32 else hutchinson
     n_hutchinson=32,                            # interpretation depends on method
     hutchinson_distribution="rademacher",       # or "gaussian"
-    micro_batch_size=1,                         # safe default; user can grow it
+    micro_batch_size=1,                         # least memory AND least noise; raising it raises χ_net variance
     num_gpus=4,
     distributed="ddp",
     sink="results.parquet",                     # str → ParquetSink; or list of sinks
@@ -597,8 +639,10 @@ is invariant under the normalization.
   the shards partition the rows. For `δL`, each rank computes its partial
   gradient and all-reduce-sums.
 - All-reduce happens **once per checkpoint × eval-batch**, never in inner loops.
-- `micro_batch_size=1` is the always-safe fallback. The launcher does not
-  attempt OOM auto-tuning — the user picks a size that fits.
+- `micro_batch_size=1` is the always-safe fallback, and the least noisy
+  setting (see "`micro_batch_size` is a noise setting, not only a memory
+  setting"). The launcher does not attempt OOM auto-tuning — the user picks a
+  size that fits.
 
 ### Probe vector details
 
@@ -620,21 +664,15 @@ is invariant under the normalization.
   it `χ_pos`, `χ_net^P`, `χ_pos^P`) is a different unbiased estimate from the
   single-process one and **depends on the number of ranks** as well as on the
   seed.
-- **The variance depends on how the batch is cut into micro-batches**, so it is
-  not the same for a multi-rank and a single-process run in general. One probe
-  spans a whole micro-batch; its error then also contains the cross-sequence
-  blocks of the Gram matrix, and the variance of both estimators grows roughly
-  linearly with `micro_batch_size`, with a model-dependent slope. Measured in a
-  single process (`B = 8`, `n = 4`, relative to micro-batch 1, the same for
-  `hutchinson` and `per_sequence_cv`): ×2.3 / ×5.2 / ×10.6 at micro-batch
-  2 / 4 / 8 on an untrained toy transformer, ×1.7 / ×3.4 / ×6.5 on a trained
-  one, ×1.1 / ×1.6 / ×1.9 on a pretrained 1.25M-parameter hub model. Sharding
+- **The variance depends on how the batch is cut into micro-batches** (see
+  "`micro_batch_size` is a noise setting, not only a memory setting"), so it is
+  not the same for a multi-rank and a single-process run in general. Sharding
   cuts the batch *before* micro-batching, so a multi-rank run has the
   single-process variance only when every micro-batch holds one sequence
   (measured: 0.8–1.2×, consistent with 1); with larger micro-batches its
   micro-batches are no larger than a shard and it is typically *less* noisy
-  (0.47× / 0.49× / 0.62× on those three models at 4 ranks, micro-batch 4,
-  `B = 8`).
+  (measured at 4 ranks, micro-batch 4, `B = 8`: 0.47× on the untrained toy
+  transformer, 0.49× on the trained one, 0.62× on the hub model).
 - Ranks must **not** share one stream. A Rademacher probe `v` applied to sample
   `a` errs by `Σ_{i≠j} v_i v_j M_a[i,j]` (`M_a = J_a J_aᵀ`), so the same `v` on
   two samples gives errors with covariance `2⟨offdiag M_a, offdiag M_b⟩_F`

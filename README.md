@@ -174,7 +174,8 @@ python -m vatis run --model EleutherAI/pythia-160m --revisions step1000 step2000
 ```
 
 Wraps `torchrun`; each rank takes a batch shard and accumulators are all-reduced
-once per `(checkpoint, batch)`. Tune `micro_batch_size` for memory.
+once per `(checkpoint, batch)`. `micro_batch_size` trades memory against
+noise — see [below](#micro_batch_size-is-not-only-a-memory-setting).
 
 The sampled values of a multi-GPU run — `chi_net`, `chi_pos` and their `_P`
 counterparts — depend on the `seed` **and on the number of ranks**: every rank
@@ -187,6 +188,34 @@ seeded all ranks identically. `chi_loss` and `delta_loss` depend on neither.
 
 Auto by default: `per_sequence_cv` for B ≤ 32 (lower variance), `hutchinson` otherwise 
 (always works). Override with `chi_net_method=`.
+
+## `micro_batch_size` is not only a memory setting
+
+One Hutchinson probe spans the whole micro-batch, and the cross-terms between
+its sequences add noise. `chi_net` (and `chi_pos` and the `_P` values built on
+it) stays unbiased, but at fixed `n_hutchinson` its variance grows about
+linearly with the micro-batch size, for both estimators, with a slope that
+depends on the model. Measured in a single process at `B = 8`,
+`n_hutchinson = 4`, relative to `micro_batch_size=1`:
+
+| model | micro-batch 2 | micro-batch 4 | micro-batch 8 |
+|---|---|---|---|
+| toy transformer, trained | ×1.7 | ×3.4 | ×6.5 |
+| `SimpleStories-1.25M` (pretrained hub model) | ×1.1 | ×1.6 | ×1.9 |
+| toy transformer, untrained | ×2.3 | ×5.2 | ×10.6 |
+
+These are three small CPU test models (≤ 1.25M parameters); nothing larger has
+been measured, so do not read a number for your model off this table.
+
+- The default `micro_batch_size=1` is the least noisy setting.
+- The variance is proportional to `1/n_hutchinson`. If you raise
+  `micro_batch_size` for speed, raising `n_hutchinson` by the same factor keeps
+  the number of probe backwards unchanged and — on the trained toy and the hub
+  model above, not quite on the untrained toy — at least restores the noise
+  level.
+- A multi-GPU run shards the batch before micro-batching, so at
+  `micro_batch_size > 1` its noise differs from a single-process run's
+  ([`docs/SPEC.md` → Probe vector details](docs/SPEC.md)).
 
 ## Learn more
 

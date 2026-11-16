@@ -95,6 +95,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `labels != ignore_index`).
 - The analyzer restores the `requires_grad` flags it changes on the model's parameters.
 
+### Documentation
+- `micro_batch_size` is documented as a noise setting, not only a memory
+  setting (README, `docs/SPEC.md`): one probe spans the whole micro-batch, so at
+  fixed `n_hutchinson` the variance of `chi_net` grows about linearly with the
+  micro-batch size for both estimators — measured ×1.7 / ×3.4 / ×6.5 at
+  micro-batch 2 / 4 / 8 on a trained toy transformer and ×1.1 / ×1.6 / ×1.9 on
+  `SimpleStories-1.25M` (small CPU test models only). This is existing
+  behaviour, not a change; the estimate is unbiased at every setting.
+- README "Multi-GPU" and `docs/SPEC.md` state that the sampled values of a
+  multi-rank run depend on the seed and on the number of ranks, and how the
+  batch is sharded when `B % N != 0` (the first `B % N` ranks get one sequence
+  more; the docs said the last rank gets a smaller shard).
+
 ### Known limitations
 - `delta_loss_P` is **not** the first-order loss change of the AdamW step:
   momentum, weight decay and the step's own second-moment update are excluded.
