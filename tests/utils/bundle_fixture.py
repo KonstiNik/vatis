@@ -121,6 +121,15 @@ class GoldenTinyTransformer(nn.Module):
                     p.copy_(torch.randn(p.shape, generator=generator) * 0.05)
                 else:
                     p.zero_()
+            # The loop above also zeroes the LayerNorm gains (they are 1-D). With
+            # zero gains every block outputs zero: the logits are identically
+            # zero and only ``final_ln`` has a non-zero Jacobian, so the step-0
+            # checkpoint of a bundle written from this model was degenerate. Put
+            # the gains back to the standard value of one. Nothing random is
+            # drawn here, so the weight matrices are unchanged for a given seed.
+            for module in self.modules():
+                if isinstance(module, nn.LayerNorm):
+                    module.weight.fill_(1.0)
         if tie_head:
             self.lm_head.weight = self.token_embed.weight
 
