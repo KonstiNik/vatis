@@ -1252,8 +1252,11 @@ def _label_folded_loss_fn(
     them: the gradient of the loss w.r.t. the logits must vanish at every
     rejected position. A ``loss_fn`` that reads its targets from somewhere else,
     or does not ignore ``ignore_index``, would otherwise be silently unmasked;
-    that is refused with a ``ValueError``. The check costs one backward through
-    the loss head (not through the model) and runs only in this case.
+    that is refused with a ``ValueError``. So is a loss that does not depend on
+    the logits it was handed at all (a ``loss_fn`` that runs its own forward):
+    there the check has nothing to look at, and "could not verify" must not pass
+    for "verified". The check costs one backward through the loss head (not
+    through the model) and runs only in this case.
     """
 
     def fn(logits: torch.Tensor, batch: Any) -> torch.Tensor:
@@ -1261,22 +1264,41 @@ def _label_folded_loss_fn(
         folded = _fold_mask_into_labels(batch, mask, ignore_index)
         loss = loss_fn(logits, folded)
         if folded is not batch:
-            (grad_logits,) = torch.autograd.grad(loss, logits, retain_graph=True, allow_unused=True)
-            if grad_logits is not None:
-                n_leaking = int(torch.count_nonzero(grad_logits[~mask]).item())
-                if n_leaking:
-                    raise ValueError(
-                        "valid_mask_fn rejects positions whose label is valid, so vatis "
-                        f"wrote ignore_index={ignore_index} into the labels at those "
-                        "positions before calling loss_fn -- but the loss still depends on "
-                        f"the logits there ({n_leaking} non-zero gradient entries at "
-                        "rejected positions). loss_fn must read its targets from the "
-                        "batch field vatis masks ('labels', else 'targets', for a dict "
-                        "batch; element 1 of a tuple/list batch) and must ignore "
-                        f"ignore_index={ignore_index}. Refusing to continue: delta_loss and "
-                        "chi_pos would describe a loss over positions that n_valid, "
-                        "chi_loss and chi_net exclude."
-                    )
+            grad_logits = None
+            if loss.requires_grad:
+                (grad_logits,) = torch.autograd.grad(
+                    loss, logits, retain_graph=True, allow_unused=True
+                )
+            if grad_logits is None:
+                # The loss is not a function of the logits it was handed (a
+                # loss_fn that runs its own forward, or returns a detached
+                # value), so there is nothing to inspect. Not being able to
+                # verify is not the same as verified: refuse.
+                raise ValueError(
+                    "valid_mask_fn rejects positions whose label is valid, so vatis "
+                    f"wrote ignore_index={ignore_index} into the labels at those "
+                    "positions before calling loss_fn -- but the loss returned does not "
+                    "depend on the logits vatis passed in (no gradient reaches them), so "
+                    "vatis cannot verify that loss_fn honours the mask. loss_fn must "
+                    "compute the loss from its `logits` argument. Refusing to continue: "
+                    "an unverified loss could be the unrestricted one, and delta_loss and "
+                    "chi_pos would then describe a loss over positions that n_valid, "
+                    "chi_loss and chi_net exclude."
+                )
+            n_leaking = int(torch.count_nonzero(grad_logits[~mask]).item())
+            if n_leaking:
+                raise ValueError(
+                    "valid_mask_fn rejects positions whose label is valid, so vatis "
+                    f"wrote ignore_index={ignore_index} into the labels at those "
+                    "positions before calling loss_fn -- but the loss still depends on "
+                    f"the logits there ({n_leaking} non-zero gradient entries at "
+                    "rejected positions). loss_fn must read its targets from the "
+                    "batch field vatis masks ('labels', else 'targets', for a dict "
+                    "batch; element 1 of a tuple/list batch) and must ignore "
+                    f"ignore_index={ignore_index}. Refusing to continue: delta_loss and "
+                    "chi_pos would describe a loss over positions that n_valid, "
+                    "chi_loss and chi_net exclude."
+                )
         return loss
 
     return fn

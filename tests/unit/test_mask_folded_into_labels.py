@@ -205,7 +205,7 @@ def _exact_restricted_delta_loss(
 def test_delta_loss_under_a_strict_mask_is_exact_at_every_micro_batch_size(micro: int) -> None:
     """Against a gradient that never touches ``ignore_index`` or vatis's fold.
 
-    Pre-fix this fixture gave 0.454x / 0.380x / 0.380x of the exact value at
+    Pre-fix this fixture gave 0.383x / 0.213x / 0.218x of the exact value at
     micro = 1 / 2 / 4 (measured): wrong, and not the same wrong at every
     micro-batch size.
     """
@@ -262,9 +262,9 @@ def test_chi_net_under_a_strict_mask_converges_to_the_trace_over_accepted_positi
     """``chi_net`` is ``Tr(J J^T)`` over the accepted positions for both estimators.
 
     The tolerance is four standard deviations of the estimator, derived from the
-    explicit Jacobian (see ``_exact_trace_and_noise``): 1.75% of the trace at
-    this probe count. Pre-fix, ``per_sequence_cv`` read +3.2% to +3.7% here
-    (measured over three seeds at 16384 probes, one standard deviation 0.31%):
+    explicit Jacobian (see ``_exact_trace_and_noise``): 0.68% of the trace at
+    this probe count. Pre-fix, ``per_sequence_cv`` read +2.8% to +3.3% here
+    (measured over three seeds at 16384 probes, one standard deviation 0.12%):
     its control variate used the gradient of the unrestricted loss, a bias that
     does not shrink with the number of probes. ``hutchinson`` evaluates no loss
     and passed before as well.
@@ -502,6 +502,75 @@ def test_a_loss_fn_that_does_not_honour_the_folded_labels_is_refused(method: str
     _run(model, params, batch, _labels_mask, method=method, micro=2, loss_fn=deaf_loss)
 
 
+@pytest.mark.parametrize("which", ["first", "middle", "last"])
+def test_a_leak_at_one_single_rejected_position_is_refused(which: str) -> None:
+    """Every rejected position is inspected, not a sample of them.
+
+    This loss honours the folded labels everywhere and additionally depends on
+    the logits of exactly ONE position the mask rejects — the first, a middle
+    or the last one in row-major order. A check that looked only at the first
+    rejected position would pass the other two.
+    """
+    model, batch, params = _fixture()
+    rejected = torch.nonzero((batch["labels"] != -100) & ~_accepted(batch))
+    assert len(rejected) >= 3
+    assert len({int(b) for b, _s in rejected}) >= 3  # they span several rows
+    index = {"first": 0, "middle": len(rejected) // 2, "last": len(rejected) - 1}[which]
+    row, position = (int(i) for i in rejected[index])
+
+    def leaky_loss(logits: torch.Tensor, b: dict[str, torch.Tensor]) -> torch.Tensor:
+        # The whole batch is one micro-batch below, so ``row`` indexes it directly.
+        return causal_lm_loss(logits, b) + 1e-3 * logits[row, position, 0]
+
+    with pytest.raises(ValueError, match=r"\(1 non-zero gradient entries at rejected positions\)"):
+        _run(
+            model,
+            params,
+            batch,
+            _strict_mask,
+            method="hutchinson",
+            micro=BATCH_SIZE,
+            loss_fn=leaky_loss,
+        )
+
+
+@pytest.mark.parametrize("method", ["hutchinson", "per_sequence_cv"])
+@pytest.mark.parametrize("honours_the_fold", [False, True], ids=["deaf", "honours-the-fold"])
+def test_a_loss_fn_that_ignores_the_logits_it_is_handed_is_refused(
+    method: str, honours_the_fold: bool
+) -> None:
+    """ "Could not verify" must not pass for "verified".
+
+    This ``loss_fn`` runs its own forward and never touches its ``logits``
+    argument, so no gradient reaches them and the leak check has nothing to
+    inspect. It used to skip itself in that case: with the deaf variant below
+    (which also ignores the rewritten labels) ``delta_loss`` came out at 0.213x
+    the restricted value under ``hutchinson`` at ``micro_batch_size=2`` on this
+    fixture (measured), with no error.
+    Now the run is refused — also for the variant that does read the rewritten
+    labels, because the analyzer cannot tell the two apart.
+    """
+    model, batch, params = _fixture()
+    rows_by_content = {
+        tuple(row.tolist()): batch["labels"][i] for i, row in enumerate(batch["input_ids"])
+    }
+
+    def own_forward_loss(logits: torch.Tensor, b: dict[str, torch.Tensor]) -> torch.Tensor:  # noqa: ARG001
+        if honours_the_fold:
+            labels = b["labels"]
+        else:
+            labels = torch.stack([rows_by_content[tuple(row.tolist())] for row in b["input_ids"]])
+        return causal_lm_loss(model(b["input_ids"]), {"labels": labels})
+
+    with pytest.raises(ValueError, match="cannot verify that loss_fn honours the mask"):
+        _run(model, params, batch, _strict_mask, method=method, micro=2, loss_fn=own_forward_loss)
+    if method == "hutchinson":
+        # Without a stricter mask nothing was rewritten and nothing needs
+        # verifying: such a loss keeps working where it worked before
+        # (``per_sequence_cv`` needs the gradient w.r.t. the logits regardless).
+        _run(model, params, batch, _labels_mask, method=method, micro=2, loss_fn=own_forward_loss)
+
+
 def test_folded_loss_closure_matches_the_restricted_loss_and_its_gradient() -> None:
     """The closure itself, against plain torch on hand-restricted labels."""
     from vatis.analyzer import _label_folded_loss_fn
@@ -572,3 +641,34 @@ def test_per_sequence_cv_refuses_a_loss_that_counts_positions_its_mask_rejects()
     HutchinsonEstimator(n_hutchinson=2).compute(
         model, batch, lambda m, b: m(b["input_ids"]), loss_fn=causal_lm_loss, **kwargs
     )
+
+
+def test_per_sequence_cv_refuses_a_loss_that_leaks_at_one_single_position() -> None:
+    """The estimator's guard has no tolerance: one leaking position is one too many.
+
+    The mask rejects exactly one position whose label is valid, so the loss
+    direction leaves the masked subspace in ``V = 16`` logit entries and nowhere
+    else. A guard that tolerated "a few" non-zero entries would let this through
+    and return a biased ``chi_net``.
+    """
+    model, batch, params = _fixture()
+    valid = batch["labels"] != -100
+    row, position = (int(i) for i in torch.nonzero(valid)[-1])
+
+    def all_but_one(b: dict[str, torch.Tensor], logits: torch.Tensor) -> torch.Tensor:  # noqa: ARG001
+        mask = (b["labels"] != -100).clone()
+        mask[row, position] = False  # one micro-batch below: ``row`` indexes it directly
+        return mask
+
+    estimator = PerSequenceControlVariateEstimator(n_hutchinson=1)
+    with pytest.raises(ValueError, match=rf"positions valid_mask_fn rejects \({VOCAB} entries\)"):
+        estimator.compute(
+            model,
+            batch,
+            lambda m, b: m(b["input_ids"]),
+            loss_fn=causal_lm_loss,
+            valid_mask_fn=_intersected_valid_mask_fn(all_but_one, -100),
+            params=params,
+            micro_batch_size=BATCH_SIZE,
+            generator=torch.Generator().manual_seed(0),
+        )
