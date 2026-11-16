@@ -218,6 +218,64 @@ class BundleMetadata:
         """Code provenance: ``git_hashes`` | ``git_hash`` | ``git``."""
         return self._first("git_hashes", "git_hash", "git")
 
+    @property
+    def loss_ignore_index(self) -> int | None:
+        """The target id the *training* loss ignored, or ``None`` if it ignored none.
+
+        Read from the two optional run-level keys a training run records about
+        its pad convention:
+
+        - ``mask_pad_in_loss`` (bool) — whether the training cross entropy was
+          given an ``ignore_index``;
+        - ``loss_ignore_index`` (int, or null when unmasked) — that index (the
+          tokenizer's pad id).
+
+        ``None`` means every target counted: both keys absent (a bundle written
+        before they existed), or ``mask_pad_in_loss`` false/absent with
+        ``loss_ignore_index`` null/absent. An integer means the training loss was
+        a mean over the targets different from it, and
+        :attr:`LocalBundleCheckpoint.batch_a` ignores the same targets.
+
+        The two keys have to agree. ``mask_pad_in_loss: true`` without an index,
+        an index while ``mask_pad_in_loss`` is false or absent, or a value of the
+        wrong JSON type raise :class:`BundleSchemaError`: either reading of such
+        metadata would put a number on a loss that may not be the one the run
+        descended, and nothing in the bundle says which.
+        """
+        where = f"{self.path}: " if self.path is not None else ""
+        masked = self.raw.get("mask_pad_in_loss")
+        index = self.raw.get("loss_ignore_index")
+
+        def spelled(key: str) -> str:
+            return "null" if key in self.raw else "absent"
+
+        if masked is not None and not isinstance(masked, bool):
+            raise BundleSchemaError(
+                f"{where}'mask_pad_in_loss' must be true, false or absent, got {masked!r}"
+            )
+        if index is not None and (isinstance(index, bool) or not isinstance(index, int)):
+            raise BundleSchemaError(
+                f"{where}'loss_ignore_index' must be an integer token id, null or absent, "
+                f"got {index!r}"
+            )
+        if masked and index is None:
+            raise BundleSchemaError(
+                f"{where}'mask_pad_in_loss' is true but 'loss_ignore_index' is "
+                f"{spelled('loss_ignore_index')}: the run says its "
+                "loss ignored pad targets but not which token id that was, so the loss it "
+                "descended cannot be reconstructed for the update batch. Record the pad id "
+                "as 'loss_ignore_index'."
+            )
+        if index is not None and not masked:
+            raise BundleSchemaError(
+                f"{where}'loss_ignore_index' is {index} but 'mask_pad_in_loss' is "
+                f"{'false' if masked is False else spelled('mask_pad_in_loss')}: the two keys "
+                "contradict each "
+                "other about whether the training loss ignored that target. Record "
+                "'mask_pad_in_loss': true, or 'loss_ignore_index': null."
+            )
+        return index
+
     def _first(self, *keys: str) -> Any:
         for key in keys:
             if key in self.raw:
@@ -715,11 +773,16 @@ class LocalBundleCheckpoint:
         :func:`vatis.models.hf.causal_lm_loss` and
         :func:`vatis.models.hf.causal_lm_valid_mask` expect.
 
-        Two deliberate choices, both conservative:
+        Three deliberate choices:
 
-        - no ``attention_mask``: the schema stores token ids only, so vatis has
-          no padding information for the update batch and counts every position
-          (the project's training criterion does the same);
+        - no ``attention_mask``: the schema stores token ids only;
+        - the pad convention is the one the training run **recorded**
+          (:attr:`BundleMetadata.loss_ignore_index`). If the run's loss ignored a
+          target id, the labels carry ``-100`` wherever the next-token target
+          equals that id, so the loss, its gradient and every count describe the
+          mean over the non-ignored targets the run descended. If nothing was
+          recorded, every target counts. The labels are the only place this is
+          expressed — no ``valid_mask_fn`` is involved;
         - the shift is applied *here* rather than assumed to be baked in: the
           schema says ``batch_a.npy`` holds the *token ids of the batch*, so if
           the writer stores the model inputs, the last position has no target
@@ -728,10 +791,15 @@ class LocalBundleCheckpoint:
         Use :attr:`batch_a_tokens` if you need the raw ids.
         """
         if self._batch_a is None:
+            from vatis.core.normalization import DEFAULT_IGNORE_INDEX
             from vatis.data.collate import shifted_lm_targets
 
             ids = self.batch_a_tokens
-            self._batch_a = {"input_ids": ids, "labels": shifted_lm_targets(ids)}
+            labels = shifted_lm_targets(ids, ignore_index=DEFAULT_IGNORE_INDEX)
+            loss_ignore_index = self._source.loss_ignore_index
+            if loss_ignore_index is not None:
+                labels = labels.masked_fill(labels == loss_ignore_index, DEFAULT_IGNORE_INDEX)
+            self._batch_a = {"input_ids": ids, "labels": labels}
         return self._batch_a
 
     # ----------------------------------------------------------------- release
@@ -841,6 +909,10 @@ class LocalBundleSource:
         if not isinstance(raw_metadata, Mapping):
             raise BundleSchemaError(f"{self.run_dir / BUNDLE_METADATA_FILE}: not a JSON object")
         self.metadata = BundleMetadata(raw=raw_metadata, path=self.run_dir / BUNDLE_METADATA_FILE)
+        # The pad convention of the training loss, resolved (and validated) once
+        # at open time so contradictory metadata fails here, not at the first
+        # ``batch_a`` access deep inside a run. See ``BundleMetadata.loss_ignore_index``.
+        self.loss_ignore_index: int | None = self.metadata.loss_ignore_index
         self.layout = ParameterLayout.from_json(self.run_dir / BUNDLE_PARAM_NAMES_FILE)
         self.checkpoints: tuple[LocalBundleCheckpoint, ...] = self._discover(steps)
 
