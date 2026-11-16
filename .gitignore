@@ -52,3 +52,10 @@ examples/olmo_sft_analysis/samples.json
 examples/olmo_sft_analysis/results.parquet
 examples/olmo_sft_analysis/resources.json
 examples/olmo_sft_analysis/mem_profile.md
+
+# DPO spectral-filter example: same policy — commit code + *.png reference
+# figures; selection/telemetry output stays out of version control.
+examples/dpo_spectral_filter/samples.json
+examples/dpo_spectral_filter/results.json
+examples/dpo_spectral_filter/resources.json
+examples/dpo_spectral_filter/logs/

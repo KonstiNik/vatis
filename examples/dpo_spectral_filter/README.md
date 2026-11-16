@@ -199,3 +199,58 @@ the earlier experiment was limited by probe design, not by the method itself.
 - **Disentangling cause and effect.** Can we show that DPO *resolves* the
   tail modes it targets, rather than just operating there? This would require
   tracking $R_{\mathrm{spec}}$ through DPO training itself.
+
+## Experiment setup
+
+A first real-scale (rather than Pythia-toy) measurement of both diagnostics,
+at the two checkpoints Ai2 actually released:
+`allenai/Olmo-3-7B-Instruct-SFT` and `allenai/Olmo-3-7B-Instruct-DPO` (DPO
+continues training from, and uses as its fixed reference policy throughout,
+the SFT checkpoint). Eval data: `allenai/Dolci-Instruct-DPO` preference
+pairs, 10 *code* + 10 *english* pairs (classified by a regex over
+`prompt_id`, the dataset's only field naming the underlying source).
+
+This is two checkpoints, not the full SFT trajectory the "Detection
+strategy" section above assumes — there is no intermediate-SFT-checkpoint
+threshold-crossing to detect here, only a before/after snapshot at the
+actual switch point Ai2 chose. Read the results as: *did $R_{\mathrm{spec}}$
+and $R_{\mathrm{dir}}$, evaluated at the checkpoint where the real pipeline
+switched objectives, look like the hypothesis predicts?* — not as a
+calibration of $\tau_{\mathrm{spec}}$/$\tau_{\mathrm{dir}}$.
+
+**Why a hand-rolled DPO loss path.** Both diagnostics need
+$\nabla_\theta \mathcal{L}_{\mathrm{DPO}}$, but vatis v1's closed-form
+`chi_loss` only supports cross-entropy (see `vatis/core/observables.py`).
+`diagnostics.py` instead builds the DPO loss with vatis's lower-level,
+loss-agnostic primitives directly: `chi_net` (`Tr(J J^T)`) doesn't depend on
+the loss at all, so `vatis.core.chi_net.HutchinsonEstimator` is reused
+unmodified for both the CE batch (`chosen` only) and the DPO batch (`chosen`
++ `rejected` stacked); `chi_loss`/`delta_loss` for the DPO loss are computed
+by plain `autograd.grad` against the logits/parameters instead of the CE
+closed form — the same definitions, just without the softmax-onehot
+shortcut.
+
+**Avoiding two 7B models in memory.** A correct DPO loss needs the frozen
+reference policy's log-probabilities. Since the real reference is the SFT
+checkpoint for *both* evaluations, the SFT pass's own (detached) policy
+log-probabilities are cached and reused as the DPO pass's reference, instead
+of loading the SFT model a second time alongside the DPO model.
+
+**Memory.** Computing $R_{\mathrm{dir}}$ needs two full-size flat gradients
+(CE's and DPO's, ~28 GB each in fp32 at 7B) held long enough for one dot
+product; each is offloaded to host RAM immediately after its own pass so
+they never compete with the chi_net Hutchinson pass's own GPU footprint (see
+`run.sbatch`'s comment for the full accounting, and `cross_grad_storage` in
+`olmo_sft_analysis/README.md` for the analogous pattern elsewhere in this
+repo).
+
+Code: [`prefetch.py`](prefetch.py) (stage 1, online — selects pairs, warms
+the cache), [`diagnostics.py`](diagnostics.py) (stage 2, offline GPU —
+computes $R_{\mathrm{dir}}$/$R_{\mathrm{spec}}$), [`analyze_results.py`](analyze_results.py)
+(stage 3, CPU — tables + plots). Run via:
+
+```bash
+uv pip install --python .venv/bin/python datasets   # prefetch only
+.venv/bin/python examples/dpo_spectral_filter/prefetch.py
+examples/benchmark/submit.sh examples/dpo_spectral_filter/run.sbatch
+```
