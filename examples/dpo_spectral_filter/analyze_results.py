@@ -17,10 +17,16 @@ entire contract with the compute step.
 Run (CPU is fine)::
 
     .venv/bin/python examples/dpo_spectral_filter/analyze_results.py
+
+``--tag X`` reads ``runs/X/results.json`` / ``runs/X/resources.json`` and
+writes the PNGs next to them, matching diagnostics.py's ``--tag`` (so e.g.
+the RewardBench run under ``runs/rewardbench/`` and the Dolci run under
+``runs/dolci/`` keep separate outputs).
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 
@@ -31,8 +37,6 @@ matplotlib.use("Agg")  # headless
 import matplotlib.pyplot as plt  # noqa: E402
 
 _HERE = Path(__file__).resolve()
-RESULTS_PATH = _HERE.parent / "results.json"
-RESOURCES_PATH = _HERE.parent / "resources.json"
 
 REVISIONS = ["sft", "dpo"]
 DOMAINS = ["code", "english"]
@@ -182,16 +186,27 @@ def print_table(by_domain: dict[str, dict[str, dict]]) -> None:
 
 
 def main() -> None:
-    if not RESULTS_PATH.exists():
-        raise SystemExit(f"{RESULTS_PATH} not found — run diagnostics.py first.")
-    by_domain = load_results(RESULTS_PATH)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--tag",
+        default="",
+        help="run name matching diagnostics.py --tag: reads/writes runs/{tag}/.",
+    )
+    args = parser.parse_args()
+    run_dir = _HERE.parent / "runs" / (args.tag or "default")
+    results_path = run_dir / "results.json"
+    resources_path = run_dir / "resources.json"
 
-    plot_r_dir_r_spec(by_domain, _HERE.parent / "r_dir_r_spec.png")
-    plot_chi_pos_breakdown(by_domain, _HERE.parent / "chi_pos_breakdown.png")
+    if not results_path.exists():
+        raise SystemExit(f"{results_path} not found — run diagnostics.py first.")
+    by_domain = load_results(results_path)
+
+    plot_r_dir_r_spec(by_domain, run_dir / "r_dir_r_spec.png")
+    plot_chi_pos_breakdown(by_domain, run_dir / "chi_pos_breakdown.png")
     print_table(by_domain)
 
-    if RESOURCES_PATH.exists():
-        resources = json.loads(RESOURCES_PATH.read_text())
+    if resources_path.exists():
+        resources = json.loads(resources_path.read_text())
         s = resources.get("summary", {})
         print("\n### Resources\n")
         gpu_name = f" ({s.get('gpu_name')})" if s.get("gpu_name") else ""

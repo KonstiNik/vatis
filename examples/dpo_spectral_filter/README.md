@@ -230,6 +230,18 @@ by plain `autograd.grad` against the logits/parameters instead of the CE
 closed form — the same definitions, just without the softmax-onehot
 shortcut.
 
+**DPO loss variant — `dpo_norm` by default.** $R_{\mathrm{dir}}$ and
+$R_{\mathrm{spec}}$ are *sensitive to which DPO variant* the loss uses, because
+both read off the direction/spectral-position of $\nabla\mathcal{L}_{\mathrm{DPO}}$.
+Olmo-3's DPO stage used open-instruct's **length-normalized** `dpo_norm` loss
+(per-sequence log-prob is the per-token *mean*, not the sum — this fights length
+bias), so `diagnostics.py` defaults to `--dpo-norm`; pass `--no-dpo-norm` for the
+vanilla summed-log-prob `dpo` loss. `chi_net` is unaffected either way (it's
+loss-independent). The loss is pinned to open-instruct's reference by
+[`verify_dpo_loss.py`](verify_dpo_loss.py), a dependency-free CPU check that
+asserts our `_logp_from_logits` and `-logsigmoid(margin)` match open-instruct's
+`_get_batch_logps` / `dpo_loss` verbatim for *both* variants.
+
 **Avoiding two 7B models in memory.** A correct DPO loss needs the frozen
 reference policy's log-probabilities. Since the real reference is the SFT
 checkpoint for *both* evaluations, the SFT pass's own (detached) policy
@@ -247,10 +259,31 @@ repo).
 Code: [`prefetch.py`](prefetch.py) (stage 1, online — selects pairs, warms
 the cache), [`diagnostics.py`](diagnostics.py) (stage 2, offline GPU —
 computes $R_{\mathrm{dir}}$/$R_{\mathrm{spec}}$), [`analyze_results.py`](analyze_results.py)
-(stage 3, CPU — tables + plots). Run via:
+(stage 3, CPU — tables + plots), [`analyze_sweep.py`](analyze_sweep.py)
+(stage 3b, CPU — error-scaling figures from the per-probe/per-pair sweep
+records), [`wandb_upload.py`](wandb_upload.py) (optional post-run W&B upload
+from a login node). Run via:
 
 ```bash
 uv pip install --python .venv/bin/python datasets   # prefetch only
-.venv/bin/python examples/dpo_spectral_filter/prefetch.py
-examples/benchmark/submit.sh examples/dpo_spectral_filter/run.sbatch
+.venv/bin/python examples/dpo_spectral_filter/prefetch.py --out examples/dpo_spectral_filter/runs/mytag/samples.json
+examples/benchmark/submit.sh examples/dpo_spectral_filter/run.sbatch --tag mytag
 ```
+
+**Run layout.** Every run lives in its own directory `runs/<tag>/`, named by
+`--tag` (shared by all four stage-2/3 scripts): `samples.json` (stage-1
+output), `results.json` / `sweep.json` / `resources.json` (stage-2 outputs),
+the figures (stage-3 outputs), and `logs/` (SLURM console logs, filed there
+after the job; new jobs land in the top-level `logs/` first because
+`#SBATCH --output` can't see `--tag`). Run outputs are not version-controlled
+(see `.gitignore`); they are regenerable from the scripts.
+
+**SFT-trajectory sweep (Olmo-3-7B-Think).** [`select_think_pairs.py`](select_think_pairs.py)
+selects domain-stratified pairs from `allenai/Dolci-Think-DPO-7B` (equal quota
+per domain by default, `--stratify source` for one pooled group);
+[`run_think.sbatch`](run_think.sbatch) runs `diagnostics.py` on one checkpoint
+of the trajectory (base, intermediate `Olmo-3-7B-Think-SFT` step branches,
+SFT `main`, `Think-DPO`), reporting each domain plus a `pooled` record whose
+gradients are summed across domains; [`analyze_think.py`](analyze_think.py)
+tabulates batch and per-pair $R_{\mathrm{dir}}$/$R_{\mathrm{spec}}$ and the
+cross-pair coherence across tags (`--base-tag` for accuracy vs the base model).

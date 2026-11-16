@@ -8,13 +8,19 @@ a DPO loss on ``(chosen, rejected)`` — evaluated at two checkpoints,
 continues training from the SFT checkpoint, and is also the fixed reference
 policy throughout DPO training).
 
-This streams ``allenai/Dolci-Instruct-DPO`` and selects ``--n-per-batch``
-*code* and ``--n-per-batch`` *english* preference pairs (classified by a regex
-over ``prompt_id``, the only field that names the underlying source dataset)
-whose prompt is short enough to leave room for both completions after
-truncation to ``--seq-len``. Raw ``chosen``/``rejected`` message lists are
-written to ``samples.json``; both checkpoints' weights are warmed into the HF
-cache.
+By default this streams ``allenai/reward-bench`` — a HELD-OUT reward-model eval
+set that Olmo-3's DPO stage did *not* train on, so both checkpoints see it as
+unseen (unlike ``allenai/Dolci-Instruct-DPO``, which *is* the DPO training data;
+still selectable via ``--dataset`` for the seen-vs-unseen ablation). It selects
+``--n-per-batch`` *code* and ``--n-per-batch`` *english* preference pairs
+(RewardBench: ``hep-*`` HumanEvalPack → code, ``alpacaeval``/``mt-bench`` chat →
+english, via the ``subset`` column; Dolci: a regex over ``prompt_id``) whose
+prompt is short enough to leave room for both completions after truncation to
+``--seq-len``. RewardBench's single-turn string rows are wrapped into the
+user/assistant message-list shape (see ``normalize_pair``) that the Olmo chat
+template and downstream tokenizer expect. Selected ``chosen``/``rejected``
+message lists are written to ``samples.json``; both checkpoints' weights are
+warmed into the HF cache.
 
 Needs ``datasets`` (not a vatis dependency; install into the venv just for
 this step)::
@@ -59,22 +65,50 @@ from _helpers import sft_prompt_completion_lengths  # noqa: E402
 
 SFT_MODEL = "allenai/Olmo-3-7B-Instruct-SFT"
 DPO_MODEL = "allenai/Olmo-3-7B-Instruct-DPO"
-DATASET = "allenai/Dolci-Instruct-DPO"
-SPLIT = "train"
-OUT_PATH = _HERE.parent / "samples.json"
+# Default to allenai/reward-bench: a HELD-OUT reward-model eval set (disjoint
+# from Olmo-3's DPO training mix by construction), so BOTH checkpoints see it as
+# unseen. allenai/Dolci-Instruct-DPO is *the* DPO training data (260k pairs, one
+# `train` split, no holdout) — evaluating the DPO checkpoint on it confounds
+# "objective geometry changed" with "model memorized these exact pairs". Still
+# selectable via --dataset for the truncation/seen-vs-unseen ablation.
+DATASET = "allenai/reward-bench"
+OUT_PATH = _HERE.parent / "runs" / "default" / "samples.json"
 
-# allenai/Dolci-Instruct-DPO has no clean domain column; `prompt_id` embeds the
-# underlying source-dataset slug (e.g. "correct-python-sft-187k-request-...",
-# "valpy_if_qwq_reasoning_verified-...") — the same code/english contrast used
-# in olmo_sft_analysis, ported to this dataset's naming.
-CODE_RE = re.compile(r"(correct-python-sft|codealpaca|persona.*python)", re.IGNORECASE)
-ENGLISH_RE = re.compile(r"(valpy_if|flan_v2|coconot)", re.IGNORECASE)
+# --- domain classification, per dataset ---------------------------------------
+# Dolci has no domain column; `prompt_id` embeds the source-dataset slug
+# (e.g. "correct-python-sft-187k-request-...", "valpy_if_...").
+DOLCI_CODE_RE = re.compile(r"(correct-python-sft|codealpaca|persona.*python)", re.IGNORECASE)
+DOLCI_ENGLISH_RE = re.compile(r"(valpy_if|flan_v2|coconot)", re.IGNORECASE)
+# RewardBench names its source in the `subset` column: HumanEvalPack (hep-*) is
+# code (all six languages — correct vs subtly-buggy solutions); the english side
+# takes every chat-domain subset (AlpacaEval easy/length/hard, MT-Bench, LLMBar
+# natural + adversarial) to maximize pair count. Per-pair provenance is kept in
+# prompt_id ("subset::id"), so downstream analysis can slice by subset.
+RB_CODE_RE = re.compile(r"^hep-", re.IGNORECASE)
+RB_ENGLISH_RE = re.compile(r"^(alpacaeval|mt-bench|llmbar)", re.IGNORECASE)
 
 
-def classify(prompt_id: str) -> str | None:
-    if CODE_RE.search(prompt_id or ""):
+def _is_reward_bench(dataset: str) -> bool:
+    return "reward-bench" in dataset
+
+
+def default_split(dataset: str) -> str:
+    # RewardBench ships "raw" and the leaderboard-curated "filtered"; use filtered.
+    return "filtered" if _is_reward_bench(dataset) else "train"
+
+
+def code_english_res(dataset: str) -> tuple[re.Pattern[str], re.Pattern[str]]:
+    if _is_reward_bench(dataset):
+        return RB_CODE_RE, RB_ENGLISH_RE
+    return DOLCI_CODE_RE, DOLCI_ENGLISH_RE
+
+
+def classify(ex: dict, dataset: str) -> str | None:
+    code_re, english_re = code_english_res(dataset)
+    key = (ex.get("subset") if _is_reward_bench(dataset) else ex.get("prompt_id")) or ""
+    if code_re.search(key):
         return "code"
-    if ENGLISH_RE.search(prompt_id or ""):
+    if english_re.search(key):
         return "english"
     return None
 
@@ -83,13 +117,46 @@ def _last_assistant_ok(messages: list[dict]) -> bool:
     return bool(messages) and messages[-1].get("role") == "assistant"
 
 
+def normalize_pair(ex: dict, dataset: str) -> tuple[str, list, list] | None:
+    """Return ``(prompt_id, chosen_messages, rejected_messages)`` or None to skip.
+
+    RewardBench rows are single-turn *plain strings* (``prompt``/``chosen``/
+    ``rejected``); wrap them into the user/assistant message-list shape the rest
+    of the pipeline (and the Olmo chat template) expects — matching Dolci's
+    native format, which is already message lists.
+    """
+    if _is_reward_bench(dataset):
+        prompt, chosen, rejected = ex.get("prompt"), ex.get("chosen"), ex.get("rejected")
+        if not all(isinstance(s, str) and s for s in (prompt, chosen, rejected)):
+            return None
+        pid = f"{ex.get('subset', '?')}::{ex.get('id', '?')}"
+        chosen_msgs = [
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": chosen},
+        ]
+        rejected_msgs = [
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": rejected},
+        ]
+        return pid, chosen_msgs, rejected_msgs
+    chosen, rejected = ex.get("chosen"), ex.get("rejected")
+    if not (_last_assistant_ok(chosen) and _last_assistant_ok(rejected)):
+        return None
+    return ex.get("prompt_id", "") or "", chosen, rejected
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sft-model", default=SFT_MODEL)
     parser.add_argument("--dpo-model", default=DPO_MODEL)
     parser.add_argument("--dataset", default=DATASET)
+    parser.add_argument(
+        "--split",
+        default=None,
+        help="dataset split (default: 'filtered' for reward-bench, else 'train').",
+    )
     parser.add_argument("--n-per-batch", type=int, default=10)
-    parser.add_argument("--seq-len", type=int, default=1024)
+    parser.add_argument("--seq-len", type=int, default=2048)
     parser.add_argument(
         "--max-prompt-frac",
         type=float,
@@ -127,7 +194,8 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(args.sft_model)
     max_prompt = int(args.max_prompt_frac * args.seq_len)
 
-    ds = load_dataset(args.dataset, split=SPLIT, streaming=True)
+    split = args.split or default_split(args.dataset)
+    ds = load_dataset(args.dataset, split=split, streaming=True)
     pairs: dict[str, list[dict]] = {"code": [], "english": []}
     selected_meta: dict[str, list[dict]] = {"code": [], "english": []}
     n_scanned = 0
@@ -136,12 +204,13 @@ def main() -> None:
         n_scanned += 1
         if n_scanned > args.scan_limit:
             break
-        kind = classify(ex.get("prompt_id", ""))
+        kind = classify(ex, args.dataset)
         if kind is None or len(pairs[kind]) >= args.n_per_batch:
             continue
-        chosen, rejected = ex["chosen"], ex["rejected"]
-        if not (_last_assistant_ok(chosen) and _last_assistant_ok(rejected)):
+        normalized = normalize_pair(ex, args.dataset)
+        if normalized is None:
             continue
+        prompt_id, chosen, rejected = normalized
         # chosen/rejected share the same prompt prefix; require both completions
         # to leave real tokens after truncation to seq_len.
         try:
@@ -159,14 +228,14 @@ def main() -> None:
 
         pairs[kind].append(
             {
-                "prompt_id": ex.get("prompt_id"),
+                "prompt_id": prompt_id,
                 "chosen": chosen,
                 "rejected": rejected,
             }
         )
         selected_meta[kind].append(
             {
-                "prompt_id": ex.get("prompt_id"),
+                "prompt_id": prompt_id,
                 "chosen_model": ex.get("chosen_model"),
                 "rejected_model": ex.get("rejected_model"),
                 "prompt_len_chosen": prompt_len_w,
@@ -193,12 +262,12 @@ def main() -> None:
             "sft_model": args.sft_model,
             "dpo_model": args.dpo_model,
             "dataset": args.dataset,
-            "split": SPLIT,
+            "split": split,
             "seq_len_target": args.seq_len,
             "n_per_batch": args.n_per_batch,
             "max_prompt_frac": args.max_prompt_frac,
-            "code_regex": CODE_RE.pattern,
-            "english_regex": ENGLISH_RE.pattern,
+            "code_regex": code_english_res(args.dataset)[0].pattern,
+            "english_regex": code_english_res(args.dataset)[1].pattern,
             "n_rows_scanned": n_scanned,
             "selected": selected_meta,
         },

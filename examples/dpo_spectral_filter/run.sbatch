@@ -6,14 +6,14 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=6
 #SBATCH --mem=188000M
-#SBATCH --time=01:30:00
+#SBATCH --time=20:00:00
 #SBATCH --output=examples/dpo_spectral_filter/logs/dpo_spectral_filter_%j.log
 
 set -euo pipefail
 
 # IMPORTANT: run prefetch.py on a LOGIN node first (it needs internet) so both
-# checkpoints' weights are in the HF cache and samples.json exists. This job
-# runs OFFLINE — see this example's README.
+# checkpoints' weights are in the HF cache and runs/{tag}/samples.json exists.
+# This job runs OFFLINE — see this example's README.
 #
 # Submit from the repo root via the wrapper that pulls SBATCH_* from .env:
 #   examples/benchmark/submit.sh examples/dpo_spectral_filter/run.sbatch
@@ -27,20 +27,20 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 echo "node: $(hostname)"
 nvidia-smi -L
 
-# Memory profile differs from olmo_sft_analysis: instead of one cached
-# parameter-space gradient for the cross pair, diagnostics.py builds TWO
-# full-size (7B, fp32, ~28 GB) flat-grad buffers per checkpoint — one for the
-# CE loss, one for the DPO loss — to compute R_dir's cosine. Each is offloaded
-# to host RAM immediately after its own pass (see diagnostics.py's `ce_pass`/
-# `dpo_pass`), so they never both sit on the GPU; the chi_net Hutchinson pass
-# (per olmo_sft_analysis: ~75-84 GB peak at 7B) then runs with that headroom
-# back. --mem is 188000M: the two ~29 GB fp32 host-RAM grad buffers are held
-# simultaneously for the final dot product (~58 GB), and from_pretrained's
-# transient staging during load spikes well above that — 128G OOM-killed
-# job 3686474 at ~6 min. 188000M is the per-GPU ceiling Capella allows for
-# non-exclusive (single-GPU) jobs; that is the headroom we take.
-"$REPO"/.venv/bin/python -u examples/dpo_spectral_filter/diagnostics.py \
-    --n-hutchinson 32 "$@"
+# Memory profile (chunked grad passes, see diagnostics.py `grad_passes`):
+# GPU peak is the DPO chunk pass — one ~28 GB fp32 flat chunk-gradient +
+# bf16 model (~14 GB) + both retained seq graphs (~25 GB at S=1024) ≈ 80 GB,
+# the same profile job 3688580 survived at seq_len 1024. Do NOT raise
+# --seq-len past 1024 in this configuration: job 3705072 OOM'd at 2048.
+# HOST RAM peak is the two running ~28 GB fp32 flat-grad accumulators plus
+# one ~28 GB incoming chunk (~84 GB), plus from_pretrained's transient
+# staging during load — 128G OOM-killed job 3686474 at ~6 min. 188000M is
+# the per-GPU ceiling Capella allows for non-exclusive (single-GPU) jobs.
+#
+# n_hutchinson / boost / snapshots come from diagnostics.py defaults
+# (8 base + 64 on the first 20 pairs; snapshots at 10,40,160,640,B);
+# override per-submit via "$@".
+"$REPO"/.venv/bin/python -u examples/dpo_spectral_filter/diagnostics.py "$@"
 
 # Plots + tables (CPU-only; safe to run here or later on a login node).
 # analyze_results.py needs matplotlib (the `examples` extra), which a bare
@@ -49,4 +49,15 @@ nvidia-smi -L
 # (offline-safe: a no-op once the extra is already installed).
 "$REPO"/.venv/bin/python -c "import matplotlib" 2>/dev/null \
     || uv pip install --python "$REPO"/.venv/bin/python matplotlib
-"$REPO"/.venv/bin/python examples/dpo_spectral_filter/analyze_results.py
+
+# Mirror diagnostics.py's --tag (if any) so the analysis reads the right
+# runs/{tag}/ directory.
+TAG=""
+prev=""
+for a in "$@"; do
+    if [ "$prev" = "--tag" ]; then TAG="$a"; fi
+    prev="$a"
+done
+"$REPO"/.venv/bin/python examples/dpo_spectral_filter/analyze_results.py ${TAG:+--tag "$TAG"}
+# Error-scaling figures from the per-probe/per-pair sweep records.
+"$REPO"/.venv/bin/python examples/dpo_spectral_filter/analyze_sweep.py ${TAG:+--tag "$TAG"}
