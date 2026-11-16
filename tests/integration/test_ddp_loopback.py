@@ -35,6 +35,8 @@ per-rank valid-token counts differ.
 The ``*_capped`` rows have their own pinned-probe test, because the ``P`` of the
 test above has no ceiling and therefore no capped rows: with it, dropping the
 all-reduce of ``chi_net_P_capped`` changed nothing any tier asserts.
+``test_ddp_shipped_rng_capped_row_equals_the_per_rank_streams`` adds the same row
+under the shipped RNG, against the per-rank streams.
 
 The multi-GPU path remains unvalidated: this is a CPU gloo loopback
 (``CUDA_VISIBLE_DEVICES=""``), because NCCL wants one device per rank.
@@ -325,6 +327,47 @@ def _toy_bundle(seed: int) -> tuple[ModelBundle, Preconditioner]:
     return bundle, precond
 
 
+def _sum_over_rank_streams(
+    bundle: ModelBundle,
+    precond: Preconditioner,
+    batch: dict[str, torch.Tensor],
+    *,
+    method: str,
+    n_h: int,
+    call_seed: int,
+    world_size: int,
+) -> dict[str, float]:
+    """What the all-reduce must return for the probe-dependent traces.
+
+    The estimator on each rank's shard, with a generator seeded
+    ``_rank_probe_seed(call_seed, rank)``, summed over the ranks: ``chi_net``,
+    ``chi_net_P`` and, for a ``P`` with a ceiling, ``chi_net_P_capped``.
+    """
+    estimator = build_estimator(method, n_hutchinson=n_h, distribution="rademacher")
+    total: dict[str, float] = {}
+    for rank in range(world_size):
+        shard, _, _ = shard_batch(batch, rank=rank, world_size=world_size)
+        gen = torch.Generator().manual_seed(analyzer_mod._rank_probe_seed(call_seed, rank))
+        result = estimator.compute(
+            bundle.model,
+            shard,
+            bundle.forward_fn,
+            loss_fn=bundle.loss_fn,
+            valid_mask_fn=causal_lm_valid_mask,
+            params=bundle.params,
+            micro_batch_size=1,
+            generator=gen,
+            preconditioner=precond,
+        )
+        assert result.chi_net_p is not None
+        parts = {"chi_net": result.chi_net, "chi_net_P": result.chi_net_p}
+        if result.chi_net_p_capped is not None:
+            parts["chi_net_P_capped"] = result.chi_net_p_capped
+        for name, value in parts.items():
+            total[name] = total.get(name, 0.0) + float(value.to(dtype=torch.float64))
+    return total
+
+
 @pytest.mark.parametrize("method", ["hutchinson", "per_sequence_cv"])
 def test_ddp_ranks_do_not_replay_one_probe_stream(tmp_path: Path, method: str) -> None:
     """Two ranks holding the same samples must not return the same number twice.
@@ -391,25 +434,10 @@ def test_ddp_shipped_rng_equals_the_per_rank_streams(
     for rank, rows in enumerate(rank_rows):
         assert rows, rank
         assert {r["hutchinson_seed"] for r in rows} == {call_seed}, (rank, call_seed)
-    estimator = build_estimator(method, n_hutchinson=n_h, distribution="rademacher")
-    expected = {"chi_net": 0.0, "chi_net_P": 0.0}
-    for rank in range(world_size):
-        shard, _, _ = shard_batch(batch, rank=rank, world_size=world_size)
-        gen = torch.Generator().manual_seed(analyzer_mod._rank_probe_seed(call_seed, rank))
-        result = estimator.compute(
-            bundle.model,
-            shard,
-            bundle.forward_fn,
-            loss_fn=bundle.loss_fn,
-            valid_mask_fn=causal_lm_valid_mask,
-            params=bundle.params,
-            micro_batch_size=1,
-            generator=gen,
-            preconditioner=precond,
-        )
-        assert result.chi_net_p is not None
-        expected["chi_net"] += float(result.chi_net.to(dtype=torch.float64))
-        expected["chi_net_P"] += float(result.chi_net_p.to(dtype=torch.float64))
+    expected = _sum_over_rank_streams(
+        bundle, precond, batch, method=method, n_h=n_h, call_seed=call_seed, world_size=world_size
+    )
+    assert set(expected) == {"chi_net", "chi_net_P"}  # this P has no ceiling
     expected["chi_pos"] = float(chi_pos(ddp["delta_loss"], ddp["chi_loss"], expected["chi_net"]))
     expected["chi_pos_P"] = float(
         chi_pos(ddp["delta_loss_P"], ddp["chi_loss"], expected["chi_net_P"])
@@ -417,3 +445,46 @@ def test_ddp_shipped_rng_equals_the_per_rank_streams(
     for observable, want in expected.items():
         rel = abs(ddp[observable] - want) / abs(want)
         assert rel < DDP_REL, (method, batch_size, observable, ddp[observable], want, rel)
+
+
+@pytest.mark.parametrize("method", ["hutchinson", "per_sequence_cv"])
+def test_ddp_shipped_rng_capped_row_equals_the_per_rank_streams(
+    tmp_path: Path, method: str
+) -> None:
+    """The same contract for a ``P`` with a ceiling: ``chi_net_P_capped`` too.
+
+    ``chi_net_P_capped`` is a per-rank partial drawn from the same probes as
+    ``chi_net`` and ``chi_net_P``, so with the shipped RNG it must be the sum of
+    the per-rank capped parts on the per-rank streams. The pinned-probe test
+    above cannot see which stream a rank draws from (it replaces the probes);
+    this one does, on the uneven split (batch 5: shards of 3 and 2).
+    """
+    world_size, n_h, batch_size = 2, 8, 5
+    rank_rows = _run_ddp_rows(
+        tmp_path / f"ddp_rng_capped_{method}.json",
+        seed=0,
+        batch_size=batch_size,
+        n_h=n_h,
+        method=method,
+        preconditioner=True,
+        ceiling=True,
+    )
+    ddp = {r["observable"]: r["value"] for r in rank_rows[0]}
+    bundle, _ = _toy_bundle(0)
+    precond = ceiling_preconditioner(sum(p.numel() for p in bundle.params))
+    batch = make_tiny_lm_batch(batch_size=batch_size, seed=0, pad_fraction=0.25, device="cpu")
+    call_seed = analyzer_mod._per_call_seed(0, "toy@step0", "val")
+    for rank, rows in enumerate(rank_rows):
+        assert rows, rank
+        assert {r["hutchinson_seed"] for r in rows} == {call_seed}, (rank, call_seed)
+    expected = _sum_over_rank_streams(
+        bundle, precond, batch, method=method, n_h=n_h, call_seed=call_seed, world_size=world_size
+    )
+    assert set(expected) == {"chi_net", "chi_net_P", "chi_net_P_capped"}
+    # vacuity guard, as in the pinned-probe test: the capped part is a real share.
+    assert (
+        0.05 * expected["chi_net_P"] < expected["chi_net_P_capped"] < 0.95 * expected["chi_net_P"]
+    )
+    for observable, want in expected.items():
+        rel = abs(ddp[observable] - want) / abs(want)
+        assert rel < DDP_REL, (method, observable, ddp[observable], want, rel)
