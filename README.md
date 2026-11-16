@@ -134,11 +134,11 @@ An optimizer with update `Δθ = −η P ∇L` trains on the effective kernel
 measures the LNP triple on that kernel too, in the same pass and with no extra
 backward:
 
-| observable     | symbol               | meaning |
-|----------------|----------------------|---------|
-| `delta_loss_P` | ∇_θ Lᴮ · P ∇_θ Lᴬ    | preconditioned gradient alignment |
-| `chi_net_P`    | Tr(J P Jᵀ)           | trace of the effective kernel |
-| `chi_pos_P`    | δLᴾ/(χ_loss·χ_netᴾ)  | spectral position on the preconditioned kernel |
+| observable     | symbol                | meaning |
+|----------------|-----------------------|---------|
+| `delta_loss_P` | ∇_θ Lᴮ · P ∇_θ Lᴬ     | preconditioned gradient alignment |
+| `chi_net_P`    | Tr(J P Jᵀ)            | trace of the effective kernel |
+| `chi_pos_P`    | δL^P/(χ_loss·χ_net^P) | spectral position on the preconditioned kernel |
 
 ```python
 from vatis import Analyzer, load_local_bundle
@@ -155,7 +155,16 @@ analyzer.run(source.model_specs())
 
 `preconditioner` also accepts `"identity"` or any diagonal you build yourself
 (`Preconditioner.from_diagonal(vector)`), which works with HF checkpoints as
-well. Without the argument nothing changes: no P rows, no extra cost.
+well. The vector must be in the order of the gradient vatis flattens: the
+concatenation of `ModelBundle.params`, each tensor flattened in its own
+(row-major) order. For the hub loader that is `model.parameters()` order, in
+which tied weights appear once; for a bundle it is `param_names.json` order.
+
+Without the argument there are no P rows and no extra cost. One thing does
+differ from earlier releases either way: for a given `seed`, `chi_net` and
+`chi_pos` with the default Rademacher probes come out as a different draw,
+because the Hutchinson probes are now drawn differently (see the
+[changelog](CHANGELOG.md)). `chi_loss` and `delta_loss` are unchanged.
 
 Three things to know before using it:
 

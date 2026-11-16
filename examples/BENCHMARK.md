@@ -270,6 +270,17 @@ Three things worth knowing, all visible in that table:
 
 ### Outputs (under `examples/output/`)
 
+**These files are from 28–29 July 2026 and do not show everything the current
+code writes.** They were last regenerated on 29 July 2026, together with the
+change to the bit-packed CPU probe draw, and predate the `*_capped` rows and
+the later fixes on this branch: `results.parquet` has no
+`delta_loss_P_capped` / `chi_net_P_capped` rows, and the timing table is that
+state's. The values that are there still hold — a CPU re-run of the step-0 and
+step-1 checkpoints (batches `A1` and `B`) with the current code reproduced
+every committed row, `chi_net` and `chi_net_P` included, to better than 1e-6
+relative with the same seeds. The files will be regenerated with the final
+code.
+
 - `results.parquet` — 840 rows: 19 checkpoints × (3 self + 2 cross pairs) ×
   the raw and P observables, in the canonical long format.
 - `run_summary.json` — everything the parquet has no column for: per-checkpoint

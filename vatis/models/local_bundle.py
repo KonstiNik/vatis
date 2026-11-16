@@ -97,6 +97,11 @@ CHECKPOINT_OPTIM_FILE = "optim.pt"
 # ``Preconditioner.adamw`` assumes. Adam and AdamW differ only in how weight
 # decay enters, which P excludes anyway.
 _ADAM_FAMILY = frozenset({"adam", "adamw"})
+# Hyper-parameter keys that identify a ``torch.optim.Adam`` / ``AdamW`` param
+# group. ``betas`` alone does not: RAdam, NAdam, Adamax and SparseAdam groups
+# carry it too, and their updates are not ``m_hat / (sqrt(v_hat) + eps)``.
+# ``amsgrad`` is the key only Adam and AdamW groups have.
+_ADAM_GROUP_KEYS = frozenset({"betas", "amsgrad"})
 # Hyper-parameter keys every ``torch.optim.SGD`` param group carries and no
 # Adam-family or RMSprop group does (RMSprop has ``momentum`` but neither
 # ``dampening`` nor ``nesterov``).
@@ -109,6 +114,9 @@ _PAD_KEYS_REMEDY = (
     "run did; if that is not known, each checkpoint's recorded train_loss decides it -- "
     "see docs/SPEC.md, 'Native checkpoint bundles', 'Repairing contradictory pad fields'."
 )
+# What a P source does when a checkpoint's directory step differs from the step
+# counter of its saved optimizer state.
+_STEP_MISMATCH_POLICIES = ("raise", "warn")
 CHECKPOINT_BATCH_A_FILE = "batch_a.npy"
 CHECKPOINT_META_FILE = "meta.json"
 
@@ -167,13 +175,20 @@ class BundleMetadata:
     def optimizer_name(self) -> str | None:
         """Optimizer type: ``optimizer_name`` | ``optimizer_type`` | ``optimizer``.
 
-        If ``optimizer`` is a dict, its ``name``/``type`` entry is used.
+        If ``optimizer`` is a dict, its ``name``/``type`` entry is used. When
+        none of these yields a name, ``optimizer_class`` is read (the class
+        name a writer records, e.g. ``"AdamW"``; a dotted path such as
+        ``"torch.optim.adamw.AdamW"`` is reduced to its last component).
         """
         value = self._first("optimizer_name", "optimizer_type", "optimizer")
         if isinstance(value, Mapping):
-            inner = value.get("name", value.get("type"))
-            return str(inner) if inner is not None else None
-        return str(value) if value is not None else None
+            value = value.get("name", value.get("type"))
+        if value is not None:
+            return str(value)
+        recorded_class = self.raw.get("optimizer_class")
+        if recorded_class is None:
+            return None
+        return str(recorded_class).rpartition(".")[2]
 
     @property
     def optimizer_hparams(self) -> Mapping[str, Any] | None:
@@ -756,14 +771,17 @@ class LocalBundleCheckpoint:
 
     @property
     def optimizer_state(self) -> OptimizerStateView:
-        """The pre-step optimizer state, aligned to the canonical order."""
+        """The pre-step optimizer state, aligned to the canonical order.
+
+        Loaded on the **CPU** whatever the source's ``device`` is: the state is
+        two parameter-sized vectors (``exp_avg``, ``exp_avg_sq``) that only
+        serve to build ``P``, and on a GPU source they would sit next to the
+        model for nothing. :meth:`OptimizerStateView.flat_state` takes a
+        ``device=`` for a caller that wants a vector elsewhere.
+        """
         if self._optimizer_state is None:
             path = self.path / CHECKPOINT_OPTIM_FILE
-            raw = torch.load(
-                path,
-                map_location=self._source.device,
-                weights_only=True,
-            )
+            raw = torch.load(path, map_location="cpu", weights_only=True)
             if not isinstance(raw, Mapping):
                 raise BundleSchemaError(f"{path}: not an optimizer state_dict")
             self._optimizer_state = OptimizerStateView(raw, self._source.layout, source=str(path))
@@ -1083,6 +1101,7 @@ class LocalBundleSource:
         beta2: float | None = None,
         eps: float | None = None,
         descriptor: str = "adamw",
+        on_step_mismatch: str = "raise",
     ) -> Callable[[str], Preconditioner | None]:
         """The ``adamw`` P source, as a per-checkpoint factory for the analyzer.
 
@@ -1117,16 +1136,42 @@ class LocalBundleSource:
         A bundle written by ``torch.optim.SGD`` is refused here with that reason
         (its saved ``param_groups`` identify it even at step 0, where every
         optimizer's state is empty); use :meth:`preconditioner`, which handles
-        both optimizers.
+        both optimizers. A state written by any optimizer other than
+        ``torch.optim.Adam`` / ``AdamW`` is refused as well, at every step and
+        whether or not ``metadata.json`` names the optimizer: RAdam, NAdam and
+        Adamax also save ``betas`` and an ``exp_avg_sq``, but their param groups
+        lack the ``amsgrad`` key every Adam / AdamW group has.
+
+        Param groups that disagree on ``lr`` are refused at every checkpoint
+        (see :func:`adamw_preconditioner_from_state`); a ``beta2`` / ``eps``
+        override does not change that.
+
+        The optimizer state is read on the CPU; the returned ``P`` is on the
+        source's ``device``.
+
+        Args:
+            beta2: override for Adam's second-moment decay.
+            eps: override for Adam's epsilon.
+            descriptor: the parquet descriptor of the resulting rows.
+            on_step_mismatch: what to do when the saved optimizer state's own
+                step counter differs from the checkpoint directory's step.
+                Under pre-step semantics the two are the same number, so a
+                difference means the optimizer state and the weights may not
+                belong together. ``"raise"`` (default) raises
+                :class:`BundleSchemaError`; ``"warn"`` emits a ``UserWarning``
+                and builds ``P`` from the saved state's own counter — for a
+                bundle whose step was merely stored wrongly.
 
         Returns:
             ``fn(checkpoint_id) -> Preconditioner | None``.
         """
+        _check_step_mismatch_policy(on_step_mismatch)
 
         def build(checkpoint_id: str) -> Preconditioner | None:
             checkpoint = self.checkpoint_for(checkpoint_id)
             state = checkpoint.optimizer_state
-            if _optimizer_family(state) == "sgd":
+            family = _optimizer_family(state)
+            if family == "sgd":
                 raise BundleSchemaError(
                     f"{checkpoint.identifier}: the saved param_groups are those of an SGD "
                     "optimizer, which has no second moment and hence no AdamW "
@@ -1135,6 +1180,14 @@ class LocalBundleSource:
                     "preconditioner=None for the raw rows only."
                 )
             if state.is_empty:
+                if family != "adam":
+                    # The groups identify the optimizer even without any state, so
+                    # a non-Adam bundle is refused at step 0 as well, not skipped
+                    # there and refused one checkpoint later.
+                    raise BundleSchemaError(_not_adam_message(state, checkpoint.identifier))
+                # Likewise for per-group learning rates: the groups are saved at
+                # step 0 too.
+                _refuse_per_group_lr(state, checkpoint.identifier)
                 warnings.warn(
                     f"{checkpoint.identifier}: the saved optimizer state is empty "
                     f"({checkpoint.path / CHECKPOINT_OPTIM_FILE}), which is what a step-0 "
@@ -1148,12 +1201,21 @@ class LocalBundleSource:
                 )
                 return None
             if state.step_count is not None and state.step_count != checkpoint.step:
-                warnings.warn(
+                mismatch = (
                     f"{checkpoint.identifier}: the saved optimizer state has applied "
                     f"{state.step_count} update(s), but the checkpoint directory says step "
                     f"{checkpoint.step}. Under pre-step semantics the two are the same "
                     "number; a mismatch means the optimizer state and the weights may not "
-                    "belong together. P is built from the saved state's own counter.",
+                    "belong together."
+                )
+                if on_step_mismatch == "raise":
+                    raise BundleSchemaError(
+                        f"{mismatch} Refusing to build P from it. If only the step was "
+                        'stored wrongly, pass on_step_mismatch="warn" to build P from the '
+                        "saved state's own counter."
+                    )
+                warnings.warn(
+                    f"{mismatch} P is built from the saved state's own counter.",
                     UserWarning,
                     stacklevel=2,
                 )
@@ -1169,7 +1231,9 @@ class LocalBundleSource:
             # here keeps two parameter-sized vectors (exp_avg, exp_avg_sq) from
             # staying resident for the whole checkpoint; a later access reloads it.
             checkpoint.release_optimizer_state()
-            return precond
+            # The state was read and P was built on the CPU; only the finished P
+            # goes to the source's device.
+            return precond.to(device=self.device)
 
         return build
 
@@ -1178,6 +1242,7 @@ class LocalBundleSource:
         *,
         beta2: float | None = None,
         eps: float | None = None,
+        on_step_mismatch: str = "raise",
     ) -> Callable[[str], Preconditioner | None]:
         """The saved optimizer's geometry factor, whichever optimizer wrote the bundle.
 
@@ -1200,8 +1265,17 @@ class LocalBundleSource:
 
         Any other optimizer is refused. ``beta2`` / ``eps`` are AdamW overrides
         and are refused for an SGD bundle.
+
+        Param groups that disagree on ``lr`` are refused for both optimizers:
+        ``P`` leaves the learning rate out, which is only sound when every
+        parameter has the same one. With per-group rates neither the AdamW
+        ``P`` nor SGD's ``P = I`` is the optimizer's geometry.
+
+        ``on_step_mismatch`` is passed to :meth:`adamw_preconditioner` (default
+        ``"raise"``). An SGD state has no step counter to compare with the
+        directory step, so it has no effect on an SGD bundle.
         """
-        adamw = self.adamw_preconditioner(beta2=beta2, eps=eps)
+        adamw = self.adamw_preconditioner(beta2=beta2, eps=eps, on_step_mismatch=on_step_mismatch)
 
         def build(checkpoint_id: str) -> Preconditioner | None:
             checkpoint = self.checkpoint_for(checkpoint_id)
@@ -1221,6 +1295,9 @@ class LocalBundleSource:
                         f"{checkpoint.identifier}: beta2 / eps are AdamW overrides, but this "
                         "bundle was written by SGD, whose geometry factor is P = I."
                     )
+                _refuse_per_group_lr(
+                    checkpoint.optimizer_state, checkpoint.identifier, optimizer="SGD"
+                )
                 checkpoint.release_optimizer_state()
                 return Preconditioner.identity(
                     self.layout.total_numel, device=self.device, descriptor=SGD_DESCRIPTOR
@@ -1287,8 +1364,15 @@ def load_local_bundle(
             training stack lives in that project (or in tests), never here.
         dtype: dtype the weights are loaded *as*. Default ``"fp32"``: bundle
             weights are bf16 on disk and the analysis math wants fp32, so the
-            upcast happens on load (lossless).
-        device: device for the model, optimizer state and batches.
+            upcast happens on load. The upcast itself adds no error, but it
+            does not undo the rounding that writing bf16 applied: the loaded
+            values are the run's ``theta_t`` rounded to bf16, not ``theta_t``
+            (see ``docs/SPEC.md`` §"Native checkpoint bundles" for what that
+            does to single-step comparisons).
+        device: device for the model and the batches, and for the ``P`` the
+            preconditioner factories return. The optimizer state itself is
+            read and kept on the CPU (see
+            :attr:`LocalBundleCheckpoint.optimizer_state`).
         steps: optional subset of steps to expose, in any order (the source
             always iterates ascending). Unknown steps raise.
         forward_fn / loss_fn / valid_mask_fn: override the defaults
@@ -1321,15 +1405,88 @@ def _optimizer_family(state: OptimizerStateView) -> str | None:
     The per-parameter state cannot answer this: it is empty at step 0 for every
     optimizer, and at every step for SGD without momentum. The hyper-parameter
     keys of the groups are always saved and differ by optimizer class.
+
+    ``"adam"`` means ``torch.optim.Adam`` or ``AdamW`` and nothing else: the
+    groups must carry ``amsgrad`` next to ``betas`` (:data:`_ADAM_GROUP_KEYS`).
+    RAdam, NAdam, Adamax and SparseAdam groups have ``betas`` but no
+    ``amsgrad`` and come back as ``None``.
     """
     groups = state.param_groups
     if not groups:
         return None
-    if all("betas" in group for group in groups):
+    if all(group.keys() >= _ADAM_GROUP_KEYS for group in groups):
         return "adam"
     if all(group.keys() >= _SGD_GROUP_KEYS and "betas" not in group for group in groups):
         return "sgd"
     return None
+
+
+def _check_step_mismatch_policy(on_step_mismatch: str) -> None:
+    if on_step_mismatch not in _STEP_MISMATCH_POLICIES:
+        raise ValueError(
+            f"on_step_mismatch must be one of {list(_STEP_MISMATCH_POLICIES)}, "
+            f"got {on_step_mismatch!r}"
+        )
+
+
+def _rate_key(rate: Any) -> Any:
+    """A learning rate as a comparable value (``1`` and ``1.0`` are the same rate)."""
+    try:
+        return float(rate)
+    except (TypeError, ValueError):
+        return repr(rate)
+
+
+def _refuse_per_group_lr(
+    state: OptimizerStateView, context: str, *, optimizer: str = "AdamW"
+) -> None:
+    """Raise unless every saved param group has the same learning rate.
+
+    ``P`` deliberately leaves the learning rate out: for one rate ``eta`` it is
+    a common factor, ``dtheta = -eta * P grad L``, and ``chi_pos_P`` does not
+    depend on it. With per-group rates the update is ``-eta_g * P grad L`` on
+    group ``g``, so the rates are part of the geometry and the documented ``P``
+    (or ``P = I`` for SGD) is not the optimizer's.
+
+    The saved ``lr`` is the scheduled value at that checkpoint. Groups that
+    share one schedule agree on it at every checkpoint, so the saved values are
+    compared as they are.
+    """
+    rates = [group.get("lr") for group in state.param_groups]
+    if len({_rate_key(rate) for rate in rates}) <= 1:
+        return
+    if optimizer == "SGD":
+        remedy = (
+            "a diagonal that holds each group's rate relative to a reference rate in place of P = I"
+        )
+    else:
+        remedy = (
+            "the AdamW P = 1/(sqrt(v_hat) + eps) scaled per group by its rate relative "
+            "to a reference rate"
+        )
+    raise ValueError(
+        f"{context}: the saved param_groups have different learning rates "
+        f"({_abbrev(rates)}). P leaves the learning rate out, which is only sound when "
+        "it is the same for every parameter: per-group rates change the optimizer's "
+        "geometry (the update is -lr_g * P grad L on group g), and one P without the "
+        f"rate cannot represent that. For {optimizer}, build the P you mean with "
+        f"Preconditioner.from_diagonal(...), e.g. {remedy}. A beta2 / eps override does "
+        "not lift this."
+    )
+
+
+def _not_adam_message(state: OptimizerStateView, context: str) -> str:
+    """Why a state whose ``param_groups`` are not Adam's / AdamW's is refused."""
+    group_keys = sorted({key for group in state.param_groups for key in group} - {"params"})
+    return (
+        f"{context}: the saved param_groups are not those of torch.optim.Adam / AdamW "
+        f"(hyper-parameter keys: {group_keys}; an Adam / AdamW group carries "
+        f"{sorted(_ADAM_GROUP_KEYS)}). P = 1/(sqrt(v_hat) + eps) is the preconditioner "
+        "of those two only; other optimizers that keep 'betas' and an 'exp_avg_sq' "
+        "(RAdam, NAdam, Adamax, ...) apply a different update, and labelling their rows "
+        "'adamw' would be wrong. Build the P you mean with "
+        "Preconditioner.from_diagonal(...)."
+    )
 
 
 def adamw_preconditioner_from_state(
@@ -1364,10 +1521,19 @@ def adamw_preconditioner_from_state(
 
     Raises:
         BundleSchemaError: the state is empty, has no ``exp_avg_sq`` (e.g. an
-            SGD run — no second moment exists, use ``preconditioner=None``), or has
-            no ``step`` counter to bias-correct with.
-        ValueError: ``betas``/``eps`` missing from the saved ``param_groups``, or
-            ``amsgrad=True`` (which preconditions with ``max_exp_avg_sq``).
+            SGD run — no second moment exists, use ``preconditioner=None``), has
+            no ``step`` counter to bias-correct with, or was not written by
+            ``torch.optim.Adam`` / ``AdamW`` — judged by ``metadata.json``'s
+            optimizer name when there is one and, independently of it, by the
+            saved ``param_groups`` (RAdam, NAdam and Adamax keep an
+            ``exp_avg_sq`` too, but their groups have no ``amsgrad`` key).
+        ValueError: ``betas``/``eps`` missing from the saved ``param_groups``,
+            ``amsgrad=True`` (which preconditions with ``max_exp_avg_sq``), or
+            param groups that disagree on ``lr``. ``P`` leaves the learning rate
+            out, which is only sound when it is the same for every parameter;
+            per-group rates are part of the optimizer's geometry. Explicit
+            ``beta2`` / ``eps`` do not bypass this check (nor the ``amsgrad``
+            one).
     """
     if state.is_empty:
         raise BundleSchemaError(
@@ -1419,6 +1585,14 @@ def adamw_preconditioner_from_state(
             f"{context}: the saved optimizer state has no 'step' counter, so "
             "exp_avg_sq cannot be bias-corrected. Refusing to guess the exponent."
         )
+    # Decided by the saved groups, not by metadata.json: a bundle that names no
+    # optimizer (or names it under a key vatis does not read) must not turn a
+    # RAdam / NAdam state into rows labelled "adamw".
+    if _optimizer_family(state) != "adam":
+        raise BundleSchemaError(_not_adam_message(state, context))
+    # Before, and independent of, the beta2 / eps handling below: an override
+    # must not be a way around it (as it once was for amsgrad).
+    _refuse_per_group_lr(state, context)
     disagreeing = [
         key
         for key in ("betas", "eps")

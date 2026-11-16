@@ -90,13 +90,15 @@ def _write(
         eps=EPS,
         param_indices=param_indices,
     )
+    # The directory step equals the optimizer state's own counter, as pre-step
+    # semantics require (a mismatch is refused by ``adamw_preconditioner()``).
     write_checkpoint(
         run_dir,
-        0,
+        STEP,
         model=model,
         optim_state=optim,
         batch_a=make_batch_a(seed=0),
-        meta={"step": 0},
+        meta={"step": STEP},
     )
     return run_dir, model, written
 

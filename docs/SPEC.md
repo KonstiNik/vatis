@@ -84,6 +84,18 @@ step 0 included. Momentum and weight decay are excluded for SGD for the same
 reason as for AdamW (see "What `delta_loss_P` is not"). Any other optimizer is
 refused.
 
+**`P` leaves the learning rate out, so the bundle sources require one rate.**
+For a single rate `η` it is a common factor of the update and `chi_pos_P` does
+not depend on it. With per-group rates the update is `−η_g P ∇L` on group `g`:
+the rates are then part of the optimizer's geometry, and neither the AdamW `P`
+nor SGD's `P = I` describes it. A saved state whose param groups disagree on
+`lr` is therefore refused by both bundle sources, at every checkpoint and
+regardless of a `beta2` / `eps` override. The saved `lr` is the scheduled value
+at that step, so groups that share one schedule and one base rate agree at
+every checkpoint. For a run with per-group rates build the `P` you mean with
+`Preconditioner.from_diagonal(...)`, e.g. the AdamW `P` scaled per group by its
+rate relative to a reference rate.
+
 **AdamW conventions.**
 
 - `t` is the **saved** step counter. Bundles are pre-step (see "Native
@@ -147,22 +159,46 @@ How to read them:
 - `delta_loss_P_capped / delta_loss_P` and (self pairs) `chi_net_P_capped /
   chi_net_P` are the shares. Near 0: the P observables describe the trained
   coordinates. Near 1: they describe coordinates the optimizer has not touched.
-- Both quantities are linear in `P`, so the remainder is the value restricted
-  to coordinates with history, and
-  `(delta_loss_P − delta_loss_P_capped) / (chi_loss · (chi_net_P − chi_net_P_capped))`
-  is `chi_pos_P` on those coordinates alone — available without re-running.
-- For a cross pair `chi_net_P` is a geometric mean of the two batches' traces,
-  which is not linear in `P`; its capped row is the geometric mean of the two
-  capped parts. Use the two self-pair rows to form shares.
+- `delta_loss_P` (self and cross pairs) and the self-pair `chi_net_P` are linear
+  in `P`, so for them the remainder is the value restricted to coordinates with
+  history. `chi_pos_P` on those coordinates alone is therefore available
+  without re-running, but the formula differs between the two kinds of pair:
+  - **Self pair** `(A, A)`, from that pair's own rows:
+
+    ```
+    (delta_loss_P − delta_loss_P_capped) / (chi_loss · (chi_net_P − chi_net_P_capped))
+    ```
+
+  - **Cross pair** `(A, B)`. Here `chi_net_P` is the geometric mean `√(a·b)` of
+    the two batches' traces, which is not linear in `P`, and its capped row is
+    `√(a_c·b_c)`, the geometric mean of the two capped parts. With `a`, `a_c`
+    the `chi_net_P`, `chi_net_P_capped` rows of the self pair `(A, A)` and `b`,
+    `b_c` those of `(B, B)`, and the numerator and `chi_loss` taken from the
+    cross pair's rows:
+
+    ```
+    (delta_loss_P − delta_loss_P_capped) / (chi_loss · √((a − a_c)·(b − b_c)))
+    ```
+
+    The cross rows' own difference `chi_net_P − chi_net_P_capped` is
+    `√(a·b) − √(a_c·b_c)`, which is **not** `√((a − a_c)·(b − b_c))`; do not use
+    it as the restricted denominator, and use the two self-pair rows to form
+    `chi_net_P` shares.
 - A value of exactly `0` means no coordinate is at the ceiling (or none of them
   is touched by the batch).
 
-A coordinate counts as "at the ceiling" when `P_i ≥ (1 − 1e-6)/ε`
-(`vatis.core.preconditioner.epsilon_cap_mask` gives the same mask). The rows
-cost no backward and no additional parameter-sized vector: each gradient the
-estimator already has is reduced once more with the restricted weight. A `P`
-without a ceiling (`identity`, `sgd`, an `explicit` diagonal unless you pass
-`ceiling=`) has no such rows.
+**What "at the ceiling" means.** A coordinate counts when
+`P_i ≥ (1 − 1e-6)/ε` (`vatis.core.preconditioner.epsilon_cap_mask` gives the
+same mask), i.e. when `√v̂_i` is below about `1e-6 · ε`: a second moment that is
+zero to rounding. A coordinate whose `√v̂_i` is merely comparable to `ε` is
+**not** counted, although `ε` still sets most of its weight — at `√v̂_i = ε` it
+has half the ceiling weight. The `*_capped` rows are therefore a lower bound on
+the share of an observable that is dominated by `ε`.
+
+The rows cost no backward and no additional parameter-sized vector: each
+gradient the estimator already has is reduced once more with the restricted
+weight. A `P` without a ceiling (`identity`, `sgd`, an `explicit` diagonal
+unless you pass `ceiling=`) has no such rows.
 
 #### What `delta_loss_P` is not
 
@@ -193,8 +229,52 @@ The exact first-order response of one AdamW step on batch `B` is
 of which vatis currently measures the first dot product, with `P_t` in place of
 `P_{t+1}` and without its prefactor. The other two terms — and a comparison of
 the sum against realized loss changes — are not implemented yet. Until they are,
-treat `chi_pos_P` as a statement about the *geometry* the optimizer imposes, and
-use `η · delta_loss_P` as a loss-change predictor only with that caveat.
+treat `chi_pos_P` as a statement about the *geometry* the optimizer imposes.
+`−η · delta_loss_P` is the first-order prediction for the *hypothetical* update
+`−η P_t ∇L^A`. **Do not use it as the loss change of the step that was taken.**
+
+How far apart the two are was measured on a real bundle (an 11M-parameter
+Llama trained with AdamW, `β = (0.9, 0.95)`, `ε = 1e-8`; `B` = the step's own
+update batch, fp32 on the CPU). "Step taken" is the sum of the three terms
+above, built from the optimizer states saved before and after the step and the
+loss gradient at the stored weights:
+
+| step | step taken, first order | current-gradient term | momentum term | `−η · delta_loss_P` | `delta_loss_P` with `P_t` instead of `P_{t+1}` |
+| --- | --- | --- | --- | --- | --- |
+| 1 | −1.098 | −0.577 | −0.522 | −1.272 (16% larger in magnitude) | 16% larger |
+| 3 | −1.393 | −0.429 | −0.964 | −1.845 (32% larger in magnitude) | 25% larger |
+
+The weight-decay term was below `1e-4` in magnitude at both steps. The same
+change computed as `∇L^B · (θ_{t+1} − θ_t)` from the two stored weight files was
+−1.097 and −1.392. Momentum already carries nearly half of the step at step 1
+and more than two thirds at step 3, so the gap is not a small correction. This
+is one bundle: do not read the percentages as constants.
+
+**Step 0 is missing from the P rows, and it is the least SGD-like step.** No
+pre-step `P` exists at step 0 (the optimizer state is empty), so the P rows
+start at the first checkpoint after it. Yet the first update is the most
+non-SGD one: `v̂_1 = g_0²`, so it is essentially sign descent,
+`Δθ ≈ −η · sign(g_0)`.
+
+#### Reading the P rows
+
+- **`|chi_pos_P| ≤ 1` for any non-negative `P`**: `delta_loss_P` is an inner
+  product of `P^{1/2}`-weighted gradients, and Cauchy–Schwarz bounds it by
+  `chi_loss · chi_net_P`. The published value divides by an *estimate* of
+  `chi_net_P` and can overshoot, hence a warning rather than an error (see
+  "Loss handling").
+- **`chi_pos_P` does not change when `P` is multiplied by a constant;
+  `delta_loss_P` and `chi_net_P` do.** They carry the units of `P`, so their
+  values are not comparable between `adamw` rows and `sgd` rows.
+- **To isolate the effect of the geometry, compare `chi_pos_P` with `chi_pos`
+  on the same checkpoint.** An `adamw` run and an `sgd` run are different
+  trajectories; a difference between their rows mixes the geometry with where
+  each run went.
+- **`sgd` rows equal the raw rows by construction** (`P = I`); they carry no
+  information beyond them.
+- **No standard error is reported.** `chi_net_P` comes from the same probes as
+  `chi_net` and is typically the noisier of the two, because `P` is very
+  uneven and a few heavily weighted coordinates carry much of the estimate.
 
 ### How `χ_loss` and `δL` are computed (cheap, fixed cost)
 
@@ -561,10 +641,16 @@ for ckpt in source:                                    # or drive the loop yours
 - **Pre-step semantics.** The checkpoint at step `t` holds `θ_t` and the
   optimizer state from *before* the step-`t` update; `batch_a.npy` is the batch
   step `t` is about to consume. The directory step is the number of optimizer
-  updates already applied, so it equals the optimizer state's own step counter;
-  `adamw_preconditioner()` warns when the two disagree. A step-0 checkpoint
-  legitimately has an empty optimizer state; `flat_state` raises rather than
-  inventing zeros.
+  updates already applied, so it equals the optimizer state's own step counter.
+  When the two disagree, the optimizer state and the weights may not belong
+  together, and `adamw_preconditioner()` / `preconditioner()` **refuse the
+  checkpoint** (`BundleSchemaError` naming both numbers). For a bundle whose
+  step was merely stored wrongly, `on_step_mismatch="warn"` on either method
+  downgrades that to a `UserWarning` and builds `P` from the saved state's own
+  counter; `"raise"` is the default and no other value is accepted. (An SGD
+  state has no step counter, so there is nothing to compare for it.) A step-0
+  checkpoint legitimately has an empty optimizer state; `flat_state` raises
+  rather than inventing zeros.
 - **`batch_a.npy` holds whole token sequences.** The loader turns a row `ids`
   into inputs `ids` and next-token labels (`labels[:, :-1] = ids[:, 1:]`, last
   position ignored), i.e. the pairs `ids[:, :-1] → ids[:, 1:]`.
@@ -673,17 +759,37 @@ for ckpt in source:                                    # or drive the loop yours
     means under masking, a smoothed or post-step value — defeats the recipe.
 - **Weights are stored as parameters only.** A persistent buffer the model
   factory creates keeps the factory's value, and the loader warns about it:
-  correct for constants, wrong for anything a training run changes. The loader
-  casts whatever floating dtype the file holds (bf16 by default) to the dtype
-  requested from `load_local_bundle(dtype=...)`; note that a bf16 file is a
-  rounded `θ_t`, and that rounding can be a sizeable fraction of one update.
+  correct for constants, wrong for anything a training run changes.
+- **A bf16 weight file holds a rounded `θ_t`.** The loader casts whatever
+  floating dtype the file holds (bf16 by default) to the dtype requested from
+  `load_local_bundle(dtype=...)`; the cast adds no error, but it does not undo
+  the rounding. Measured on a real bundle (an 11M-parameter Llama trained in
+  fp32, weights stored as bf16): the loss gradient at the stored weights agreed
+  with the gradient the optimizer itself used (reconstructed from consecutive
+  first-moment states) to 0.24% relative error, cosine 0.999997, at steps 1 and
+  3 — for a gradient at one checkpoint the rounding is a sub-percent
+  perturbation. The *difference* between consecutive weight files is another
+  matter: early in training it is dominated by the rounding. Against the
+  update predicted from the optimizer state, `θ_{t+1} − θ_t` from the files had
+  a relative error of 0.81 at step 1 and 0.66 at step 3. **Comparisons that
+  need a single step's weight change element by element need fp32 weight
+  files.**
 - **`load_local_bundle(device=..., dtype=...)` decide placement and precision.**
   A bundle source hands the analyzer ready-built models, so `Analyzer(device=,
-  dtype=)` do not move or recast them.
-- **Only Adam / AdamW states are accepted** by `adamw_preconditioner()`. A
-  bundle whose `metadata.json` names another optimizer is refused rather than
-  labelled `"adamw"`; so are an SGD state (use `source.preconditioner()`),
+  dtype=)` do not move or recast them. The optimizer state is read and kept on
+  the CPU whatever `device` is — only the finished `P` is moved — so
+  `flat_state(...)` returns a CPU vector unless called with `device=`.
+- **Only Adam / AdamW states are accepted** by `adamw_preconditioner()`. The
+  optimizer is identified from the saved `param_groups`, not from a name:
+  RAdam, NAdam and Adamax groups also carry `betas`, but only Adam / AdamW
+  groups have the `amsgrad` key, and a state without it is refused whether or
+  not `metadata.json` names an optimizer. A bundle whose `metadata.json` names
+  another optimizer (under `optimizer_name`, `optimizer_type`, `optimizer` or
+  `optimizer_class`) is refused as well rather than labelled `"adamw"`; so are
+  an SGD state (use `source.preconditioner()`),
   `amsgrad=True` in any parameter group, parameter groups that disagree on
+  `lr` (also under an override, and for SGD bundles in `preconditioner()` — see
+  "Optimizer-aware measurement"), parameter groups that disagree on
   `betas` / `eps` (unless both are passed explicitly) and a parameter that never
   received a gradient. An `eps` / `beta2` override is written into the descriptor, e.g.
   `adamw(eps=0.001)`.
@@ -691,8 +797,9 @@ for ckpt in source:                                    # or drive the loop yours
   the checkpoint directories; tensors load on first access, and iterating the
   source releases checkpoint `i−1` before yielding `i`. Building `P` needs the
   loaded optimizer state (two parameter-sized vectors) plus about three more
-  transiently; the state is released as soon as `P` exists. Under DDP every
-  rank does this.
+  transiently, all in host memory: the state is read and `P` is built on the
+  CPU, and only the finished `P` is moved to the device. The state is released
+  as soon as `P` exists. Under DDP every rank does this.
 
 ### Result format (parquet, long)
 
@@ -776,14 +883,19 @@ is invariant under the normalization.
 - Probe seed is **shared across ranks** within one `(checkpoint, batch)` call;
   different across calls. Each rank draws a full probe for its own shard, so
   ranks do not partition one global probe: a DDP run is reproducible, but its
-  `χ_net` is a different unbiased estimate from the single-process one.
+  `chi_net` is a different unbiased estimate from the single-process one — and
+  a noisier one. Every rank draws the *same* probe stream, so the ranks'
+  estimation errors are correlated instead of independent, and the variance of
+  the multi-rank `chi_net` / `chi_net_P` is larger than that of a
+  single-process run with the same `n_hutchinson` (see "Known limitations").
 - Probe vector shape matches the local micro-batch output `(M, S, V)`. **Padding
   positions are zeroed** so masked tokens contribute to neither `χ_net` nor
   `χ_loss`. The mask is the intersection described under "Loss handling".
 
 ### Loss handling
 
-vatis ships with the standard HF causal-LM CE loss. **Only the closed-form CE
+vatis ships with the standard causal-LM CE loss (a mean over the non-ignored
+targets; labels pre-shifted, see below). **Only the closed-form CE
 path is supported for `chi_loss`.** The bundle exposes a `loss_fn(logits, batch)
 -> scalar` slot used by the analyzer for `delta_loss` (autograd through θ), but
 `chi_loss` always uses the closed-form softmax-minus-onehot shortcut. If you pass
@@ -791,10 +903,12 @@ a non-CE `loss_fn`, `delta_loss` is correct but `chi_loss` is wrong.
 
 **The labels are the single source of truth for what enters the loss** (see
 "Batch format and the label convention"). The bundle's `valid_mask_fn` and the
-`labels=-100` (`ignore_index`) sentinel are **intersected once**, and that one
-mask is used by **every** accumulator: the `chi_loss` sum and its `n_valid`
-denominator, the per-micro-batch weighting that reassembles `∇_θ L` for
-`delta_loss`, and the probe mask of the `χ_net` / `χ_net^P` estimator. The
+`labels=-100` (`ignore_index`) sentinel are **intersected once**. That one mask
+is used for the counts, the gradient weights and the probes — the `chi_loss`
+sum and its `n_valid` denominator, the per-micro-batch weighting that
+reassembles `∇_θ L` for `delta_loss`, and the probe mask of the `chi_net` /
+`chi_net_P` estimator — and it reaches the loss itself through the labels (the
+"stricter" case below). The
 shipped loaders' `valid_mask_fn` already equals `labels != ignore_index`, so for
 them none of the following changes anything. A custom `valid_mask_fn` can
 disagree with the labels in two directions, and both are handled:
@@ -840,6 +954,14 @@ analyzer), `per_sequence_cv` raises the same way if `loss_fn` counts positions
 its `valid_mask_fn` rejects: its control variate is built from the loss
 direction and is unbiased only when that direction is confined to the masked
 positions. `hutchinson` evaluates no loss.
+
+Labels are **pre-shifted**: `labels[b, s]` is the target of the logits at
+position `s` (the next token), with `ignore_index` where there is none. A batch
+whose `labels` equal its `input_ids` — the HuggingFace / TRL convention, where
+the model shifts internally — is refused by the shipped `causal_lm_loss` when it
+is provably unshifted, and `vatis.data.shift_hf_labels` converts it (see "Batch
+format and the label convention" for the conversion and for what the guard
+cannot catch).
 
 As a backstop against an inconsistent `loss_fn` (e.g. a sum-reduced CE), the
 analyzer warns when a published `chi_pos` / `chi_pos_P` leaves `[−1, 1]` by more
@@ -961,6 +1083,23 @@ cross-validation test tier (gated, skipped in CI).
 - **Multi-GPU DDP is exercised only by a 2-rank CPU loopback test** — the
   real-GPU DDP path is validated by the `examples/benchmark/ddp_scaling/` job but
   has no automated test.
+- **Under DDP every rank draws the same probe stream for its own shard.** A run
+  is reproducible that way, but the ranks' estimation errors are correlated
+  instead of independent, so a multi-rank `chi_net` / `chi_net_P` (and the
+  `chi_pos` / `chi_pos_P` built on it) has a larger variance than a
+  single-process run with the same `n_hutchinson`. The estimate stays unbiased;
+  the size of the inflation depends on the model, the data and the number of
+  ranks. On two small test transformers (ranks emulated in one process, 8
+  sequences, `n_hutchinson = 4`, 400 seeds) the variance of `chi_net` was about
+  1.5× the single-process one at 2 ranks and 2.5–2.8× at 4 ranks, with both
+  estimators. `chi_loss` and `delta_loss` do not use probes and are not
+  affected. Fixed in a follow-up pull request.
+- **The unshifted-label guard is not exhaustive.** The shipped `causal_lm_loss`
+  refuses HuggingFace / TRL-style labels only when a sequence proves them
+  unshifted; a single labelled token at the very end of a sequence, or a label
+  equal to the token after it, looks the same in both conventions and is scored
+  as given. A custom `loss_fn` is not guarded at all (see "Batch format and the
+  label convention").
 - **Custom (non-CE) `loss_fn` is not fully supported** — `chi_loss` always uses
   the closed-form CE shortcut (see Loss handling).
 - **`OpacusEstimator` is a stub**, and has no `chi_net_P` path.
@@ -975,10 +1114,10 @@ cross-validation test tier (gated, skipped in CI).
   held-out data or on an update batch with first-seen tokens (see "Coordinates
   at the ceiling").
 - **A resident `P` costs one extra parameter-sized fp32 vector** during a
-  checkpoint's analysis, and building it peaks at about five (see "Native
-  checkpoint bundles"). The cross-pair GPU/host offload heuristic does not
-  account for either; on a borderline card pass `cross_grad_storage="cpu"`
-  explicitly.
+  checkpoint's analysis, and building it peaks at about five in host memory
+  (see "Native checkpoint bundles"). The cross-pair GPU/host offload heuristic
+  does not account for either; on a borderline card pass
+  `cross_grad_storage="cpu"` explicitly.
 - **The `chi_pos` range warning is a weak backstop.** A sum-reduced `loss_fn`
   inflates `chi_pos` by the square of the valid-token count *per micro-batch*,
   and the warning fires only if that pushes `|chi_pos|` past 1.5. With small

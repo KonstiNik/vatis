@@ -38,7 +38,13 @@ from vatis import Analyzer, load_local_bundle
 from vatis.analyzer import P_CAPPED_OBSERVABLES, P_OBSERVABLES
 from vatis.core.chi_net.hutchinson import HutchinsonEstimator
 from vatis.core.chi_net.per_seq_cv import PerSequenceControlVariateEstimator
-from vatis.core.preconditioner import Preconditioner, epsilon_cap_mask
+from vatis.core.preconditioner import (
+    Preconditioner,
+    epsilon_cap_mask,
+    weighted_dot_fp64,
+    weighted_sum_sq_fp64,
+    weighted_sum_sq_grads,
+)
 from vatis.data.collate import shifted_lm_targets
 from vatis.models.hf import causal_lm_loss, causal_lm_valid_mask
 from vatis.models.local_bundle import plain_lm_forward
@@ -295,3 +301,75 @@ def test_the_adamw_builder_records_its_ceiling() -> None:
     assert Preconditioner.identity(4).count_capped() == 0
     with pytest.raises(ValueError, match="ceiling"):
         Preconditioner.from_diagonal(torch.ones(3), ceiling=0.0)
+
+
+# ------------------------------------ what "at the ceiling" means, at its boundary
+
+
+@pytest.mark.parametrize("dtype", [torch.float64, torch.float32])
+def test_the_ceiling_criterion_is_pinned_at_its_boundary(dtype: torch.dtype) -> None:
+    """``P_i >= (1 - 1e-6) * ceiling``: just inside counts, just outside does not.
+
+    No other test fixes the width of that band — every other fixture has entries
+    either exactly at the ceiling or orders of magnitude below it, so the
+    relative slack could be widened a thousandfold without a failure.
+    """
+    ceiling = 1e8
+    # fp32 values next to 1e8 are 8 apart, so both of these are exact in fp32 too.
+    inside = ceiling - 88.0  # 0.88e-6 below the ceiling, relative
+    outside = ceiling - 112.0  # 1.12e-6 below
+    diag = torch.tensor([ceiling, inside, outside, 0.5 * ceiling, 1.0], dtype=dtype)
+    assert diag.tolist() == [ceiling, inside, outside, 0.5 * ceiling, 1.0]
+    at_ceiling = torch.tensor([True, True, False, False, False])
+
+    precond = Preconditioner.from_diagonal(diag, ceiling=ceiling)
+    floor = precond.capped_weight_floor
+    assert floor == pytest.approx(ceiling * (1.0 - 1e-6), rel=1e-12)
+    assert outside < floor < inside
+    assert precond.count_capped() == 2
+    assert torch.equal(epsilon_cap_mask(diag, 1.0 / ceiling), at_ceiling)
+
+    # The reductions the ``*_capped`` rows are computed with draw the same line.
+    g = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0], dtype=dtype)
+    expected = ceiling * 1.0 + inside * 4.0
+    assert float(weighted_sum_sq_fp64(g, diag, min_weight=floor)) == pytest.approx(
+        expected, rel=1e-12
+    )
+    assert float(weighted_dot_fp64(g, g, diag, min_weight=floor)) == pytest.approx(
+        expected, rel=1e-12
+    )
+    params = [torch.nn.Parameter(torch.zeros(2, dtype=dtype)) for _ in range(2)]
+    params.append(torch.nn.Parameter(torch.zeros(1, dtype=dtype)))
+    by_parameter = weighted_sum_sq_grads(
+        [g[0:2], g[2:4], g[4:5]],
+        precond.parameter_views(params),
+        device=torch.device("cpu"),
+        min_weight=floor,
+    )
+    assert float(by_parameter) == pytest.approx(expected, rel=1e-12)
+
+
+@pytest.mark.parametrize("dtype", [torch.float64, torch.float32])
+def test_a_second_moment_of_the_order_of_eps_is_not_at_the_ceiling(dtype: torch.dtype) -> None:
+    """Through the AdamW builder: only a second moment that is zero to rounding counts.
+
+    ``P = 1/(sqrt(v_hat) + eps)`` lies ``d/(1 + d)`` below ``1/eps`` (relative) for
+    ``d = sqrt(v_hat)/eps``. A coordinate with ``sqrt(v_hat) = eps`` therefore has
+    half the ceiling weight — still dominated by ``eps`` — and is **not** counted,
+    which makes the ``*_capped`` rows a lower bound on the eps-dominated share.
+    """
+    eps, beta2, step = 1e-8, 0.999, 5
+    ratio = torch.tensor(
+        [0.0, 0.5e-6, 2e-6, 1.0, 10.0, 1e5], dtype=torch.float64
+    )  # sqrt(v_hat)/eps
+    v = ((ratio * eps) ** 2 * (1.0 - beta2**step)).to(dtype)
+    precond = Preconditioner.adamw(v, step=step, beta2=beta2, eps=eps)
+    assert precond.ceiling == pytest.approx(1.0 / eps)
+
+    at_ceiling = torch.tensor([True, True, False, False, False, False])
+    assert torch.equal(epsilon_cap_mask(precond.diag, eps), at_ceiling)
+    assert torch.equal(precond.diag >= precond.capped_weight_floor, at_ceiling)
+    assert precond.count_capped() == 2
+    # sqrt(v_hat) == eps: half the ceiling, and outside the band by a wide margin
+    assert float(precond.diag[3]) == pytest.approx(0.5 / eps, rel=1e-6)
+    assert float(precond.diag[4]) == pytest.approx(1.0 / (11.0 * eps), rel=1e-6)

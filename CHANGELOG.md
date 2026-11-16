@@ -23,6 +23,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   builds `P = diag(1/(√v̂ + ε))` per checkpoint; `source.preconditioner()` picks
   the geometry factor from the saved optimizer state — that AdamW `P`, or `P = I`
   under the descriptor `"sgd"` for a bundle written by `torch.optim.SGD`.
+  A checkpoint whose directory step differs from its optimizer state's own step
+  counter is refused (`BundleSchemaError`); both methods take
+  `on_step_mismatch="warn"` to build `P` from the saved counter with a warning
+  instead (default `"raise"`). A state whose param groups have different
+  learning rates is refused as well: `P` leaves the rate out, which is only
+  sound when every parameter has the same one.
 - **`delta_loss_P_capped` / `chi_net_P_capped`** rows next to the AdamW P
   observables: the part contributed by coordinates at the `1/ε` ceiling of `P`
   (second moment still zero). A few such coordinates can carry nearly all of a
@@ -83,12 +89,15 @@ The labels are the single source of truth for what enters the loss
   as before.
 
 ### Fixed
-- The `valid_mask_fn ∧ labels != ignore_index` intersection is now applied by
-  **every** accumulator, not only `chi_loss`. With a `valid_mask_fn` that accepts
-  positions whose label is `ignore_index`, `delta_loss` was rescaled and depended
-  on `micro_batch_size`, and `chi_net` included the Jacobian rows of ignored
-  positions. The shipped loaders were not affected (their mask already equals
-  `labels != ignore_index`).
+- The `valid_mask_fn ∧ labels != ignore_index` intersection is now applied to
+  the token counts, the gradient weights and the probes, not only to `chi_loss`.
+  With a `valid_mask_fn` *wider* than the labels (one that accepts positions
+  whose label is `ignore_index`), `delta_loss` was rescaled and depended on
+  `micro_batch_size`, and `chi_net` included the Jacobian rows of ignored
+  positions. That direction is fixed by the intersection. A mask alone cannot
+  reach the loss itself; the *stricter* direction is fixed separately (next
+  entry but one). The shipped loaders were not affected (their mask already
+  equals `labels != ignore_index`).
 - The analyzer restores the `requires_grad` flags it changes on the model's parameters.
 - A `valid_mask_fn` **stricter** than the labels (it rejects a position whose
   label is valid) now restricts the loss as well. It used to restrict `n_valid`,
@@ -105,6 +114,17 @@ The labels are the single source of truth for what enters the loss
   momentum, weight decay and the step's own second-moment update are excluded.
 - AdamW's `P` can only be built from native checkpoint bundles; optimizer states
   published with hub checkpoints are not read.
+- **DDP: every rank draws the same probe stream for its own shard.** The ranks'
+  estimation errors are therefore correlated, and a multi-rank `chi_net` /
+  `chi_net_P` (hence `chi_pos` / `chi_pos_P`) has a larger variance than a
+  single-process run with the same `n_hutchinson`, by a factor that depends on
+  the model, the data and the number of ranks. The estimate stays unbiased;
+  `chi_loss` and `delta_loss` are not affected. Fixed in a follow-up pull
+  request.
+- The unshifted-label guard of `causal_lm_loss` is not exhaustive: a single
+  labelled token at the very end of a sequence, or a label equal to the token
+  after it, looks the same in both conventions and is scored as given; a custom
+  `loss_fn` is not guarded.
 
 ## [0.2.1] — 2026-10-19
 

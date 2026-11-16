@@ -14,6 +14,11 @@ shard), so only a statistical comparison is possible and it hides plumbing bugs
 of a few percent. Unbiasedness is tested elsewhere
 (``tests/unit/test_chi_net_probe_exactness.py``); here we are testing sharding
 and the all-reduce.
+
+``--ceiling`` (with ``--preconditioner``) swaps the spread ``P`` for
+:func:`ceiling_preconditioner`: a ``P`` that has a ceiling and entries sitting
+at it, so the run also produces the two ``*_capped`` rows. Without it no DDP
+test sees them — a ``P`` without a ceiling has no capped part to all-reduce.
 """
 
 from __future__ import annotations
@@ -78,6 +83,29 @@ class ShapeKeyedProbe:
         return (raw.to(dtype=torch.float64) * 2.0 - 1.0).to(device=device, dtype=dtype)
 
 
+# The ceiling of the ``--ceiling`` P; the band that counts as "at the ceiling" is
+# ``>= CEILING * (1 - 1e-6)``. Chosen with the fraction below so that the capped
+# part is of the same order as the rest of each P observable — a share near 0 or
+# near 1 would let a wrong capped row hide behind the other part.
+CEILING = 50.0
+
+
+def ceiling_preconditioner(n_params: int) -> Preconditioner:
+    """A spread explicit ``P`` with a ceiling and a seeded tenth of its entries at it.
+
+    The remaining entries are capped at half the ceiling, so which coordinates
+    are "at the ceiling" is unambiguous. The entries at the ceiling are spread
+    over every parameter, hence every rank's shard contributes to the capped
+    part of ``chi_net_P`` — which is what makes its all-reduce observable.
+    Shared by the worker and the single-process baseline of the driver test.
+    """
+    gen = torch.Generator().manual_seed(5)
+    diag = torch.exp(torch.randn(n_params, generator=gen) * 2.0).clamp_(max=0.5 * CEILING)
+    at_ceiling = torch.rand(n_params, generator=gen) < 0.1
+    diag[at_ceiling] = CEILING
+    return Preconditioner.from_diagonal(diag, descriptor="explicit", ceiling=CEILING)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", required=True)
@@ -95,6 +123,11 @@ def main() -> int:
         "--preconditioner",
         action="store_true",
         help="also measure the P triple, with an explicit spread P",
+    )
+    parser.add_argument(
+        "--ceiling",
+        action="store_true",
+        help="with --preconditioner: a P with a ceiling and entries at it (adds the capped rows)",
     )
     args = parser.parse_args()
 
@@ -121,9 +154,12 @@ def main() -> int:
         precond = None
         if args.preconditioner:
             n_params = sum(p.numel() for p in model.parameters())
-            gen = torch.Generator().manual_seed(5)
-            diag = torch.exp(torch.randn(n_params, generator=gen) * 2.0)
-            precond = Preconditioner.from_diagonal(diag, descriptor="explicit")
+            if args.ceiling:
+                precond = ceiling_preconditioner(n_params)
+            else:
+                gen = torch.Generator().manual_seed(5)
+                diag = torch.exp(torch.randn(n_params, generator=gen) * 2.0)
+                precond = Preconditioner.from_diagonal(diag, descriptor="explicit")
 
         batch = make_tiny_lm_batch(
             batch_size=args.batch_size, seed=args.seed, pad_fraction=0.25, device="cpu"
