@@ -97,6 +97,12 @@ CHECKPOINT_OPTIM_FILE = "optim.pt"
 # ``Preconditioner.adamw`` assumes. Adam and AdamW differ only in how weight
 # decay enters, which P excludes anyway.
 _ADAM_FAMILY = frozenset({"adam", "adamw"})
+# Hyper-parameter keys every ``torch.optim.SGD`` param group carries and no
+# Adam-family or RMSprop group does (RMSprop has ``momentum`` but neither
+# ``dampening`` nor ``nesterov``).
+_SGD_GROUP_KEYS = frozenset({"momentum", "dampening", "nesterov"})
+# Descriptor of the rows measured with SGD's geometry factor, ``P = I``.
+SGD_DESCRIPTOR = "sgd"
 CHECKPOINT_BATCH_A_FILE = "batch_a.npy"
 CHECKPOINT_META_FILE = "meta.json"
 
@@ -977,8 +983,10 @@ class LocalBundleSource:
     ) -> Callable[[str], Preconditioner | None]:
         """The ``adamw`` P source, as a per-checkpoint factory for the analyzer.
 
-        Pass the result as ``Analyzer(preconditioner=...)`` /
-        ``analyze(preconditioner=...)``: it is called once per checkpoint with
+        Pass the result as ``Analyzer(preconditioner=...)`` and sweep with
+        ``analyzer.run(source.model_specs())`` (``analyze()`` takes a single hub
+        model spec and cannot iterate a bundle). The factory is called once per
+        checkpoint with
         that checkpoint's id and builds ``P = diag(1 / (sqrt(v_hat) + eps))``
         from *that* checkpoint's saved (pre-step) optimizer state, with
         ``v_hat = exp_avg_sq / (1 - beta2**step_count)``. The flat ``exp_avg_sq``
@@ -1003,6 +1011,11 @@ class LocalBundleSource:
         an artifact of the fallback, not a measurement. An absent row cannot be
         mistaken for a measured one.
 
+        A bundle written by ``torch.optim.SGD`` is refused here with that reason
+        (its saved ``param_groups`` identify it even at step 0, where every
+        optimizer's state is empty); use :meth:`preconditioner`, which handles
+        both optimizers.
+
         Returns:
             ``fn(checkpoint_id) -> Preconditioner | None``.
         """
@@ -1010,6 +1023,14 @@ class LocalBundleSource:
         def build(checkpoint_id: str) -> Preconditioner | None:
             checkpoint = self.checkpoint_for(checkpoint_id)
             state = checkpoint.optimizer_state
+            if _optimizer_family(state) == "sgd":
+                raise BundleSchemaError(
+                    f"{checkpoint.identifier}: the saved param_groups are those of an SGD "
+                    "optimizer, which has no second moment and hence no AdamW "
+                    "preconditioner. Use source.preconditioner() to get SGD's geometry "
+                    f"factor P = I under the {SGD_DESCRIPTOR!r} descriptor, or "
+                    "preconditioner=None for the raw rows only."
+                )
             if state.is_empty:
                 warnings.warn(
                     f"{checkpoint.identifier}: the saved optimizer state is empty "
@@ -1046,6 +1067,72 @@ class LocalBundleSource:
             # staying resident for the whole checkpoint; a later access reloads it.
             checkpoint.release_optimizer_state()
             return precond
+
+        return build
+
+    def preconditioner(
+        self,
+        *,
+        beta2: float | None = None,
+        eps: float | None = None,
+    ) -> Callable[[str], Preconditioner | None]:
+        """The saved optimizer's geometry factor, whichever optimizer wrote the bundle.
+
+        A per-checkpoint factory for ``Analyzer(preconditioner=...)`` that looks
+        at the checkpoint's saved ``param_groups`` and returns
+
+        - for Adam / AdamW: exactly what :meth:`adamw_preconditioner` returns
+          (descriptor ``"adamw"``; no rows at a step-0 checkpoint);
+        - for ``torch.optim.SGD``, with or without momentum: ``P = I`` under the
+          descriptor ``"sgd"``, at every checkpoint including step 0.
+
+        So a comparison across optimizers reads the same three observables
+        (``delta_loss_P``, ``chi_net_P``, ``chi_pos_P``) for both, and the
+        ``preconditioner`` column says which geometry each row used. For SGD the
+        geometry factor is the identity, so its rows repeat the raw values
+        exactly (``chi_pos_P == chi_pos``); they cost one parameter-sized vector
+        of ones. Momentum and weight decay are excluded for SGD for the same
+        reason as for AdamW: ``P`` is the map from the gradient to the update
+        direction, not the update.
+
+        Any other optimizer is refused. ``beta2`` / ``eps`` are AdamW overrides
+        and are refused for an SGD bundle.
+        """
+        adamw = self.adamw_preconditioner(beta2=beta2, eps=eps)
+
+        def build(checkpoint_id: str) -> Preconditioner | None:
+            checkpoint = self.checkpoint_for(checkpoint_id)
+            family = _optimizer_family(checkpoint.optimizer_state)
+            recorded = self.metadata.optimizer_name
+            if family == "adam":
+                return adamw(checkpoint_id)
+            if family == "sgd":
+                if recorded is not None and recorded.lower() != "sgd":
+                    raise BundleSchemaError(
+                        f"{checkpoint.identifier}: the saved param_groups are those of an "
+                        f"SGD optimizer but metadata.json names the optimizer {recorded!r}; "
+                        "the bundle's metadata and its optimizer state do not belong together."
+                    )
+                if beta2 is not None or eps is not None:
+                    raise ValueError(
+                        f"{checkpoint.identifier}: beta2 / eps are AdamW overrides, but this "
+                        "bundle was written by SGD, whose geometry factor is P = I."
+                    )
+                checkpoint.release_optimizer_state()
+                return Preconditioner.identity(
+                    self.layout.total_numel, device=self.device, descriptor=SGD_DESCRIPTOR
+                )
+            group_keys = sorted(
+                {key for group in checkpoint.optimizer_state.param_groups for key in group}
+                - {"params"}
+            )
+            raise BundleSchemaError(
+                f"{checkpoint.identifier}: cannot tell which geometry factor belongs to "
+                f"this optimizer (metadata.json names {recorded!r}; saved param_group keys: "
+                f"{group_keys}). "
+                "preconditioner() knows Adam / AdamW and torch.optim.SGD; for anything "
+                "else build P with Preconditioner.from_diagonal(...)."
+            )
 
         return build
 
@@ -1123,6 +1210,23 @@ def load_local_bundle(
         valid_mask_fn=valid_mask_fn,
         allow_unlisted_params=allow_unlisted_params,
     )
+
+
+def _optimizer_family(state: OptimizerStateView) -> str | None:
+    """``"adam"``, ``"sgd"`` or ``None``, read off the saved ``param_groups``.
+
+    The per-parameter state cannot answer this: it is empty at step 0 for every
+    optimizer, and at every step for SGD without momentum. The hyper-parameter
+    keys of the groups are always saved and differ by optimizer class.
+    """
+    groups = state.param_groups
+    if not groups:
+        return None
+    if all("betas" in group for group in groups):
+        return "adam"
+    if all(group.keys() >= _SGD_GROUP_KEYS and "betas" not in group for group in groups):
+        return "sgd"
+    return None
 
 
 def adamw_preconditioner_from_state(

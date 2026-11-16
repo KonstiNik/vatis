@@ -20,7 +20,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `torch.optim` state and the update batch per checkpoint, and exposes the
   optimizer state flattened in one canonical parameter order
   (`vatis.core.param_layout.ParameterLayout`). `source.adamw_preconditioner()`
-  builds `P = diag(1/(√v̂ + ε))` per checkpoint.
+  builds `P = diag(1/(√v̂ + ε))` per checkpoint; `source.preconditioner()` picks
+  the geometry factor from the saved optimizer state — that AdamW `P`, or `P = I`
+  under the descriptor `"sgd"` for a bundle written by `torch.optim.SGD`.
 - Parquet rows carry a **`preconditioner`** column (appended last): `"none"` on
   raw rows, the `P` descriptor on the new rows.
 - A warning when a published `chi_pos` / `chi_pos_P` leaves `[−1, 1]` by more
