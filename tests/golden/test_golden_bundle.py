@@ -320,15 +320,24 @@ def _report_linearization_sum(
     """Print ``sum_t eta_t delta_loss(A_t, B)`` against the realized ``delta loss(B)``.
 
     No hard assert — this is the validation-sum *report* of ``03_estimator.md``
-    §Golden step 4. Two things it compares:
+    §Golden step 4. Two sums are printed next to the realized change:
 
-    - the **raw** ruler's prediction ``-sum_t eta_t delta_loss(A_t, B)``, i.e. what
-      a plain-SGD update of size ``eta`` would have achieved, and
-    - the **preconditioned** ruler's prediction ``-sum_t eta_t delta_loss^P(A_t, B)``,
-      which is the one that matches the optimizer that actually ran: AdamW's
-      update is ``-eta P grad L^A`` (up to the momentum filter and decoupled weight
-      decay, both excluded from ``P`` by project decision), so the first-order
-      change in ``loss(B)`` is ``grad L^B . dtheta = -eta delta_loss^P(A_t, B)``.
+    - ``-sum_t eta_t delta_loss(A_t, B)`` from the raw rows: the first-order
+      effect of plain-SGD updates ``-eta grad L^A`` of size ``eta``, and
+    - ``-sum_t eta_t delta_loss^P(A_t, B)`` from the P rows: the first-order
+      effect of the *hypothetical* updates ``-eta P_t grad L^A``.
+
+    **Neither is a prediction of the AdamW steps that were taken**, and the P
+    sum is not expected to match the realized change (``docs/SPEC.md`` §"What
+    ``delta_loss_P`` is not"). ``P`` is the geometry factor only: the step
+    applies it to the first moment rather than to the current gradient
+    (momentum excluded), adds decoupled weight decay (excluded), and divides by
+    a second moment that already contains the step's own gradient (``P_{t+1}``,
+    whereas the rows use the pre-step ``P_t``).
+
+    The two sums also cover different steps: the step-0 checkpoint contributes
+    to the raw sum but not to the P sum, because no ``P`` exists before the
+    first update.
 
     Because the bundle samples every ``BUNDLE_EVERY``-th step, the sum over
     bundled checkpoints is scaled by that stride to cover the whole run; both the
@@ -412,9 +421,13 @@ def _report_linearization_sum(
         f"  CAVEATS, stated rather than buried: (a) only every {stride}-th step is bundled, "
         f"so the sum is scaled by the stride, which assumes delta_loss varies slowly between "
         f"bundled steps; (b) step {steps[0]} contributes to the raw sum but NOT to the P sum "
-        f"(its optimizer state is empty, so no P exists there — see the step-0 policy); "
-        f"(c) the optimizer that ran is AdamW, so the P row is the ruler that matches its "
-        f"update (-eta P grad L, momentum and decoupled weight decay excluded from P by "
-        f"project decision); the raw row is the plain-SGD prediction and is expected to be "
-        f"far too small, because eta was tuned for the preconditioned step."
+        f"(its optimizer state is empty, so no P exists there — see the step-0 policy), so "
+        f"the two sums cover different steps; "
+        f"(c) neither sum is the first-order change of the AdamW steps that were taken. The "
+        f"P rows measure the geometry factor only: the response to the hypothetical update "
+        f"-eta P_t grad L, with momentum, decoupled weight decay and the step's own "
+        f"second-moment update (P_{{t+1}} instead of the pre-step P_t) excluded, so the P sum "
+        f"is not expected to equal the realized change. The raw rows are the plain-SGD "
+        f"counterpart (P = I) and are expected to be far too small, because eta was tuned "
+        f"for the preconditioned step."
     )

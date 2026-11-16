@@ -23,6 +23,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   builds `P = diag(1/(√v̂ + ε))` per checkpoint; `source.preconditioner()` picks
   the geometry factor from the saved optimizer state — that AdamW `P`, or `P = I`
   under the descriptor `"sgd"` for a bundle written by `torch.optim.SGD`.
+  A checkpoint whose directory step differs from its optimizer state's own step
+  counter is refused (`BundleSchemaError`); both methods take
+  `on_step_mismatch="warn"` to build `P` from the saved counter with a warning
+  instead (default `"raise"`). A state whose param groups have different
+  learning rates is refused as well: `P` leaves the rate out, which is only
+  sound when every parameter has the same one.
 - **`delta_loss_P_capped` / `chi_net_P_capped`** rows next to the AdamW P
   observables: the part contributed by coordinates at the `1/ε` ceiling of `P`
   (second moment still zero). A few such coordinates can carry nearly all of a
@@ -87,12 +93,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The estimate was unbiased throughout. Rank `r > 0` now seeds its generator
   from the per-call seed and `r`; the same measurements then give 0.8–1.2×,
   consistent with 1.
-- The `valid_mask_fn ∧ labels != ignore_index` intersection is now applied by
-  **every** accumulator, not only `chi_loss`. With a `valid_mask_fn` that accepts
-  positions whose label is `ignore_index`, `delta_loss` was rescaled and depended
-  on `micro_batch_size`, and `chi_net` included the Jacobian rows of ignored
-  positions. The shipped loaders were not affected (their mask already equals
-  `labels != ignore_index`).
+- The `valid_mask_fn ∧ labels != ignore_index` intersection is now applied to
+  the token counts, the gradient weights and the probes, not only to `chi_loss`.
+  With a `valid_mask_fn` *wider* than the labels (one that accepts positions
+  whose label is `ignore_index`), `delta_loss` was rescaled and depended on
+  `micro_batch_size`, and `chi_net` included the Jacobian rows of ignored
+  positions. That direction is fixed. The intersection does not reach the loss
+  itself, so a `valid_mask_fn` *stricter* than the labels is not fixed (see
+  Known limitations). The shipped loaders were not affected (their mask already
+  equals `labels != ignore_index`).
 - The analyzer restores the `requires_grad` flags it changes on the model's parameters.
 
 ### Documentation
@@ -113,6 +122,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   momentum, weight decay and the step's own second-moment update are excluded.
 - AdamW's `P` can only be built from native checkpoint bundles; optimizer states
   published with hub checkpoints are not read.
+- **A `valid_mask_fn` stricter than the labels does not reach the loss.** It
+  restricts the counts, the gradient weights and the probes only, so for such a
+  mask `delta_loss` is wrong and depends on `micro_batch_size`, and
+  `per_sequence_cv`'s `chi_net` is biased. Exclude positions through the labels
+  (`ignore_index`). Fixed in a follow-up pull request.
+- **Unshifted labels are not detected.** vatis expects pre-shifted labels; a
+  batch whose `labels` equal its `input_ids` (the HuggingFace / TRL convention)
+  is scored one position off without an error. Fixed in a follow-up pull
+  request.
+- **A bundle's recorded pad convention is not applied to the update batch**
+  (`mask_pad_in_loss` / `loss_ignore_index` in `metadata.json` are not read):
+  update-batch rows of a run whose loss ignored pad targets describe a
+  different loss than the one that was descended. Fixed in a follow-up pull
+  request.
 
 ## [0.2.1] — 2026-10-19
 

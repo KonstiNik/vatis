@@ -139,6 +139,35 @@ def test_weighted_sum_sq_grads_skips_missing_gradients() -> None:
     assert total == pytest.approx(0.0 * 1.0 + 1.0 * 4.0)
 
 
+def test_weighted_sum_sq_grads_rejects_a_length_mismatch_instead_of_truncating() -> None:
+    """One gradient entry per parameter view, or it is an error.
+
+    ``zip`` used to stop at the shorter of the two, so a gradient tuple that had
+    lost (or gained) an entry produced a plausible partial sum.
+    """
+    params = [nn.Parameter(torch.zeros(2)), nn.Parameter(torch.zeros(3))]
+    views = Preconditioner.from_diagonal(torch.arange(1, 6, dtype=torch.float64)).parameter_views(
+        params
+    )
+    g0 = torch.tensor([1.0, 2.0], dtype=torch.float64)
+    g1 = torch.tensor([1.0, 1.0, 1.0], dtype=torch.float64)
+    cpu = torch.device("cpu")
+    full = float(weighted_sum_sq_grads([g0, g1], views, device=cpu))
+    assert full == pytest.approx(1.0 * 1.0 + 2.0 * 4.0 + 3.0 + 4.0 + 5.0)
+    shorter, longer = r"zip\(\) argument 2 is longer", r"zip\(\) argument 2 is shorter"
+    with pytest.raises(ValueError, match=shorter):
+        weighted_sum_sq_grads([g0], views, device=cpu)  # a gradient is missing
+    with pytest.raises(ValueError, match=longer):
+        weighted_sum_sq_grads([g0, g1, g1], views, device=cpu)  # one too many
+    with pytest.raises(ValueError, match=longer):
+        weighted_sum_sq_grads([g0, g1], views[:1], device=cpu)  # a view is missing
+    with pytest.raises(ValueError, match=shorter):
+        weighted_sum_sq_grads([g0], views, device=cpu, min_weight=3.0)  # the capped path too
+    # a ``None`` gradient is an entry, not a missing one: it still contributes zero
+    assert float(weighted_sum_sq_grads([None, g1], views, device=cpu)) == pytest.approx(12.0)
+    assert float(weighted_sum_sq_grads([g0, None], views, device=cpu)) == pytest.approx(9.0)
+
+
 def test_weighted_reductions_reject_length_mismatch() -> None:
     with pytest.raises(ValueError, match="flat has"):
         weighted_sum_sq_fp64(torch.ones(3), torch.ones(4))
