@@ -147,22 +147,46 @@ How to read them:
 - `delta_loss_P_capped / delta_loss_P` and (self pairs) `chi_net_P_capped /
   chi_net_P` are the shares. Near 0: the P observables describe the trained
   coordinates. Near 1: they describe coordinates the optimizer has not touched.
-- Both quantities are linear in `P`, so the remainder is the value restricted
-  to coordinates with history, and
-  `(delta_loss_P − delta_loss_P_capped) / (chi_loss · (chi_net_P − chi_net_P_capped))`
-  is `chi_pos_P` on those coordinates alone — available without re-running.
-- For a cross pair `chi_net_P` is a geometric mean of the two batches' traces,
-  which is not linear in `P`; its capped row is the geometric mean of the two
-  capped parts. Use the two self-pair rows to form shares.
+- `delta_loss_P` (self and cross pairs) and the self-pair `chi_net_P` are linear
+  in `P`, so for them the remainder is the value restricted to coordinates with
+  history. `chi_pos_P` on those coordinates alone is therefore available
+  without re-running, but the formula differs between the two kinds of pair:
+  - **Self pair** `(A, A)`, from that pair's own rows:
+
+    ```
+    (delta_loss_P − delta_loss_P_capped) / (chi_loss · (chi_net_P − chi_net_P_capped))
+    ```
+
+  - **Cross pair** `(A, B)`. Here `chi_net_P` is the geometric mean `√(a·b)` of
+    the two batches' traces, which is not linear in `P`, and its capped row is
+    `√(a_c·b_c)`, the geometric mean of the two capped parts. With `a`, `a_c`
+    the `chi_net_P`, `chi_net_P_capped` rows of the self pair `(A, A)` and `b`,
+    `b_c` those of `(B, B)`, and the numerator and `chi_loss` taken from the
+    cross pair's rows:
+
+    ```
+    (delta_loss_P − delta_loss_P_capped) / (chi_loss · √((a − a_c)·(b − b_c)))
+    ```
+
+    The cross rows' own difference `chi_net_P − chi_net_P_capped` is
+    `√(a·b) − √(a_c·b_c)`, which is **not** `√((a − a_c)·(b − b_c))`; do not use
+    it as the restricted denominator, and use the two self-pair rows to form
+    `chi_net_P` shares.
 - A value of exactly `0` means no coordinate is at the ceiling (or none of them
   is touched by the batch).
 
-A coordinate counts as "at the ceiling" when `P_i ≥ (1 − 1e-6)/ε`
-(`vatis.core.preconditioner.epsilon_cap_mask` gives the same mask). The rows
-cost no backward and no additional parameter-sized vector: each gradient the
-estimator already has is reduced once more with the restricted weight. A `P`
-without a ceiling (`identity`, `sgd`, an `explicit` diagonal unless you pass
-`ceiling=`) has no such rows.
+**What "at the ceiling" means.** A coordinate counts when
+`P_i ≥ (1 − 1e-6)/ε` (`vatis.core.preconditioner.epsilon_cap_mask` gives the
+same mask), i.e. when `√v̂_i` is below about `1e-6 · ε`: a second moment that is
+zero to rounding. A coordinate whose `√v̂_i` is merely comparable to `ε` is
+**not** counted, although `ε` still sets most of its weight — at `√v̂_i = ε` it
+has half the ceiling weight. The `*_capped` rows are therefore a lower bound on
+the share of an observable that is dominated by `ε`.
+
+The rows cost no backward and no additional parameter-sized vector: each
+gradient the estimator already has is reduced once more with the restricted
+weight. A `P` without a ceiling (`identity`, `sgd`, an `explicit` diagonal
+unless you pass `ceiling=`) has no such rows.
 
 #### What `delta_loss_P` is not
 
