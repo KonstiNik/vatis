@@ -50,11 +50,12 @@ _VOCAB, _SEQ = 32, 8
 def _bundle() -> ModelBundle:
     """A small transformer in which **every** parameter is live.
 
-    ``TinyTransformer`` zero-initialises all 1-D parameters, LayerNorm gains
-    included, so at init its logits are identically zero and only the final
-    LayerNorm receives a gradient. The statistical test below must not rest on
-    that degenerate Jacobian, so the gains are set to 1 and the weight matrices
-    to an ordinary ``N(0, 1/fan_in)`` scale.
+    This test was written when ``TinyTransformer`` still zero-initialised all
+    1-D parameters, LayerNorm gains included (logits identically zero, only the
+    final LayerNorm live), and therefore sets its own initialisation: gains at
+    1 and weight matrices at an ordinary ``N(0, 1/fan_in)`` scale. The fixture
+    has since been repaired; the override is kept so that the statistics pinned
+    below stay those of one fixed model.
     """
     torch.manual_seed(0)
     model = TinyTransformer(
