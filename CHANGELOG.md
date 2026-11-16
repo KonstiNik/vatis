@@ -26,7 +26,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   A checkpoint whose directory step differs from its optimizer state's own step
   counter is refused (`BundleSchemaError`); both methods take
   `on_step_mismatch="warn"` to build `P` from the saved counter with a warning
-  instead (default `"raise"`).
+  instead (default `"raise"`). A state whose param groups have different
+  learning rates is refused as well: `P` leaves the rate out, which is only
+  sound when every parameter has the same one.
 - **`delta_loss_P_capped` / `chi_net_P_capped`** rows next to the AdamW P
   observables: the part contributed by coordinates at the `1/ε` ceiling of `P`
   (second moment still zero). A few such coordinates can carry nearly all of a

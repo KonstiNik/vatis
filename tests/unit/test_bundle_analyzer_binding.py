@@ -746,6 +746,190 @@ def test_a_recorded_optimizer_class_other_than_adam_is_refused_by_name(tmp_path:
         source.adamw_preconditioner()(source.checkpoints[0].identifier)
 
 
+# ----------------------------------------------------- per-group learning rates
+
+
+def _two_group_bundle(
+    tmp_path: Path,
+    optimizer_cls: type[torch.optim.Optimizer],
+    rates: tuple[float, float],
+    *,
+    bundled_steps: tuple[int, ...] = (3,),
+    scheduled: bool = False,
+    optimizer_kwargs: dict[str, Any] | None = None,
+) -> Path:
+    """A real optimizer with two param groups (first / second half of the
+    parameters) at the given base rates. With ``scheduled`` one ``LambdaLR``
+    steps both groups, so the saved ``lr`` changes from checkpoint to checkpoint.
+    Checkpoints are written pre-step."""
+    torch.manual_seed(0)
+    model = BundleTinyLM(seed=0)
+    run_dir = tmp_path / "run"
+    name = "sgd" if optimizer_cls is torch.optim.SGD else "adamw"
+    order = write_run_files(run_dir, model, metadata=bundle_metadata(model, optimizer=name))
+    named = dict(model.named_parameters())
+    half = len(order) // 2
+    optimizer = optimizer_cls(
+        [
+            {"params": [named[n] for n in order[:half]], "lr": rates[0]},
+            {"params": [named[n] for n in order[half:]], "lr": rates[1]},
+        ],
+        **(optimizer_kwargs or {}),
+    )
+    scheduler = (
+        torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: 0.5**step) if scheduled else None
+    )
+    ids = torch.from_numpy(make_batch_a(seed=0)).long()
+    for step in range(max(bundled_steps) + 1):
+        if step in bundled_steps:
+            write_checkpoint(
+                run_dir,
+                step,
+                model=model,
+                optim_state=optimizer.state_dict(),
+                batch_a=make_batch_a(seed=step),
+            )
+        optimizer.zero_grad(set_to_none=True)
+        _lm_loss(model, ids).backward()
+        optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
+    return run_dir
+
+
+def _saved_rates(source: Any, step: int) -> list[float]:
+    return [group["lr"] for group in source.checkpoint_for(step).optimizer_state.param_groups]
+
+
+ADAMW_KW = {"betas": ADAM_BETAS, "eps": ADAM_EPS}
+PER_GROUP_LR = "different learning rates.*Preconditioner.from_diagonal"
+
+
+@pytest.mark.parametrize("step", [0, 3])
+def test_adamw_groups_with_unequal_rates_are_refused(tmp_path: Path, step: int) -> None:
+    """``P`` leaves the learning rate out; that is only sound when there is one."""
+    run_dir = _two_group_bundle(
+        tmp_path, torch.optim.AdamW, (1e-3, 1e-4), bundled_steps=(step,), optimizer_kwargs=ADAMW_KW
+    )
+    source = load_local_bundle(run_dir, tiny_lm_factory)
+    assert _saved_rates(source, step) == [1e-3, 1e-4]
+    ident = source.checkpoint_for(step).identifier
+    for factory in (
+        source.adamw_preconditioner(),
+        source.preconditioner(),
+        # explicit beta2 / eps must not be a way around the check
+        source.adamw_preconditioner(beta2=0.95, eps=1e-8),
+        source.preconditioner(beta2=0.95, eps=1e-8),
+        source.adamw_preconditioner(on_step_mismatch="warn"),
+    ):
+        with pytest.raises(ValueError, match=PER_GROUP_LR):
+            factory(ident)
+
+
+def test_adamw_groups_with_equal_rates_are_accepted(tmp_path: Path) -> None:
+    """Two groups as such are fine (e.g. to exempt biases from weight decay)."""
+    torch.manual_seed(0)
+    run_dir = _two_group_bundle(
+        tmp_path, torch.optim.AdamW, (1e-3, 1e-3), bundled_steps=(0, 3), optimizer_kwargs=ADAMW_KW
+    )
+    source = load_local_bundle(run_dir, tiny_lm_factory)
+    assert len(source.checkpoint_for(3).optimizer_state.param_groups) == 2
+    with pytest.warns(UserWarning, match="SKIPPED"):
+        assert source.adamw_preconditioner()(source.checkpoint_for(0).identifier) is None
+    saved = torch.load(source.checkpoint_for(3).path / "optim.pt", weights_only=True)["state"]
+    v = torch.cat([saved[i]["exp_avg_sq"].reshape(-1) for i in range(len(source.layout))])
+    by_hand = 1.0 / ((v / (1.0 - ADAM_BETAS[1] ** 3)).sqrt() + ADAM_EPS)
+    for factory in (source.adamw_preconditioner(), source.preconditioner()):
+        precond = factory(source.checkpoint_for(3).identifier)
+        assert precond is not None and precond.descriptor == "adamw"
+        assert torch.equal(precond.diag, by_hand)
+
+
+@pytest.mark.parametrize("momentum", [0.0, 0.9])
+@pytest.mark.parametrize("step", [0, 3])
+def test_sgd_groups_with_unequal_rates_are_refused(
+    tmp_path: Path, momentum: float, step: int
+) -> None:
+    """With per-group rates ``P = I`` is not SGD's geometry either."""
+    run_dir = _two_group_bundle(
+        tmp_path,
+        torch.optim.SGD,
+        (1e-2, 1e-3),
+        bundled_steps=(step,),
+        optimizer_kwargs={"momentum": momentum},
+    )
+    source = load_local_bundle(run_dir, tiny_lm_factory)
+    assert _saved_rates(source, step) == [1e-2, 1e-3]
+    with pytest.raises(ValueError, match=PER_GROUP_LR):
+        source.preconditioner()(source.checkpoint_for(step).identifier)
+
+
+@pytest.mark.parametrize("step", [0, 3])
+def test_sgd_groups_with_equal_rates_get_the_identity(tmp_path: Path, step: int) -> None:
+    run_dir = _two_group_bundle(
+        tmp_path,
+        torch.optim.SGD,
+        (1e-2, 1e-2),
+        bundled_steps=(step,),
+        optimizer_kwargs={"momentum": 0.9},
+    )
+    source = load_local_bundle(run_dir, tiny_lm_factory)
+    assert len(source.checkpoint_for(step).optimizer_state.param_groups) == 2
+    precond = source.preconditioner()(source.checkpoint_for(step).identifier)
+    assert precond is not None and precond.descriptor == "sgd"
+    assert torch.equal(precond.diag, torch.ones(source.layout.total_numel))
+
+
+@pytest.mark.parametrize("optimizer_cls", [torch.optim.AdamW, torch.optim.SGD])
+def test_one_schedule_stepping_both_groups_keeps_their_saved_rates_equal(
+    tmp_path: Path, optimizer_cls: type[torch.optim.Optimizer]
+) -> None:
+    """The saved ``lr`` is the scheduled value at that step. Groups that share a
+    schedule and a base rate agree on it at every checkpoint, whatever it is."""
+    kwargs = ADAMW_KW if optimizer_cls is torch.optim.AdamW else {"momentum": 0.9}
+    steps = (1, 2, 4)
+    run_dir = _two_group_bundle(
+        tmp_path,
+        optimizer_cls,
+        (1e-2, 1e-2),
+        bundled_steps=steps,
+        scheduled=True,
+        optimizer_kwargs=kwargs,
+    )
+    source = load_local_bundle(run_dir, tiny_lm_factory)
+    seen = []
+    for step in steps:
+        rates = _saved_rates(source, step)
+        assert rates[0] == rates[1] == pytest.approx(1e-2 * 0.5**step)
+        seen.append(rates[0])
+        precond = source.preconditioner()(source.checkpoint_for(step).identifier)
+        assert precond is not None
+        assert precond.descriptor == ("adamw" if optimizer_cls is torch.optim.AdamW else "sgd")
+    assert len(set(seen)) == len(steps)  # the schedule really moved the rate
+
+
+@pytest.mark.parametrize("optimizer_cls", [torch.optim.AdamW, torch.optim.SGD])
+def test_a_schedule_over_groups_with_different_base_rates_is_refused_at_every_checkpoint(
+    tmp_path: Path, optimizer_cls: type[torch.optim.Optimizer]
+) -> None:
+    kwargs = ADAMW_KW if optimizer_cls is torch.optim.AdamW else {"momentum": 0.9}
+    steps = (1, 2, 4)
+    run_dir = _two_group_bundle(
+        tmp_path,
+        optimizer_cls,
+        (1e-2, 1e-3),
+        bundled_steps=steps,
+        scheduled=True,
+        optimizer_kwargs=kwargs,
+    )
+    source = load_local_bundle(run_dir, tiny_lm_factory)
+    for step in steps:
+        rates = _saved_rates(source, step)
+        assert rates[0] == pytest.approx(10.0 * rates[1])
+        with pytest.raises(ValueError, match=PER_GROUP_LR):
+            source.preconditioner()(source.checkpoint_for(step).identifier)
+
+
 # ------------------------------------------------ where the optimizer state lives
 
 

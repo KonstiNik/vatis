@@ -1039,6 +1039,10 @@ class LocalBundleSource:
         Adamax also save ``betas`` and an ``exp_avg_sq``, but their param groups
         lack the ``amsgrad`` key every Adam / AdamW group has.
 
+        Param groups that disagree on ``lr`` are refused at every checkpoint
+        (see :func:`adamw_preconditioner_from_state`); a ``beta2`` / ``eps``
+        override does not change that.
+
         The optimizer state is read on the CPU; the returned ``P`` is on the
         source's ``device``.
 
@@ -1078,6 +1082,9 @@ class LocalBundleSource:
                     # a non-Adam bundle is refused at step 0 as well, not skipped
                     # there and refused one checkpoint later.
                     raise BundleSchemaError(_not_adam_message(state, checkpoint.identifier))
+                # Likewise for per-group learning rates: the groups are saved at
+                # step 0 too.
+                _refuse_per_group_lr(state, checkpoint.identifier)
                 warnings.warn(
                     f"{checkpoint.identifier}: the saved optimizer state is empty "
                     f"({checkpoint.path / CHECKPOINT_OPTIM_FILE}), which is what a step-0 "
@@ -1156,6 +1163,11 @@ class LocalBundleSource:
         Any other optimizer is refused. ``beta2`` / ``eps`` are AdamW overrides
         and are refused for an SGD bundle.
 
+        Param groups that disagree on ``lr`` are refused for both optimizers:
+        ``P`` leaves the learning rate out, which is only sound when every
+        parameter has the same one. With per-group rates neither the AdamW
+        ``P`` nor SGD's ``P = I`` is the optimizer's geometry.
+
         ``on_step_mismatch`` is passed to :meth:`adamw_preconditioner` (default
         ``"raise"``). An SGD state has no step counter to compare with the
         directory step, so it has no effect on an SGD bundle.
@@ -1180,6 +1192,9 @@ class LocalBundleSource:
                         f"{checkpoint.identifier}: beta2 / eps are AdamW overrides, but this "
                         "bundle was written by SGD, whose geometry factor is P = I."
                     )
+                _refuse_per_group_lr(
+                    checkpoint.optimizer_state, checkpoint.identifier, optimizer="SGD"
+                )
                 checkpoint.release_optimizer_state()
                 return Preconditioner.identity(
                     self.layout.total_numel, device=self.device, descriptor=SGD_DESCRIPTOR
@@ -1311,6 +1326,52 @@ def _check_step_mismatch_policy(on_step_mismatch: str) -> None:
         )
 
 
+def _rate_key(rate: Any) -> Any:
+    """A learning rate as a comparable value (``1`` and ``1.0`` are the same rate)."""
+    try:
+        return float(rate)
+    except (TypeError, ValueError):
+        return repr(rate)
+
+
+def _refuse_per_group_lr(
+    state: OptimizerStateView, context: str, *, optimizer: str = "AdamW"
+) -> None:
+    """Raise unless every saved param group has the same learning rate.
+
+    ``P`` deliberately leaves the learning rate out: for one rate ``eta`` it is
+    a common factor, ``dtheta = -eta * P grad L``, and ``chi_pos_P`` does not
+    depend on it. With per-group rates the update is ``-eta_g * P grad L`` on
+    group ``g``, so the rates are part of the geometry and the documented ``P``
+    (or ``P = I`` for SGD) is not the optimizer's.
+
+    The saved ``lr`` is the scheduled value at that checkpoint. Groups that
+    share one schedule agree on it at every checkpoint, so the saved values are
+    compared as they are.
+    """
+    rates = [group.get("lr") for group in state.param_groups]
+    if len({_rate_key(rate) for rate in rates}) <= 1:
+        return
+    if optimizer == "SGD":
+        remedy = (
+            "a diagonal that holds each group's rate relative to a reference rate in place of P = I"
+        )
+    else:
+        remedy = (
+            "the AdamW P = 1/(sqrt(v_hat) + eps) scaled per group by its rate relative "
+            "to a reference rate"
+        )
+    raise ValueError(
+        f"{context}: the saved param_groups have different learning rates "
+        f"({_abbrev(rates)}). P leaves the learning rate out, which is only sound when "
+        "it is the same for every parameter: per-group rates change the optimizer's "
+        "geometry (the update is -lr_g * P grad L on group g), and one P without the "
+        f"rate cannot represent that. For {optimizer}, build the P you mean with "
+        f"Preconditioner.from_diagonal(...), e.g. {remedy}. A beta2 / eps override does "
+        "not lift this."
+    )
+
+
 def _not_adam_message(state: OptimizerStateView, context: str) -> str:
     """Why a state whose ``param_groups`` are not Adam's / AdamW's is refused."""
     group_keys = sorted({key for group in state.param_groups for key in group} - {"params"})
@@ -1363,8 +1424,13 @@ def adamw_preconditioner_from_state(
             optimizer name when there is one and, independently of it, by the
             saved ``param_groups`` (RAdam, NAdam and Adamax keep an
             ``exp_avg_sq`` too, but their groups have no ``amsgrad`` key).
-        ValueError: ``betas``/``eps`` missing from the saved ``param_groups``, or
-            ``amsgrad=True`` (which preconditions with ``max_exp_avg_sq``).
+        ValueError: ``betas``/``eps`` missing from the saved ``param_groups``,
+            ``amsgrad=True`` (which preconditions with ``max_exp_avg_sq``), or
+            param groups that disagree on ``lr``. ``P`` leaves the learning rate
+            out, which is only sound when it is the same for every parameter;
+            per-group rates are part of the optimizer's geometry. Explicit
+            ``beta2`` / ``eps`` do not bypass this check (nor the ``amsgrad``
+            one).
     """
     if state.is_empty:
         raise BundleSchemaError(
@@ -1421,6 +1487,9 @@ def adamw_preconditioner_from_state(
     # RAdam / NAdam state into rows labelled "adamw".
     if _optimizer_family(state) != "adam":
         raise BundleSchemaError(_not_adam_message(state, context))
+    # Before, and independent of, the beta2 / eps handling below: an override
+    # must not be a way around it (as it once was for amsgrad).
+    _refuse_per_group_lr(state, context)
     disagreeing = [
         key
         for key in ("betas", "eps")

@@ -84,6 +84,18 @@ step 0 included. Momentum and weight decay are excluded for SGD for the same
 reason as for AdamW (see "What `delta_loss_P` is not"). Any other optimizer is
 refused.
 
+**`P` leaves the learning rate out, so the bundle sources require one rate.**
+For a single rate `η` it is a common factor of the update and `chi_pos_P` does
+not depend on it. With per-group rates the update is `−η_g P ∇L` on group `g`:
+the rates are then part of the optimizer's geometry, and neither the AdamW `P`
+nor SGD's `P = I` describes it. A saved state whose param groups disagree on
+`lr` is therefore refused by both bundle sources, at every checkpoint and
+regardless of a `beta2` / `eps` override. The saved `lr` is the scheduled value
+at that step, so groups that share one schedule and one base rate agree at
+every checkpoint. For a run with per-group rates build the `P` you mean with
+`Preconditioner.from_diagonal(...)`, e.g. the AdamW `P` scaled per group by its
+rate relative to a reference rate.
+
 **AdamW conventions.**
 
 - `t` is the **saved** step counter. Bundles are pre-step (see "Native
@@ -619,6 +631,8 @@ for ckpt in source:                                    # or drive the loop yours
   `optimizer_class`) is refused as well rather than labelled `"adamw"`; so are
   an SGD state (use `source.preconditioner()`),
   `amsgrad=True` in any parameter group, parameter groups that disagree on
+  `lr` (also under an override, and for SGD bundles in `preconditioner()` — see
+  "Optimizer-aware measurement"), parameter groups that disagree on
   `betas` / `eps` (unless both are passed explicitly) and a parameter that never
   received a gradient. An `eps` / `beta2` override is written into the descriptor, e.g.
   `adamw(eps=0.001)`.
