@@ -293,6 +293,29 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
             )
             u_full = u_full_with_grad.detach()
 
+            # The decomposition above needs the loss direction to live inside
+            # the masked output subspace: with the probe zeroed outside ``vmask``
+            # the two terms only add up to the trace over the accepted positions
+            # if ``u`` vanishes there too. A ``loss_fn`` that counts positions
+            # the mask rejects breaks that and biases the estimate by an amount
+            # no number of probes removes, so it is refused. The analyzer never
+            # gets here in that state: it hands this estimator a loss evaluated
+            # on labels that already carry the mask.
+            if vmask is not None:
+                inside = vmask.to(dtype=torch.bool)
+                while inside.ndim < u_full.ndim:
+                    inside = inside.unsqueeze(-1)
+                n_outside = int(torch.count_nonzero(u_full.masked_fill(inside, 0)).item())
+                if n_outside:
+                    raise ValueError(
+                        "per_sequence_cv: loss_fn has a non-zero gradient w.r.t. the logits "
+                        f"at positions valid_mask_fn rejects ({n_outside} entries). The "
+                        "control variate is built from that gradient and is only unbiased "
+                        "when the loss is restricted to the masked positions. Write the "
+                        "mask into the labels the loss reads (set them to the loss's "
+                        "ignore index there) -- vatis.Analyzer does this for every batch."
+                    )
+
             # Step 2: B per-sample backwards. These give the exact
             # loss-direction term Sum_b ||g_b||^2 / ||u_b||^2. We only retain
             # the full g_b vectors when the alignment matrix is requested;
