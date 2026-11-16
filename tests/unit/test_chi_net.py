@@ -497,7 +497,14 @@ def test_per_seq_cv_lower_variance_than_hutchinson_at_same_n() -> None:
     exact = _exact_chi_net(model, batch)
 
     n_h = 8
-    n_seeds = 5
+    # 64 seeds, not 5. The statistic below is a ratio of two noisy means, and on
+    # this fixture the control variate removes well under 1% of the standard
+    # deviation (at initialisation the loss direction carries less than 1% of
+    # the trace), so the true ratio is ~0.995 and the 1.1 bound is a "not
+    # worse" check. Measured over disjoint seed sets: with 5 seeds the ratio
+    # has a standard deviation of ~0.08 and exceeds 1.1 for ~8% of them; with
+    # 64 seeds it is ~0.02, which puts the bound more than 5 sigma away.
+    n_seeds = 64
 
     h_errors = []
     cv_errors = []
@@ -532,8 +539,8 @@ def test_per_seq_cv_lower_variance_than_hutchinson_at_same_n() -> None:
 
     h_mean = sum(h_errors) / len(h_errors)
     c_mean = sum(cv_errors) / len(cv_errors)
-    # The CV estimator should be at least as accurate; we use a slightly loose
-    # bound (1.1×) because variance is itself noisy across only 5 seeds.
+    # The CV estimator should be at least as accurate; the bound stays slightly
+    # loose (1.1×) because the ratio of the two mean errors is itself noisy.
     assert c_mean <= h_mean * 1.1, (
         f"per_seq_cv mean abs err {c_mean:.4f} not better than hutchinson {h_mean:.4f}"
     )
