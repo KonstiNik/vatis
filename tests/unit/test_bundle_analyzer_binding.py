@@ -311,8 +311,73 @@ def test_directory_step_that_contradicts_the_optimizer_counter_warns(tmp_path: P
         batch_a=make_batch_a(seed=5),
     )
     source = load_local_bundle(run_dir, tiny_lm_factory)
+    # ``"warn"`` is the behaviour that used to be the default: a warning, and P
+    # built from the saved state's own counter (500), not from the directory's.
     with pytest.warns(UserWarning, match="directory says step 5"):
-        source.adamw_preconditioner()(source.checkpoints[0].identifier)
+        precond = source.adamw_preconditioner(on_step_mismatch="warn")(
+            source.checkpoints[0].identifier
+        )
+    assert precond is not None
+    v = source.checkpoints[0].optimizer_state.flat_state("exp_avg_sq")
+    assert torch.equal(precond.diag, 1.0 / ((v / (1.0 - 0.95**500)).sqrt() + 1e-8))
+    assert not torch.equal(precond.diag, 1.0 / ((v / (1.0 - 0.95**5)).sqrt() + 1e-8))
+    with pytest.warns(UserWarning, match="directory says step 5"):
+        unified = source.preconditioner(on_step_mismatch="warn")(source.checkpoints[0].identifier)
+    assert unified is not None and torch.equal(unified.diag, precond.diag)
+
+
+def test_directory_step_that_contradicts_the_optimizer_counter_is_refused_by_default(
+    tmp_path: Path,
+) -> None:
+    """Under pre-step semantics the two numbers are the same; when they are not,
+    the optimizer state and the weights may not belong together. A warning let a
+    loader that hands a checkpoint another checkpoint's state pass every tier."""
+    model = BundleTinyLM(seed=0)
+    run_dir = tmp_path / "run"
+    order = write_run_files(run_dir, model, metadata=bundle_metadata(model))
+    write_checkpoint(
+        run_dir,
+        5,
+        model=model,
+        optim_state=handwritten_optim_state(model, order, step=500),
+        batch_a=make_batch_a(seed=5),
+    )
+    source = load_local_bundle(run_dir, tiny_lm_factory)
+    ident = source.checkpoints[0].identifier
+    message = "applied 500 update.*directory says step 5.*may not belong together"
+    for factory in (
+        source.adamw_preconditioner(),
+        source.adamw_preconditioner(on_step_mismatch="raise"),
+        source.preconditioner(),
+        source.adamw_preconditioner(beta2=0.999, eps=1e-6),  # an override does not lift it
+    ):
+        with pytest.raises(BundleSchemaError, match=message):
+            factory(ident)
+    # a consistent checkpoint is unaffected by the option
+    write_checkpoint(
+        run_dir,
+        7,
+        model=model,
+        optim_state=handwritten_optim_state(model, order, step=7),
+        batch_a=make_batch_a(seed=7),
+    )
+    source = load_local_bundle(run_dir, tiny_lm_factory)
+    consistent = source.checkpoint_for(7).identifier
+    strict = source.adamw_preconditioner()(consistent)
+    lenient = source.adamw_preconditioner(on_step_mismatch="warn")(consistent)
+    assert strict is not None and lenient is not None
+    assert torch.equal(strict.diag, lenient.diag)
+
+
+@pytest.mark.parametrize("value", ["ignore", "error", "", "Raise", None, True])
+def test_on_step_mismatch_accepts_raise_and_warn_only(
+    trained_bundle: dict[str, Any], value: Any
+) -> None:
+    source = load_local_bundle(trained_bundle["run_dir"], tiny_lm_factory)
+    with pytest.raises(ValueError, match="on_step_mismatch must be one of"):
+        source.adamw_preconditioner(on_step_mismatch=value)
+    with pytest.raises(ValueError, match="on_step_mismatch must be one of"):
+        source.preconditioner(on_step_mismatch=value)
 
 
 class _BufferLM(BundleTinyLM):

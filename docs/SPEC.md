@@ -563,10 +563,16 @@ for ckpt in source:                                    # or drive the loop yours
 - **Pre-step semantics.** The checkpoint at step `t` holds `θ_t` and the
   optimizer state from *before* the step-`t` update; `batch_a.npy` is the batch
   step `t` is about to consume. The directory step is the number of optimizer
-  updates already applied, so it equals the optimizer state's own step counter;
-  `adamw_preconditioner()` warns when the two disagree. A step-0 checkpoint
-  legitimately has an empty optimizer state; `flat_state` raises rather than
-  inventing zeros.
+  updates already applied, so it equals the optimizer state's own step counter.
+  When the two disagree, the optimizer state and the weights may not belong
+  together, and `adamw_preconditioner()` / `preconditioner()` **refuse the
+  checkpoint** (`BundleSchemaError` naming both numbers). For a bundle whose
+  step was merely stored wrongly, `on_step_mismatch="warn"` on either method
+  downgrades that to a `UserWarning` and builds `P` from the saved state's own
+  counter; `"raise"` is the default and no other value is accepted. (An SGD
+  state has no step counter, so there is nothing to compare for it.) A step-0
+  checkpoint legitimately has an empty optimizer state; `flat_state` raises
+  rather than inventing zeros.
 - **`batch_a.npy` holds whole token sequences.** The loader turns a row `ids`
   into inputs `ids` and next-token labels (`labels[:, :-1] = ids[:, 1:]`, last
   position ignored), i.e. the pairs `ids[:, :-1] → ids[:, 1:]`. The file carries

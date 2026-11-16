@@ -108,6 +108,9 @@ _ADAM_GROUP_KEYS = frozenset({"betas", "amsgrad"})
 _SGD_GROUP_KEYS = frozenset({"momentum", "dampening", "nesterov"})
 # Descriptor of the rows measured with SGD's geometry factor, ``P = I``.
 SGD_DESCRIPTOR = "sgd"
+# What a P source does when a checkpoint's directory step differs from the step
+# counter of its saved optimizer state.
+_STEP_MISMATCH_POLICIES = ("raise", "warn")
 CHECKPOINT_BATCH_A_FILE = "batch_a.npy"
 CHECKPOINT_META_FILE = "meta.json"
 
@@ -995,6 +998,7 @@ class LocalBundleSource:
         beta2: float | None = None,
         eps: float | None = None,
         descriptor: str = "adamw",
+        on_step_mismatch: str = "raise",
     ) -> Callable[[str], Preconditioner | None]:
         """The ``adamw`` P source, as a per-checkpoint factory for the analyzer.
 
@@ -1038,9 +1042,23 @@ class LocalBundleSource:
         The optimizer state is read on the CPU; the returned ``P`` is on the
         source's ``device``.
 
+        Args:
+            beta2: override for Adam's second-moment decay.
+            eps: override for Adam's epsilon.
+            descriptor: the parquet descriptor of the resulting rows.
+            on_step_mismatch: what to do when the saved optimizer state's own
+                step counter differs from the checkpoint directory's step.
+                Under pre-step semantics the two are the same number, so a
+                difference means the optimizer state and the weights may not
+                belong together. ``"raise"`` (default) raises
+                :class:`BundleSchemaError`; ``"warn"`` emits a ``UserWarning``
+                and builds ``P`` from the saved state's own counter — for a
+                bundle whose step was merely stored wrongly.
+
         Returns:
             ``fn(checkpoint_id) -> Preconditioner | None``.
         """
+        _check_step_mismatch_policy(on_step_mismatch)
 
         def build(checkpoint_id: str) -> Preconditioner | None:
             checkpoint = self.checkpoint_for(checkpoint_id)
@@ -1073,12 +1091,21 @@ class LocalBundleSource:
                 )
                 return None
             if state.step_count is not None and state.step_count != checkpoint.step:
-                warnings.warn(
+                mismatch = (
                     f"{checkpoint.identifier}: the saved optimizer state has applied "
                     f"{state.step_count} update(s), but the checkpoint directory says step "
                     f"{checkpoint.step}. Under pre-step semantics the two are the same "
                     "number; a mismatch means the optimizer state and the weights may not "
-                    "belong together. P is built from the saved state's own counter.",
+                    "belong together."
+                )
+                if on_step_mismatch == "raise":
+                    raise BundleSchemaError(
+                        f"{mismatch} Refusing to build P from it. If only the step was "
+                        'stored wrongly, pass on_step_mismatch="warn" to build P from the '
+                        "saved state's own counter."
+                    )
+                warnings.warn(
+                    f"{mismatch} P is built from the saved state's own counter.",
                     UserWarning,
                     stacklevel=2,
                 )
@@ -1105,6 +1132,7 @@ class LocalBundleSource:
         *,
         beta2: float | None = None,
         eps: float | None = None,
+        on_step_mismatch: str = "raise",
     ) -> Callable[[str], Preconditioner | None]:
         """The saved optimizer's geometry factor, whichever optimizer wrote the bundle.
 
@@ -1127,8 +1155,12 @@ class LocalBundleSource:
 
         Any other optimizer is refused. ``beta2`` / ``eps`` are AdamW overrides
         and are refused for an SGD bundle.
+
+        ``on_step_mismatch`` is passed to :meth:`adamw_preconditioner` (default
+        ``"raise"``). An SGD state has no step counter to compare with the
+        directory step, so it has no effect on an SGD bundle.
         """
-        adamw = self.adamw_preconditioner(beta2=beta2, eps=eps)
+        adamw = self.adamw_preconditioner(beta2=beta2, eps=eps, on_step_mismatch=on_step_mismatch)
 
         def build(checkpoint_id: str) -> Preconditioner | None:
             checkpoint = self.checkpoint_for(checkpoint_id)
@@ -1269,6 +1301,14 @@ def _optimizer_family(state: OptimizerStateView) -> str | None:
     if all(group.keys() >= _SGD_GROUP_KEYS and "betas" not in group for group in groups):
         return "sgd"
     return None
+
+
+def _check_step_mismatch_policy(on_step_mismatch: str) -> None:
+    if on_step_mismatch not in _STEP_MISMATCH_POLICIES:
+        raise ValueError(
+            f"on_step_mismatch must be one of {list(_STEP_MISMATCH_POLICIES)}, "
+            f"got {on_step_mismatch!r}"
+        )
 
 
 def _not_adam_message(state: OptimizerStateView, context: str) -> str:
