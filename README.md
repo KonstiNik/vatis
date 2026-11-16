@@ -176,6 +176,13 @@ python -m vatis run --model EleutherAI/pythia-160m --revisions step1000 step2000
 Wraps `torchrun`; each rank takes a batch shard and accumulators are all-reduced
 once per `(checkpoint, batch)`. Tune `micro_batch_size` for memory.
 
+The sampled values of a multi-GPU run — `chi_net`, `chi_pos` and their `_P`
+counterparts — depend on the `seed` **and on the number of ranks**: every rank
+draws its own Hutchinson probe stream for its own shard, so the same seed gives
+a different (equally valid, unbiased) estimate at 1, 2 or 4 ranks. Multi-rank
+values for a given seed also differ from every earlier vatis version, which
+seeded all ranks identically. `chi_loss` and `delta_loss` depend on neither.
+
 ## Choosing the χ_net estimator
 
 Auto by default: `per_sequence_cv` for B ≤ 32 (lower variance), `hutchinson` otherwise 

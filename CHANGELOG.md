@@ -48,11 +48,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   probes on a CPU run. `make_probe` refuses a CUDA generator.
 - **Multi-rank (DDP) runs draw different Hutchinson probes for a given `seed`**:
   rank 0 keeps the per-call stream, every other rank now has its own (see
-  "Fixed"). `chi_net`, `chi_net_P`, `chi_pos` and `chi_pos_P` of a run with more
-  than one rank are therefore a different draw than before — same estimator,
-  same expectation, lower variance. Single-process results are unchanged, and so
-  are `chi_loss` and `delta_loss` everywhere. The `hutchinson_seed` column keeps
-  its meaning: it is the per-call seed, the stream of rank 0.
+  "Fixed"). `chi_net`, `chi_net_P`, `chi_pos` and `chi_pos_P` (and
+  `chi_net_P_capped`) of a run with more than one rank are therefore a different
+  draw than in **every earlier version** — same estimator, same expectation —
+  and they depend on the number of ranks as well as on the seed. Single-process
+  results are unchanged *by this fix* (the CPU-probe entry above still applies
+  to them), and so are `chi_loss` and `delta_loss` everywhere. The
+  `hutchinson_seed` column keeps its meaning: it is the per-call seed, the
+  stream of rank 0, and is the same on every rank.
 - `chi_pos` is computed in fp64 and returned as an fp64 scalar. The absolute
   `1e-30` floor on its denominator is gone: only an exactly-zero denominator
   yields `0.0`.
@@ -70,17 +73,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **DDP ranks no longer replay one Hutchinson probe stream.** Every rank seeded
   its generator with the same per-call seed and drew the probes for its own
   shard, so the same random vectors landed on the `k`-th sample of every shard.
-  The shards' estimation errors were then strongly positively correlated (the
-  output-space Gram matrices of different inputs share much of their
-  off-diagonal structure) and added almost coherently: the variance of the
-  all-reduced `chi_net` — hence of `chi_pos`, and to a lesser degree `chi_net_P`
-  / `chi_pos_P` — was up to the world size times the single-process variance on
-  the same batch (measured on a CPU loopback, 2 / 4 ranks: 1.3–2.0× / 2.6–4.5×
-  depending on the model). The estimate was unbiased throughout; it was noisier
-  than a single-process run with the same probe budget — at worst as noisy as if
-  the extra ranks had contributed no probes at all. Rank `r > 0` now seeds its
-  generator from the per-call seed and `r`; with that the same measurement gives
-  0.8–1.2×, consistent with 1.
+  The shards' estimation errors were then positively correlated (the
+  output-space Gram matrices of different inputs are not orthogonal), and the
+  variance of the all-reduced `chi_net` — hence of `chi_pos`, and to a
+  model-dependent degree of `chi_net_P` / `chi_pos_P` — was between 1× and
+  world-size× that of independent rank streams on the same shards. Where in
+  that range depends on the model and on the probe distribution, and it has
+  been measured **only on CPU test models of at most 1.25M parameters** (two toy
+  transformers and one small hub model; 2 / 4 ranks, one sequence per
+  micro-batch, where independent rank streams and a single process have the
+  same variance): 1.3× / 2.1–2.6× with the default Rademacher probes,
+  1.4–1.9× / 2.6–3.3× with Gaussian probes. Nothing larger has been measured.
+  The estimate was unbiased throughout. Rank `r > 0` now seeds its generator
+  from the per-call seed and `r`; the same measurements then give 0.8–1.2×,
+  consistent with 1.
 - The `valid_mask_fn ∧ labels != ignore_index` intersection is now applied by
   **every** accumulator, not only `chi_loss`. With a `valid_mask_fn` that accepts
   positions whose label is `ignore_index`, `delta_loss` was rescaled and depended

@@ -586,9 +586,10 @@ is invariant under the normalization.
 - User passes `num_gpus=N`. CLI launches `torchrun --nproc_per_node=N -m
   vatis._worker …`.
 - Each rank loads the same checkpoint (vatis assumes the model fits on one GPU).
-- Each eval batch is sharded across ranks along the batch dim. If `B % N != 0`,
-  the last rank gets a smaller shard — the all-reduce handles this because we
-  accumulate token-weighted sums, not means.
+- Each eval batch is sharded across ranks along the batch dim, in contiguous
+  slices. If `B % N != 0`, the first `B % N` ranks get one sequence more than the
+  others (`shard_batch`) — the all-reduce handles this because we accumulate
+  token-weighted sums, not means.
 - Per micro-batch: forward → `χ_loss` accumulator. For `χ_net` Hutchinson, each
   rank draws `n` probe vectors **for its own shard** from **its own stream**
   (see "Probe vector details") and estimates the trace over its shard;
@@ -608,21 +609,45 @@ is invariant under the normalization.
   `make_probe` refuses a CUDA generator. The Rademacher draw is bit-packed
   (one random bit per entry) to keep the CPU draw affordable.
 - Probe streams are **per rank**, and different across `(checkpoint, batch)`
-  calls. The per-call seed (`seed` mixed with the checkpoint id and the batch
-  name; this is the `hutchinson_seed` column) seeds rank 0 — and therefore every
-  single-process run — directly. Rank `r > 0` seeds its generator with
-  `sha256("{hutchinson_seed}|rank={r}")` reduced to 31 bits. So `seed`, the rank
-  and the world size (which fixes the shards) determine every probe, and a DDP
-  run is reproducible. Each rank draws full probes for its own shard — ranks do
-  not partition one global probe — so the DDP `χ_net` is a different unbiased
-  estimate from the single-process one, with the same variance.
+  calls. The per-call seed — SHA-256 of `seed`, the checkpoint id and the batch
+  name, reduced modulo `2³¹ − 1`; this is the `hutchinson_seed` column, on every
+  rank — seeds rank 0, and therefore every single-process run, directly. Rank
+  `r > 0` seeds its generator with `sha256("{hutchinson_seed}|rank={r}")`,
+  reduced the same way. So the probes are determined by `seed`, the checkpoint
+  id, the batch name, the rank and the world size (which fixes the shards), and
+  a DDP run is reproducible. Each rank draws full probes for its own shard —
+  ranks do not partition one global probe — so the multi-rank `χ_net` (and with
+  it `χ_pos`, `χ_net^P`, `χ_pos^P`) is a different unbiased estimate from the
+  single-process one and **depends on the number of ranks** as well as on the
+  seed.
+- **The variance depends on how the batch is cut into micro-batches**, so it is
+  not the same for a multi-rank and a single-process run in general. One probe
+  spans a whole micro-batch; its error then also contains the cross-sequence
+  blocks of the Gram matrix, and the variance of both estimators grows roughly
+  linearly with `micro_batch_size`, with a model-dependent slope. Measured in a
+  single process (`B = 8`, `n = 4`, relative to micro-batch 1, the same for
+  `hutchinson` and `per_sequence_cv`): ×2.3 / ×5.2 / ×10.6 at micro-batch
+  2 / 4 / 8 on an untrained toy transformer, ×1.7 / ×3.4 / ×6.5 on a trained
+  one, ×1.1 / ×1.6 / ×1.9 on a pretrained 1.25M-parameter hub model. Sharding
+  cuts the batch *before* micro-batching, so a multi-rank run has the
+  single-process variance only when every micro-batch holds one sequence
+  (measured: 0.8–1.2×, consistent with 1); with larger micro-batches its
+  micro-batches are no larger than a shard and it is typically *less* noisy
+  (0.47× / 0.49× / 0.62× on those three models at 4 ranks, micro-batch 4,
+  `B = 8`).
 - Ranks must **not** share one stream. A Rademacher probe `v` applied to sample
   `a` errs by `Σ_{i≠j} v_i v_j M_a[i,j]` (`M_a = J_a J_aᵀ`), so the same `v` on
   two samples gives errors with covariance `2⟨offdiag M_a, offdiag M_b⟩_F`
-  (Gaussian probes: `2⟨M_a, M_b⟩_F`, never negative), and the Gram matrices of
-  different inputs are far from orthogonal. With a shared seed the
-  per-rank errors add almost coherently and the variance of the all-reduced
-  `χ_net` grows by up to the world size (that was the behaviour through 0.2.1).
+  (Gaussian probes: `2⟨M_a, M_b⟩_F`, which also counts the diagonals and is
+  never negative), and the Gram matrices of different inputs are not
+  orthogonal. With a shared seed (the behaviour through 0.2.1) the per-rank
+  errors are positively correlated, and the variance of the all-reduced `χ_net`
+  is between 1× and world-size× that of **independent rank streams on the same
+  shards** — that is the reference, not a single process; the two coincide only
+  at `micro_batch_size = 1`. Where in that range depends on the model and on the
+  probe distribution. It has been measured only on CPU test models of at most
+  1.25M parameters (nothing larger): 1.3× at 2 ranks and 2.1–2.6× at 4 ranks
+  with Rademacher probes, 1.4–1.9× and 2.6–3.3× with Gaussian probes.
 - Probe vector shape matches the local micro-batch output `(M, S, V)`. **Padding
   positions are zeroed** so masked tokens contribute to neither `χ_net` nor
   `χ_loss`. The mask is the intersection described under "Loss handling".
