@@ -679,14 +679,17 @@ class LocalBundleCheckpoint:
 
     @property
     def optimizer_state(self) -> OptimizerStateView:
-        """The pre-step optimizer state, aligned to the canonical order."""
+        """The pre-step optimizer state, aligned to the canonical order.
+
+        Loaded on the **CPU** whatever the source's ``device`` is: the state is
+        two parameter-sized vectors (``exp_avg``, ``exp_avg_sq``) that only
+        serve to build ``P``, and on a GPU source they would sit next to the
+        model for nothing. :meth:`OptimizerStateView.flat_state` takes a
+        ``device=`` for a caller that wants a vector elsewhere.
+        """
         if self._optimizer_state is None:
             path = self.path / CHECKPOINT_OPTIM_FILE
-            raw = torch.load(
-                path,
-                map_location=self._source.device,
-                weights_only=True,
-            )
+            raw = torch.load(path, map_location="cpu", weights_only=True)
             if not isinstance(raw, Mapping):
                 raise BundleSchemaError(f"{path}: not an optimizer state_dict")
             self._optimizer_state = OptimizerStateView(raw, self._source.layout, source=str(path))
@@ -1032,6 +1035,9 @@ class LocalBundleSource:
         Adamax also save ``betas`` and an ``exp_avg_sq``, but their param groups
         lack the ``amsgrad`` key every Adam / AdamW group has.
 
+        The optimizer state is read on the CPU; the returned ``P`` is on the
+        source's ``device``.
+
         Returns:
             ``fn(checkpoint_id) -> Preconditioner | None``.
         """
@@ -1088,7 +1094,9 @@ class LocalBundleSource:
             # here keeps two parameter-sized vectors (exp_avg, exp_avg_sq) from
             # staying resident for the whole checkpoint; a later access reloads it.
             checkpoint.release_optimizer_state()
-            return precond
+            # The state was read and P was built on the CPU; only the finished P
+            # goes to the source's device.
+            return precond.to(device=self.device)
 
         return build
 
@@ -1207,7 +1215,10 @@ def load_local_bundle(
         dtype: dtype the weights are loaded *as*. Default ``"fp32"``: bundle
             weights are bf16 on disk and the analysis math wants fp32, so the
             upcast happens on load (lossless).
-        device: device for the model, optimizer state and batches.
+        device: device for the model and the batches, and for the ``P`` the
+            preconditioner factories return. The optimizer state itself is
+            read and kept on the CPU (see
+            :attr:`LocalBundleCheckpoint.optimizer_state`).
         steps: optional subset of steps to expose, in any order (the source
             always iterates ascending). Unknown steps raise.
         forward_fn / loss_fn / valid_mask_fn: override the defaults

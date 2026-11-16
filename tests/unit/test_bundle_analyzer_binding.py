@@ -629,6 +629,60 @@ def test_a_recorded_optimizer_class_other_than_adam_is_refused_by_name(tmp_path:
         source.adamw_preconditioner()(source.checkpoints[0].identifier)
 
 
+# ------------------------------------------------ where the optimizer state lives
+
+
+def test_optim_pt_is_read_onto_the_cpu_whatever_the_source_device(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A GPU source must not put ``exp_avg`` / ``exp_avg_sq`` next to the model.
+
+    Runs without a GPU: the source is only *told* its device is CUDA, and the
+    ``map_location`` handed to ``torch.load`` is recorded. (Reading with
+    ``map_location="cuda"`` fails outright on a machine without CUDA.)
+    """
+    run_dir = _real_adamw_bundle(tmp_path, BundleTinyLM(seed=0))
+    source = load_local_bundle(run_dir, tiny_lm_factory, device="cuda")
+    assert source.device.type == "cuda"
+    seen: list[Any] = []
+    real_load = torch.load
+
+    def recording_load(*args: Any, **kwargs: Any) -> Any:
+        seen.append(kwargs.get("map_location"))
+        return real_load(*args, **kwargs)
+
+    monkeypatch.setattr(torch, "load", recording_load)
+    state = source.checkpoints[0].optimizer_state
+    assert len(seen) == 1
+    assert torch.device(seen[0]).type == "cpu"
+    assert state.flat_state("exp_avg_sq").device.type == "cpu"
+    assert state.flat_state("exp_avg").device.type == "cpu"
+
+
+@pytest.mark.gpu
+def test_a_gpu_source_keeps_the_state_on_the_cpu_and_returns_p_on_the_gpu(
+    tmp_path: Path,
+) -> None:
+    run_dir = _real_adamw_bundle(tmp_path, BundleTinyLM(seed=0))
+    on_cpu = load_local_bundle(run_dir, tiny_lm_factory, device="cpu")
+    on_gpu = load_local_bundle(run_dir, tiny_lm_factory, device="cuda")
+    ident = on_gpu.checkpoints[0].identifier
+
+    state = on_gpu.checkpoints[0].optimizer_state
+    assert state.flat_state("exp_avg_sq").device.type == "cpu"
+    # ``flat_state(device=...)`` still places the vector where it is asked to
+    assert state.flat_state("exp_avg_sq", device="cuda").device.type == "cuda"
+
+    precond = on_gpu.adamw_preconditioner()(ident)
+    assert precond is not None
+    assert precond.device.type == "cuda"
+    reference = on_cpu.adamw_preconditioner()(ident)
+    assert reference is not None and reference.device.type == "cpu"
+    assert torch.equal(precond.diag.cpu(), reference.diag)
+    unified = on_gpu.preconditioner()(ident)
+    assert unified is not None and unified.device.type == "cuda"
+
+
 # ------------------------------------------------- one P source for both optimizers
 
 
