@@ -451,7 +451,7 @@ class OptimizerStateView:
         gradient vector vatis flattens from ``ModelBundle.params``
         (``parameter_grad_vector``), because both are laid out by the same
         :class:`~vatis.core.param_layout.ParameterLayout`. That is the property
-        the preconditioned ruler depends on.
+        the preconditioned observables depend on.
 
         Args:
             key: e.g. ``"exp_avg_sq"``, ``"exp_avg"``, ``"momentum_buffer"``.
@@ -1183,7 +1183,7 @@ def load_local_bundle(
             how vatis stays project-agnostic: the factory for a specific
             training stack lives in that project (or in tests), never here.
         dtype: dtype the weights are loaded *as*. Default ``"fp32"``: bundle
-            weights are bf16 on disk and the ruler math wants fp32, so the
+            weights are bf16 on disk and the analysis math wants fp32, so the
             upcast happens on load (lossless).
         device: device for the model, optimizer state and batches.
         steps: optional subset of steps to expose, in any order (the source
@@ -1261,7 +1261,7 @@ def adamw_preconditioner_from_state(
 
     Raises:
         BundleSchemaError: the state is empty, has no ``exp_avg_sq`` (e.g. an
-            SGD run — its ruler is the raw one, ``preconditioner=None``), or has
+            SGD run — no second moment exists, use ``preconditioner=None``), or has
             no ``step`` counter to bias-correct with.
         ValueError: ``betas``/``eps`` missing from the saved ``param_groups``, or
             ``amsgrad=True`` (which preconditions with ``max_exp_avg_sq``).
@@ -1300,7 +1300,7 @@ def adamw_preconditioner_from_state(
             raise BundleSchemaError(
                 f"{context}: the saved optimizer state has no {state_key!r} at all "
                 f"(present keys: {state.state_keys()}). An AdamW preconditioner needs the "
-                "second moment; a plain-SGD run has none and its ruler is the raw one "
+                "second moment; a plain-SGD run has none and its geometry factor is P = I "
                 "(preconditioner=None)."
             )
         raise BundleSchemaError(
