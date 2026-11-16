@@ -487,11 +487,13 @@ def test_delta_loss_cross_matches_exact_ntk_jacobian_product() -> None:
 
 
 def test_per_seq_cv_lower_variance_than_hutchinson_at_same_n() -> None:
-    """Per-sample CV should have lower variance per probe than plain Hutchinson.
+    """Per-sample CV must not be noisier per probe than plain Hutchinson.
 
     We don't compute the variance directly — instead we run both at the same
     n_hutchinson with multiple seeds and check that the CV estimator's mean
-    distance to the true value is no worse than Hutchinson's, in fact better.
+    distance to the true value is not worse than Hutchinson's (within the 1.1
+    bound below). This is a "not worse" check; it does not show that the
+    control variate helps (see the comment at ``n_seeds``).
     """
     model, batch = _build_small_lm()
     exact = _exact_chi_net(model, batch)
@@ -500,10 +502,10 @@ def test_per_seq_cv_lower_variance_than_hutchinson_at_same_n() -> None:
     # 64 seeds, not 5. The statistic below is a ratio of two noisy means, and on
     # this fixture the control variate removes well under 1% of the standard
     # deviation (at initialisation the loss direction carries less than 1% of
-    # the trace), so the true ratio is ~0.995 and the 1.1 bound is a "not
-    # worse" check. Measured over disjoint seed sets: with 5 seeds the ratio
-    # has a standard deviation of ~0.08 and exceeds 1.1 for ~8% of them; with
-    # 64 seeds it is ~0.02, which puts the bound more than 5 sigma away.
+    # the trace), so the true ratio is ~1.0 and the 1.1 bound is a "not worse"
+    # check. Measured over disjoint seed sets: with 5 seeds the ratio has a
+    # standard deviation of ~0.09 and exceeds 1.1 for 11-14% of them; with 64
+    # seeds it is ~0.022, which puts the bound more than 4 sigma away.
     n_seeds = 64
 
     h_errors = []
@@ -542,7 +544,7 @@ def test_per_seq_cv_lower_variance_than_hutchinson_at_same_n() -> None:
     # The CV estimator should be at least as accurate; the bound stays slightly
     # loose (1.1×) because the ratio of the two mean errors is itself noisy.
     assert c_mean <= h_mean * 1.1, (
-        f"per_seq_cv mean abs err {c_mean:.4f} not better than hutchinson {h_mean:.4f}"
+        f"per_seq_cv mean abs err {c_mean:.4f} is more than 1.1x hutchinson's {h_mean:.4f}"
     )
 
 
