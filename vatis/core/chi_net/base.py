@@ -108,8 +108,9 @@ class ChiNetEstimator(ABC):
             micro_batch_size: how many sequences per backward. The estimator
                 handles the actual splitting.
             generator: torch.Generator for reproducible probes; the caller
-                seeds this once per ``(checkpoint, eval_batch)`` call so that
-                ranks share probes in DDP.
+                seeds this once per ``(checkpoint, eval_batch)`` call, with a
+                different stream on every DDP rank (ranks probing their own
+                shards with the same stream have correlated errors).
             preconditioner: optional diagonal ``P``
                 (:class:`~vatis.core.preconditioner.Preconditioner`), aligned
                 with ``params``. When given, the estimator additionally fills

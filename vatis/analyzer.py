@@ -199,8 +199,11 @@ class Analyzer:
         sink: a :class:`ResultSink`, a path str (auto-wraps to
             :class:`ParquetSink`), or a list of sinks.
         seed: base seed used to derive Hutchinson probes; the analyzer mixes
-            this with the checkpoint id and batch name to get a per-call
-            generator seed that is shared across DDP ranks.
+            this with the checkpoint id and batch name to get a per-call seed,
+            recorded as ``hutchinson_seed``. A single process draws its probes
+            from that seed. Under DDP rank 0 does too, and every other rank
+            draws from its own stream, seeded from that seed and its rank — so
+            ``seed`` and the world size determine a run's probes.
         device: model device for single-GPU mode. In DDP mode this is
             overridden by ``cuda:LOCAL_RANK``.
         dtype: forward dtype for HF models loaded by name. Ignored when the
@@ -625,7 +628,22 @@ class Analyzer:
             n_hutchinson=self.n_hutchinson,
             distribution=self.hutchinson_distribution,
         )
-        # Probe seed must be SHARED across ranks for the same (ckpt, batch).
+        # One probe STREAM PER RANK for the same (ckpt, batch). ``probe_seed`` is
+        # the per-call seed the sink records as ``hutchinson_seed``; rank 0 -- and
+        # so every single-process run -- draws from it directly, rank r > 0 from a
+        # seed derived from it and r (``_rank_probe_seed``).
+        #
+        # The ranks must NOT share one stream (they did, through 0.2.1). Each rank
+        # draws the probes for its own shard, so a shared seed puts the same
+        # random vectors on the k-th sample of every shard. A Rademacher probe v
+        # errs on sample a by sum_{i != j} v_i v_j M_a[i, j] with M_a = J_a J_a^T,
+        # hence the same v on two samples gives errors with covariance
+        # 2 <offdiag(M_a), offdiag(M_b)>_F (Gaussian: 2 <M_a, M_b>_F) -- and the
+        # Gram matrices of different inputs are far from orthogonal (measured
+        # error correlation between shards: 0.4 to 0.9). The per-rank errors then
+        # add almost coherently and the variance of the all-reduced chi_net grows
+        # by up to the world size.
+        #
         # The generator is deliberately on the CPU even for a CUDA run: probes are
         # drawn on the CPU and copied to the device
         # (``vatis.core.probes.make_probe``), so the ``hutchinson_seed`` recorded
@@ -634,7 +652,7 @@ class Analyzer:
         # the two runs could then only agree to within the Hutchinson noise floor.
         probe_seed = _per_call_seed(self.seed, ckpt_id, batch_name)
         gen = torch.Generator()
-        gen.manual_seed(probe_seed)
+        gen.manual_seed(_rank_probe_seed(probe_seed, get_rank()))
         chi_net_result: ChiNetResult = estimator.compute(
             bundle.model,
             local_batch,
@@ -1154,6 +1172,31 @@ def _per_call_seed(base_seed: int, ckpt_id: str, batch_name: str) -> int:
     payload = f"{base_seed}|{ckpt_id}|{batch_name}".encode()
     digest = hashlib.sha256(payload).digest()
     # Map first 4 bytes to a 32-bit positive int (torch.Generator accepts <2^32).
+    return int.from_bytes(digest[:4], "big") % (2**31 - 1)
+
+
+def _rank_probe_seed(call_seed: int, rank: int) -> int:
+    """Seed of the probe stream DDP rank ``rank`` draws from, for one call.
+
+    ``call_seed`` is :func:`_per_call_seed`'s value, i.e. the ``hutchinson_seed``
+    column. **Rank 0 gets it unchanged**, so a single-process run — which is
+    rank 0 of a world of one — draws exactly the stream that column names, and
+    separating the ranks' streams did not change any single-process result.
+    Every other rank gets its own seed, ``sha256(f"{call_seed}|rank={rank}")``
+    reduced to 31 bits like the per-call seed. The world size does not enter:
+    it already determines which samples a rank holds.
+
+    Distinct ranks collide only by a 31-bit hash accident (~``R^2 / 2^32`` for
+    ``R`` ranks); a collision would cost that one call the variance the separate
+    streams buy, never correctness — the estimate is unbiased either way.
+    """
+    if rank < 0:
+        raise ValueError(f"rank must be >= 0, got {rank}")
+    if rank == 0:
+        return call_seed
+    import hashlib
+
+    digest = hashlib.sha256(f"{call_seed}|rank={rank}".encode()).digest()
     return int.from_bytes(digest[:4], "big") % (2**31 - 1)
 
 
