@@ -83,10 +83,12 @@ def tokenize_chat_sft_sample(
     render the conversation twice — full and prompt-only — and take the common
     prefix as the boundary (see :func:`sft_prompt_completion_lengths`).
 
-    Labels follow the **pre-shifted** HF-causal-LM convention that vatis expects
-    (``causal_lm_loss`` compares ``logits[i]`` against ``labels[i]`` with no
-    further shift): ``labels[i] = ids[i + 1]`` when ``ids[i + 1]`` is a
-    completion token, else ``-100``; ``labels[-1] = -100``.
+    Labels are in the **pre-shifted** form vatis expects (``causal_lm_loss``
+    compares ``logits[i]`` against ``labels[i]`` with no further shift):
+    ``labels[i] = ids[i + 1]`` when ``ids[i + 1]`` is a completion token, else
+    ``-100``; ``labels[-1] = -100``. This is *not* the HuggingFace / TRL
+    collation, where ``labels`` is aligned with ``input_ids`` and the model
+    shifts; ``vatis.data.shift_hf_labels`` converts that form.
 
     The example is then right-truncated (keeping the prompt prefix and as much
     of the completion as fits) or right-padded to exactly ``seq_len``. Padding
@@ -165,10 +167,13 @@ def tokenize_into_lm_batch(
 
     The text is tokenized with no special tokens, then truncated or
     cyclically repeated to produce exactly ``batch_size * seq_len``
-    tokens, which are reshaped row-major into the batch. Labels are the
-    HF causal-LM convention: ``labels[:, :-1] = input_ids[:, 1:]``,
+    tokens, which are reshaped row-major into the batch. Labels are in
+    vatis's **pre-shifted** form: ``labels[:, :-1] = input_ids[:, 1:]``,
     ``labels[:, -1] = -100`` so the last position of every sequence is
-    ignored (no next-token target available there).
+    ignored (no next-token target available there). This is *not* the
+    HuggingFace / TRL collation, where ``labels`` is aligned with
+    ``input_ids`` and the model shifts; ``vatis.data.shift_hf_labels``
+    converts that form.
     """
     enc = tokenizer(text, return_tensors="pt", add_special_tokens=False)
     ids = enc["input_ids"][0]  # (T,)

@@ -50,7 +50,11 @@ class ModelBundle:
             over valid tokens (HF convention).
         valid_mask_fn: ``valid_mask_fn(batch, logits) -> bool tensor`` of
             shape ``logits.shape[:-1]``, identifying valid output positions.
-            ``None`` is allowed for "all positions valid".
+            ``None`` is allowed for "all positions valid". The analyzer
+            intersects it with ``labels != ignore_index`` and, where it
+            rejects a position whose label is valid, writes ``ignore_index``
+            into the labels ``loss_fn`` is evaluated on — so ``loss_fn`` must
+            read its targets from the batch and honour ``ignore_index``.
         identifier: human-readable model name (e.g. ``"pythia-160m@step1000"``)
             for log/sink rows.
     """
@@ -91,13 +95,21 @@ def causal_lm_loss(
     *,
     ignore_index: int = DEFAULT_IGNORE_INDEX,
 ) -> torch.Tensor:
-    """Mean-reduced cross entropy on (shifted) labels.
+    """Mean-reduced cross entropy on **pre-shifted** labels.
 
     The batch must contain either:
-        - ``"labels"`` (already shifted, with ``-100`` at ignored positions),
-          which is the canonical HF form;
+        - ``"labels"``, already shifted: ``labels[:, i]`` is the target of
+          ``logits[:, i]`` (the token at position ``i + 1``), with ``-100`` at
+          ignored positions. This is vatis's convention and **not** the
+          HuggingFace / TRL one, where labels are aligned with ``input_ids``
+          and the model shifts; convert such labels with
+          :func:`vatis.data.collate.shift_hf_labels`;
         - or just ``"input_ids"`` and ``"attention_mask"``, in which case
           we shift internally.
+
+    Labels that are provably unshifted are refused rather than scored one
+    position off — see :func:`vatis.data.collate.unshifted_label_rows` for the
+    exact condition.
 
     Returns:
         A 0-dim scalar tensor with a graph back to the model.
@@ -106,6 +118,7 @@ def causal_lm_loss(
         raise TypeError(f"causal_lm_loss expects a dict batch, got {type(batch).__name__}")
     if "labels" in batch and isinstance(batch["labels"], torch.Tensor):
         labels = batch["labels"]
+        _refuse_unshifted_labels(batch.get("input_ids"), labels, ignore_index)
     else:
         if "input_ids" not in batch:
             raise ValueError("causal_lm_loss needs either 'labels' or 'input_ids' in the batch")
@@ -125,6 +138,39 @@ def causal_lm_loss(
         ignore_index=ignore_index,
         reduction="mean",
     )
+
+
+def _refuse_unshifted_labels(input_ids: Any, labels: torch.Tensor, ignore_index: int) -> None:
+    """Raise if ``labels`` are in the HF/TRL form (aligned with ``input_ids``).
+
+    Without this, such a batch is scored with every target one position off —
+    ``logits[:, i]`` against ``input_ids[:, i]``, the token the model was just
+    given — and nothing fails. Only an unambiguous batch is refused; see
+    :func:`vatis.data.collate.unshifted_label_rows`.
+    """
+    if (
+        not isinstance(input_ids, torch.Tensor)
+        or input_ids.ndim != 2
+        or input_ids.shape != labels.shape
+        or input_ids.is_floating_point()
+        or labels.is_floating_point()
+    ):
+        return
+    from vatis.data.collate import unshifted_label_rows
+
+    flagged = unshifted_label_rows(input_ids, labels, ignore_index)
+    n_flagged = int(flagged.sum().item())
+    if n_flagged:
+        raise ValueError(
+            f"batch['labels'] equals batch['input_ids'] position for position in {n_flagged} of "
+            f"{labels.shape[0]} sequence(s) and is not the next-token target there: these are "
+            "HuggingFace/TRL-style (unshifted) labels. vatis expects pre-shifted labels, "
+            "labels[:, i] = input_ids[:, i + 1] with the last position ignored, and would "
+            "otherwise score logits[:, i] against the token at position i itself. Convert "
+            "with batch['labels'] = vatis.data.shift_hf_labels(batch['labels']). (If scoring "
+            "each position against its own input token is really what you want, pass a "
+            "custom loss_fn.)"
+        )
 
 
 def causal_lm_valid_mask(

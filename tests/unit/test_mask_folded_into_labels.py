@@ -519,7 +519,7 @@ def test_folded_loss_closure_matches_the_restricted_loss_and_its_gradient() -> N
         logits_ref.reshape(-1, VOCAB), _restricted(batch)["labels"].reshape(-1), ignore_index=-100
     )
     reference_grads = torch.autograd.grad(reference, params, allow_unused=True)
-    assert float(got) == float(reference)
+    assert float(got.detach()) == float(reference.detach())
     for g, r in zip(got_grads, reference_grads, strict=True):
         assert (g is None) == (r is None)
         if g is not None and r is not None:
