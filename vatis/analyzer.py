@@ -1241,9 +1241,12 @@ def _label_folded_loss_fn(
     targets. A stricter mask then gives exactly what the same restriction written
     into the labels gives, at every ``micro_batch_size``.
 
-    When the mask rejects no valid label — every shipped loader, whose
-    ``valid_mask_fn`` *is* ``labels != ignore_index`` — the batch is handed to
-    ``loss_fn`` untouched, the same object, so nothing changes bit for bit.
+    When the mask rejects no valid label — the shipped loaders on any batch that
+    carries labels, where ``valid_mask_fn`` *is* ``labels != ignore_index`` — the
+    batch is handed to ``loss_fn`` untouched, the same object, so nothing changes
+    bit for bit. (A label-less dict with a padded ``attention_mask`` does gain a
+    ``labels`` entry; it holds the very targets ``causal_lm_loss`` would have
+    derived itself, so the values are unchanged there as well.)
 
     When labels were rewritten, the closure also checks that ``loss_fn`` honoured
     them: the gradient of the loss w.r.t. the logits must vanish at every
