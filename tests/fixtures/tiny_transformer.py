@@ -58,12 +58,22 @@ class TinyTransformer(nn.Module):
         # Untied head — different parameter from token_embed.
         self.lm_head = nn.Linear(d_model, vocab_size, bias=False)
 
-        # Reproducible-but-non-trivial init: small Gaussian + zero biases.
+        # Reproducible-but-non-trivial init: small Gaussian weights, zero
+        # biases, LayerNorm gains at one.
         for p in self.parameters():
             if p.ndim >= 2:
                 nn.init.normal_(p, mean=0.0, std=0.02)
             else:
                 nn.init.zeros_(p)
+        # The loop above also zeroes the LayerNorm gains (they are 1-D). With
+        # zero gains every block outputs zero, the logits are identically zero
+        # and ``final_ln`` is the only module with a non-zero Jacobian, so put
+        # the gains back to the standard value of one. No random numbers are
+        # drawn here, so the weight matrices are unchanged for a given seed.
+        # ``tests/unit/test_fixtures.py`` guards against a regression.
+        for module in self.modules():
+            if isinstance(module, nn.LayerNorm):
+                nn.init.ones_(module.weight)
 
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
         b, s = input_ids.shape
