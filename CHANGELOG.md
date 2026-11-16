@@ -31,8 +31,37 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `golden` test tier (`pytest -m golden`): trains a tiny transformer, writes a
   bundle, runs both rulers end to end.
 - New hard dependency: `safetensors` (to read bundle weights).
+- `vatis.data.shift_hf_labels(labels)`: converts HuggingFace / TRL-style labels
+  (aligned with `input_ids`, shifted by the model) to the pre-shifted labels
+  vatis expects, with the same one-position shift `transformers`' causal-LM loss
+  applies. The label convention is now documented in `docs/SPEC.md` ("Batch
+  format and the label convention") and the README.
+- Checkpoint bundles: two optional `metadata.json` fields, `mask_pad_in_loss`
+  (bool) and `loss_ignore_index` (int or null), record whether the training loss
+  ignored a target id. Exposed as `BundleMetadata.loss_ignore_index` and
+  `LocalBundleSource.loss_ignore_index`.
 
 ### Changed
+- **The labels are the single source of truth for what enters the loss.**
+  - `causal_lm_loss` raises a `ValueError` for labels that are provably in the
+    unshifted HuggingFace / TRL form (every non-ignored label equals the input
+    token at its own position and at least one is not the next token). Such a
+    batch used to be scored with every target one position off, in the loss and
+    in `chi_loss` alike, without an error. Ambiguous sequences (both readings
+    hold) are scored as before.
+  - `LocalBundleCheckpoint.batch_a` applies the pad convention the bundle
+    records: with `loss_ignore_index` set, labels are `-100` wherever the
+    next-token target equals it, so the update-batch rows are computed over the
+    non-pad targets (they used to count every target). Bundles without the two
+    fields are read exactly as before. Contradictory fields
+    (`mask_pad_in_loss: true` without an index, or an index without
+    `mask_pad_in_loss: true`) raise `BundleSchemaError` when the bundle is opened.
+  - With a `valid_mask_fn` stricter than the labels, `loss_fn` is evaluated on a
+    batch whose labels carry the mask, so a custom `loss_fn` must read its
+    targets from the batch and honour `ignore_index`; if the loss still depends
+    on a rejected position the analyzer raises a `ValueError`.
+    `PerSequenceControlVariateEstimator.compute`, called directly, raises a
+    `ValueError` when `loss_fn` counts positions its `valid_mask_fn` rejects.
 - **Hutchinson probes are drawn on the CPU** and copied to the device, so a seed
   now identifies one probe set on every device, and the default Rademacher draw
   is bit-packed. Consequence: for a given `seed`, `chi_net` (and therefore
@@ -61,6 +90,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   positions. The shipped loaders were not affected (their mask already equals
   `labels != ignore_index`).
 - The analyzer restores the `requires_grad` flags it changes on the model's parameters.
+- A `valid_mask_fn` **stricter** than the labels (it rejects a position whose
+  label is valid) now restricts the loss as well. It used to restrict `n_valid`,
+  `chi_loss` and the `chi_net` probes only: `delta_loss` and `chi_pos` were those
+  of the unrestricted loss and changed with `micro_batch_size`, and
+  `per_sequence_cv` biased `chi_net` through its control variate. The analyzer
+  now writes the mask into the labels the loss is evaluated on, which gives
+  exactly what the same restriction written into the labels gives. The shipped
+  loaders were not affected (their mask equals `labels != ignore_index`); every
+  observable is bit-identical for them.
 
 ### Known limitations
 - `delta_loss_P` is **not** the first-order loss change of the AdamW step:

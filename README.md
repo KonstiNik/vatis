@@ -84,6 +84,23 @@ analyze(
 )
 ```
 
+An eval batch is a dict with `input_ids` and `labels` (plus `attention_mask` if
+the model takes one). The labels decide what enters the loss — a position counts
+iff its label is not `-100` — and they are **pre-shifted**: `labels[:, i]` is
+the target of `logits[:, i]`, i.e. `input_ids[:, i + 1]`, with the last position
+`-100`. A batch collated the HuggingFace / TRL way (`labels` aligned with
+`input_ids`, the model shifts) needs one line first:
+
+```python
+from vatis.data import shift_hf_labels
+
+batch["labels"] = shift_hf_labels(batch["labels"])
+```
+
+The shipped loss refuses labels that are provably unshifted rather than scoring
+them one position off ([`docs/SPEC.md` → Batch format and the label
+convention](docs/SPEC.md)).
+
 `cross_grad_storage="auto"` (the default) lets cross-pair analysis scale to
 models whose two full gradients won't co-reside on the GPU: it offloads the
 cached gradients to host RAM and runs the dot on the CPU, while small models

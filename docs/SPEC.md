@@ -372,6 +372,48 @@ batches are computed at every checkpoint and emitted as separate rows. For
 `δL(A, B)`, pass `cross_pairs=[("val_fixed", "train_at_step"), …]`. By default
 `δL` is computed only for the self pair `(b, b)`.
 
+### Batch format and the label convention
+
+A causal-LM batch is a dict with `input_ids` (`(B, S)`), optionally
+`attention_mask`, and `labels`. **The labels are the single source of truth for
+what enters the loss**: a position counts iff its label is not `-100`
+(`ignore_index`). Padding, prompt tokens of a completion-only objective and any
+other exclusion are expressed by writing `-100` into the labels, as HuggingFace
+`Trainer` / TRL do.
+
+**vatis labels are pre-shifted**: `labels[:, i]` is the target of
+`logits[:, i]`, i.e. `input_ids[:, i + 1]`, and the last position is `-100`.
+`causal_lm_loss` and the closed-form `chi_loss` compare `logits[:, i]` with
+`labels[:, i]` and shift nothing. This is *not* the HuggingFace / TRL collation,
+where `labels` is aligned with `input_ids` (a copy of it with `-100` at ignored
+positions) and the model shifts inside its loss. Convert such a batch before
+handing it to vatis:
+
+```python
+from vatis.data import shift_hf_labels
+
+batch["labels"] = shift_hf_labels(batch["labels"])   # out[:, i] = labels[:, i + 1]; out[:, -1] = -100
+```
+
+`shift_hf_labels` applies the shift `transformers`' causal-LM loss applies (pad
+one `ignore_index` on the right, drop the first label), so the converted batch
+is scored exactly as the HuggingFace model scores the original.
+
+The shipped `causal_lm_loss` **refuses** labels that are provably unshifted
+instead of scoring every target one position off. A sequence is refused iff,
+over its non-ignored labels, every label equals the input token at the *same*
+position and at least one differs from the input token at the *next* position
+(the last position is not compared — its target is not in `input_ids`). A
+correctly pre-shifted sequence can never meet that condition. A sequence that
+satisfies both readings (a run of one repeated token, or a label on the last
+position only) is ambiguous and is scored as given, so the guard catches the
+ordinary mistake, not every conceivable one; it also does not apply to a custom
+`loss_fn`, or to a batch without `input_ids`.
+
+A dict without `labels` gets next-token targets derived from `input_ids` (and
+`attention_mask`, if present). `(input, target)` tuples and lists are accepted
+for classifier-style models; a bare tensor has no targets and is refused.
+
 ### Native checkpoint bundles
 
 Besides the hub, vatis reads **checkpoint bundles** written by a training run:
@@ -381,7 +423,8 @@ update batch next to the weights.
 ```
 <run_dir>/
   metadata.json                # model config, optimizer type + hparams, lr schedule,
-                               # seed, B_train, seq_len, dataset id, git hashes
+                               # seed, B_train, seq_len, dataset id, git hashes;
+                               # optional: mask_pad_in_loss, loss_ignore_index
   param_names.json             # ordered [ [name, shape], ... ] — the canonical flattening
                                # order; index-aligned with the optimizer state_dict indices
   checkpoints/step_00000123/
@@ -440,10 +483,37 @@ for ckpt in source:                                    # or drive the loop yours
   inventing zeros.
 - **`batch_a.npy` holds whole token sequences.** The loader turns a row `ids`
   into inputs `ids` and next-token labels (`labels[:, :-1] = ids[:, 1:]`, last
-  position ignored), i.e. the pairs `ids[:, :-1] → ids[:, 1:]`. The file carries
-  no padding information, so every position counts; if the training loss
-  ignored some targets (pad tokens), pass a `valid_mask_fn` or the update-batch
-  rows describe a different loss than the one that was descended.
+  position ignored), i.e. the pairs `ids[:, :-1] → ids[:, 1:]`.
+- **The update batch is scored with the pad convention the run recorded.** Two
+  optional run-level fields of `metadata.json` say whether the training loss
+  ignored a target id:
+
+  | field | type | meaning |
+  | --- | --- | --- |
+  | `mask_pad_in_loss` | bool | the training cross entropy was given an `ignore_index` |
+  | `loss_ignore_index` | int, or `null` when unmasked | that index (the tokenizer's pad id) |
+
+  With an index recorded, the loader takes the training loss to be the mean
+  over the targets of the stored batch that differ from it
+  (`F.cross_entropy(logits, targets, ignore_index=<index>)`), and writes `-100`
+  into the `batch_a` labels wherever the next-token target equals that index.
+  Every update-batch row (`n_valid`, `chi_loss`, `delta_loss`, `chi_net`, and
+  the `*_P` rows) is then computed over exactly the targets that loss counts. (A
+  run that accumulates gradients over micro-batches has to weight them by their
+  counted-target numbers for that mean over the concatenated batch to be the
+  objective it descended.) Only the labels change: `input_ids` keep their pad
+  tokens and no `valid_mask_fn` is involved. With both fields absent, or
+  `mask_pad_in_loss` false/absent and
+  `loss_ignore_index` null/absent, every target counts, as for a bundle written
+  before the fields existed. The resolved value is
+  `source.loss_ignore_index` (`None` when unmasked).
+
+  **Contradictory fields are refused** when the bundle is opened
+  (`BundleSchemaError`): `mask_pad_in_loss: true` without an index, an index
+  while `mask_pad_in_loss` is false or absent, or a value of the wrong JSON type.
+  Either reading of such metadata could put a number on a loss the run did not
+  descend, and nothing in the bundle says which. The fields describe the
+  *update* batch only; an eval batch you pass yourself carries its own labels.
 - **Weights are stored as parameters only.** A persistent buffer the model
   factory creates keeps the factory's value, and the loader warns about it:
   correct for constants, wrong for anything a training run changes. The loader
@@ -541,15 +611,39 @@ path is supported for `chi_loss`.** The bundle exposes a `loss_fn(logits, batch)
 `chi_loss` always uses the closed-form softmax-minus-onehot shortcut. If you pass
 a non-CE `loss_fn`, `delta_loss` is correct but `chi_loss` is wrong.
 
-The bundle's `valid_mask_fn` and the `labels=-100` (`ignore_index`) sentinel are
-**intersected once**, and that one mask is used by **every** accumulator: the
-`chi_loss` sum and its `n_valid` denominator, the per-micro-batch weighting that
-reassembles `∇_θ L` for `delta_loss`, and the probe mask of the `χ_net` /
-`χ_net^P` estimator. A position whose label is `ignore_index` contributes
-nothing to the loss, so its Jacobian rows are excluded from `χ_net` as well. The
+**The labels are the single source of truth for what enters the loss** (see
+"Batch format and the label convention"). The bundle's `valid_mask_fn` and the
+`labels=-100` (`ignore_index`) sentinel are **intersected once**, and that one
+mask is used by **every** accumulator: the `chi_loss` sum and its `n_valid`
+denominator, the per-micro-batch weighting that reassembles `∇_θ L` for
+`delta_loss`, and the probe mask of the `χ_net` / `χ_net^P` estimator. The
 shipped loaders' `valid_mask_fn` already equals `labels != ignore_index`, so for
-them the intersection is a no-op; it matters for a custom `valid_mask_fn` that
-accepts positions the labels ignore.
+them none of the following changes anything. A custom `valid_mask_fn` can
+disagree with the labels in two directions, and both are handled:
+
+- **Wider** — it accepts a position whose label is `ignore_index`. The
+  intersection removes the position: it contributes nothing to the loss, so its
+  Jacobian rows are excluded from `χ_net` as well.
+- **Stricter** — it rejects a position whose label is valid. The mask alone
+  cannot restrict `loss_fn`, which only sees the batch. So wherever a loss is
+  evaluated (the `delta_loss` backward and the loss direction of
+  `per_sequence_cv`), the analyzer evaluates `loss_fn` on a batch whose labels
+  carry the mask: `ignore_index` is written at every rejected position (into
+  `labels`, else `targets`, of a dict batch; into element 1 of a tuple/list
+  batch; a dict with only `input_ids` gains its masked next-token `labels`).
+  This is the HuggingFace `Trainer` / TRL procedure, and a stricter mask gives
+  exactly what the same restriction written into the labels gives, at every
+  `micro_batch_size`. The caller's batch is never modified.
+
+A `loss_fn` therefore has to read its targets from the batch and honour
+`ignore_index`. When labels were rewritten, the analyzer checks that the
+gradient of the loss with respect to the logits vanishes at the rejected
+positions and raises a `ValueError` otherwise — a loss that ignores the
+rewritten labels would be silently unmasked. Called directly (outside the
+analyzer), `per_sequence_cv` raises the same way if `loss_fn` counts positions
+its `valid_mask_fn` rejects: its control variate is built from the loss
+direction and is unbiased only when that direction is confined to the masked
+positions. `hutchinson` evaluates no loss.
 
 As a backstop against an inconsistent `loss_fn` (e.g. a sum-reduced CE), the
 analyzer warns when a published `chi_pos` / `chi_pos_P` leaves `[−1, 1]` by more
@@ -612,6 +706,8 @@ cross-validation test tier (gated, skipped in CI).
 - All-reduce only at the boundaries of `(checkpoint, batch)` computations.
 - Never materialize per-sample gradients outside an opt-in path.
 - Padding is handled in one place: `vatis/core/normalization.py::valid_token_mask`.
+  The labels are the single source of truth for what enters the loss; the
+  analyzer derives one mask and one loss from them (see "Loss handling").
 
 ## Tooling and tests
 
