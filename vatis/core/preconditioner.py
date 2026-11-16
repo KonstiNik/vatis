@@ -2,7 +2,7 @@
 
 An optimizer with update ``dtheta = -eta * P grad L`` does not train on the raw
 eNTK ``Theta = J J^T`` but on the **effective kernel** ``Theta_P = J P J^T``
-(``docs/SPEC.md`` §"The preconditioned ruler"). vatis measures the same LNP triple on that
+(``docs/SPEC.md`` §"Optimizer-aware measurement"). vatis measures the same LNP triple on that
 kernel:
 
     delta_loss^P(A, B) = grad L^B . P grad L^A     (elementwise-weighted dot)
@@ -52,6 +52,10 @@ RAW_DESCRIPTOR = "none"
 # full-length copy (a P-sized fp64 temporary is ~11 GiB for a 1.4B model).
 _CHUNK = 1 << 25
 
+# Relative slack below a ``Preconditioner.ceiling`` within which an entry still
+# counts as sitting at it (fp32 round-off next to ``1/eps``).
+CEILING_RTOL = 1e-6
+
 
 @dataclass(frozen=True, eq=False)
 class Preconditioner:
@@ -65,12 +69,19 @@ class Preconditioner:
         descriptor: what the parquet ``preconditioner`` column records for rows
             computed with this ``P`` (e.g. ``"adamw"``, ``"identity"``,
             ``"explicit"``, ``"gn"``). Must not be :data:`RAW_DESCRIPTOR`.
+        ceiling: the largest value an entry of this ``P`` can take, if it has
+            one — ``1/eps`` for the ``adamw`` source, reached exactly where the
+            second moment is zero. ``None`` (default) for a ``P`` without such a
+            ceiling. When set, the analyzer additionally reports how much of
+            ``delta_loss_P`` / ``chi_net_P`` comes from the entries sitting at it
+            (the ``*_capped`` rows; see :meth:`capped_weight_floor`).
 
     Instances are immutable; :meth:`to` returns a new one.
     """
 
     diag: torch.Tensor
     descriptor: str
+    ceiling: float | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.diag, torch.Tensor):
@@ -106,6 +117,10 @@ class Preconditioner:
                 f"{RAW_DESCRIPTOR!r} is reserved for raw (un-preconditioned) rows; "
                 "pick a descriptor that names the preconditioner"
             )
+        if self.ceiling is not None and not (self.ceiling > 0.0 and self.ceiling != float("inf")):
+            raise ValueError(
+                f"Preconditioner.ceiling must be a finite positive number, got {self.ceiling}"
+            )
 
     # -------------------------------------------------------------- accessors
 
@@ -126,6 +141,28 @@ class Preconditioner:
 
     def __len__(self) -> int:
         return self.n_params
+
+    @property
+    def capped_weight_floor(self) -> float | None:
+        """Smallest weight that counts as "at the ceiling", or ``None``.
+
+        An entry is *capped* when ``P_i >= ceiling * (1 - CEILING_RTOL)`` — the
+        same criterion as :func:`epsilon_cap_mask`, with the slack that keeps
+        fp32 round-off next to ``1/eps`` on the right side. Passing this value
+        as ``min_weight`` to the weighted reductions restricts them to the
+        capped entries, which is how the ``*_capped`` rows are computed without
+        materializing a second parameter-sized vector.
+        """
+        if self.ceiling is None:
+            return None
+        return float(self.ceiling) * (1.0 - CEILING_RTOL)
+
+    def count_capped(self) -> int:
+        """Number of entries at the ceiling (``0`` for a ``P`` without one)."""
+        floor = self.capped_weight_floor
+        if floor is None:
+            return 0
+        return int((self.diag >= floor).sum().item())
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return (
@@ -151,7 +188,7 @@ class Preconditioner:
             diag = diag.to(dtype=dtype)
         if diag is self.diag:
             return self
-        return Preconditioner(diag=diag, descriptor=self.descriptor)
+        return Preconditioner(diag=diag, descriptor=self.descriptor, ceiling=self.ceiling)
 
     # ------------------------------------------------------------ validation
 
@@ -213,7 +250,7 @@ class Preconditioner:
         dtype: torch.dtype = torch.float32,
         descriptor: str = "identity",
     ) -> Preconditioner:
-        """``P = I`` — the SGD ruler, materialized.
+        """``P = I`` — SGD's geometry, materialized.
 
         The ones are materialized on purpose rather than short-circuited: the
         point of the ``P = I`` runs (the T-identity tests in
@@ -226,7 +263,7 @@ class Preconditioner:
         tolerance.
 
         Costs one extra fp32 parameter-sized vector; use ``preconditioner=None``
-        (not ``identity``) when you simply do not want the P ruler.
+        (not ``identity``) when you simply do not want the P observables.
         """
         return cls(
             diag=torch.ones(int(n_params), dtype=dtype, device=device),
@@ -240,16 +277,19 @@ class Preconditioner:
         *,
         descriptor: str = "explicit",
         dtype: torch.dtype | None = None,
+        ceiling: float | None = None,
     ) -> Preconditioner:
         """The ``explicit`` P source: a user-supplied 1-D diagonal.
 
         The tensor is detached (a ``P`` carrying an autograd graph would make
-        every backward in the analyzer differentiate through the ruler).
+        every backward in the analyzer differentiate through ``P``).
+        Pass ``ceiling`` if the diagonal has a largest attainable value whose
+        share you want reported (see :attr:`Preconditioner.ceiling`).
         """
         d = diag.detach()
         if dtype is not None:
             d = d.to(dtype=dtype)
-        return cls(diag=d, descriptor=descriptor)
+        return cls(diag=d, descriptor=descriptor, ceiling=ceiling)
 
     @classmethod
     def adamw(
@@ -265,7 +305,7 @@ class Preconditioner:
         """The ``adamw`` P source: ``P = diag(1 / (sqrt(v_hat) + eps))``.
 
         With ``v_hat = exp_avg_sq / (1 - beta2**step)`` — the bias-corrected
-        second moment (``docs/SPEC.md`` §"The preconditioned ruler").
+        second moment (``docs/SPEC.md`` §"Optimizer-aware measurement").
 
         ``step`` is the **saved** step counter. vatis reads bundles with
         *pre-step* semantics: the checkpoint at step ``t`` stores the optimizer
@@ -320,8 +360,8 @@ class Preconditioner:
           ``v_hat`` that already contains that gradient.
         - No clipping, flooring or dead-coordinate mask is applied: the
           convention ``P = 1/(sqrt(v_hat) + eps)`` is a frozen project decision
-          (``docs/SPEC.md`` §"The preconditioned ruler"), and quietly
-          altering it would make the reported ruler not the one the paper
+          (``docs/SPEC.md`` §"Optimizer-aware measurement"), and quietly
+          altering it would make the reported quantity not the one the paper
           defines. The right response is to *see* the effect, not to hide it:
           :func:`epsilon_cap_mask` identifies the affected coordinates so a
           caller can report what share of ``chi_net^P`` they carry (the golden
@@ -373,14 +413,17 @@ class Preconditioner:
         # Same operations in the same order, so the result is bit-identical.
         diag = exp_avg_sq.detach() if inplace else exp_avg_sq.detach().clone()
         diag.div_(bias_correction).sqrt_().add_(float(eps)).reciprocal_()
-        return cls(diag=diag, descriptor=descriptor)
+        # eps == 0 has no finite ceiling (and a zero second moment would already
+        # have been refused as a non-finite P).
+        ceiling = 1.0 / float(eps) if float(eps) > 0.0 else None
+        return cls(diag=diag, descriptor=descriptor, ceiling=ceiling)
 
 
 def epsilon_cap_mask(
     diag: torch.Tensor,
     eps: float,
     *,
-    rtol: float = 1e-6,
+    rtol: float = CEILING_RTOL,
 ) -> torch.Tensor:
     """Which entries of an AdamW ``P`` sit at the ``1/eps`` ceiling.
 
@@ -419,8 +462,12 @@ def weighted_sum_sq_fp64(
     diag: torch.Tensor,
     *,
     chunk: int = _CHUNK,
+    min_weight: float | None = None,
 ) -> torch.Tensor:
     """``sum_i diag_i * flat_i^2`` accumulated in fp64, chunked.
+
+    With ``min_weight`` the sum runs only over entries with
+    ``diag_i >= min_weight`` (see :attr:`Preconditioner.capped_weight_floor`).
 
     The P-weighted counterpart of the analyzer's ``_sum_sq_fp64``: with
     ``flat = grad_theta L`` this is ``delta_loss^P(A, A) = grad L^T P grad L``.
@@ -436,7 +483,7 @@ def weighted_sum_sq_fp64(
     total = torch.zeros((), dtype=torch.float64, device=flat.device)
     for i in range(0, flat.numel(), chunk):
         c = flat[i : i + chunk].to(dtype=torch.float64)
-        w = diag[i : i + chunk].to(dtype=torch.float64, device=flat.device)
+        w = _floored(diag[i : i + chunk], min_weight).to(dtype=torch.float64, device=flat.device)
         total = total + (w * c * c).sum()
     return total
 
@@ -447,11 +494,13 @@ def weighted_dot_fp64(
     diag: torch.Tensor,
     *,
     chunk: int = _CHUNK,
+    min_weight: float | None = None,
 ) -> torch.Tensor:
     """``sum_i diag_i * a_i * b_i`` accumulated in fp64, chunked.
 
     With ``a = grad_theta L^A`` and ``b = grad_theta L^B`` this is the cross
-    ``delta_loss^P(A, B) = grad L^B . P grad L^A``.
+    ``delta_loss^P(A, B) = grad L^B . P grad L^A``. ``min_weight`` restricts the
+    sum as in :func:`weighted_sum_sq_fp64`.
     """
     if a.numel() != b.numel() or a.numel() != diag.numel():
         raise ValueError(
@@ -462,9 +511,20 @@ def weighted_dot_fp64(
     for i in range(0, a.numel(), chunk):
         ca = a[i : i + chunk].to(dtype=torch.float64)
         cb = b[i : i + chunk].to(dtype=torch.float64, device=a.device)
-        w = diag[i : i + chunk].to(dtype=torch.float64, device=a.device)
+        w = _floored(diag[i : i + chunk], min_weight).to(dtype=torch.float64, device=a.device)
         total = total + (w * ca * cb).sum()
     return total
+
+
+def _floored(weights: torch.Tensor, min_weight: float | None) -> torch.Tensor:
+    """``weights`` with every entry below ``min_weight`` replaced by zero.
+
+    Returns ``weights`` itself when there is no floor; otherwise a new tensor
+    (so the caller may overwrite the result).
+    """
+    if min_weight is None:
+        return weights
+    return torch.where(weights >= min_weight, weights, torch.zeros_like(weights))
 
 
 def weighted_sum_sq_grads(
@@ -472,6 +532,7 @@ def weighted_sum_sq_grads(
     views: Sequence[torch.Tensor],
     *,
     device: torch.device,
+    min_weight: float | None = None,
 ) -> torch.Tensor:
     """``sum_p sum_i P_{p,i} * grad_{p,i}^2`` from an ``autograd.grad`` tuple.
 
@@ -483,7 +544,8 @@ def weighted_sum_sq_grads(
     positionally aligned with ``grads`` (same order as ``params``) and on the
     same device — a device mismatch raises rather than transferring silently.
     Missing gradients (``None``, for unused parameters) contribute zero, exactly
-    as in the raw path.
+    as in the raw path. ``min_weight`` restricts the sum to entries with
+    ``P >= min_weight`` (see :attr:`Preconditioner.capped_weight_floor`).
     """
     total = torch.zeros((), dtype=torch.float64, device=device)
     for g, w in zip(grads, views, strict=False):
@@ -494,7 +556,11 @@ def weighted_sum_sq_grads(
         # bytes/element at the peak instead of 24, same multiplication order as
         # before. ``copy=True`` matters — for an fp64 ``P`` a plain ``.to`` would
         # return the view itself and the in-place product would overwrite ``P``.
-        weighted = w.to(dtype=torch.float64, copy=True)
+        weighted = (
+            w.to(dtype=torch.float64, copy=True)
+            if min_weight is None
+            else _floored(w, min_weight).to(dtype=torch.float64)
+        )
         weighted.mul_(g64).mul_(g64)
         total = total + weighted.sum()
     return total

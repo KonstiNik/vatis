@@ -9,11 +9,11 @@ over the (sub-)batch.
 This is the always-works fallback. It is the default for large batches
 (``B >= 32``) where the per-sequence path becomes too expensive.
 
-Preconditioned ruler
-====================
+Preconditioned observables
+==========================
 
 ``Tr(J P J^T) = E_z ||P^{1/2} (J^T z)||^2`` for the same probes ``z``
-(``docs/SPEC.md`` §"The preconditioned ruler"), so the P estimate needs **no extra
+(``docs/SPEC.md`` §"Optimizer-aware measurement"), so the P estimate needs **no extra
 backward**: the accumulator simply reduces the very same gradient tuple with the
 elementwise weight ``P`` applied. Raw and P are therefore computed in one pass
 and share every probe, and the raw value is bit-identical to a run without a
@@ -79,9 +79,19 @@ class HutchinsonEstimator(ChiNetEstimator):
         # the raw path's arithmetic is untouched when it is not.
         p_views: list[torch.Tensor] | None = None
         chi_net_p_acc: torch.Tensor | None = None
+        # The part of the P estimate that comes from entries at P's ceiling: same
+        # VJPs again, with the weight zeroed below the ceiling. Skipped (and
+        # reported as exactly zero) when no entry is at the ceiling.
+        cap_floor: float | None = None
+        chi_net_p_capped_acc: torch.Tensor | None = None
         if preconditioner is not None:
-            p_views = preconditioner.to(device=device).parameter_views(params)
+            precond = preconditioner.to(device=device)
+            p_views = precond.parameter_views(params)
             chi_net_p_acc = torch.zeros((), dtype=torch.float64, device=device)
+            if precond.ceiling is not None:
+                chi_net_p_capped_acc = torch.zeros((), dtype=torch.float64, device=device)
+                if precond.count_capped() > 0:
+                    cap_floor = precond.capped_weight_floor
         n_valid_total = 0
         n_backwards = 0
 
@@ -126,6 +136,10 @@ class HutchinsonEstimator(ChiNetEstimator):
                     chi_net_p_acc = chi_net_p_acc + weighted_sum_sq_grads(
                         grads, p_views, device=device
                     )
+                    if chi_net_p_capped_acc is not None and cap_floor is not None:
+                        chi_net_p_capped_acc = chi_net_p_capped_acc + weighted_sum_sq_grads(
+                            grads, p_views, device=device, min_weight=cap_floor
+                        )
 
                 # Tally valid tokens once per probe? No — once per
                 # micro-batch. Use the first probe of the micro-batch.
@@ -144,6 +158,11 @@ class HutchinsonEstimator(ChiNetEstimator):
             if chi_net_p_acc is None
             else (chi_net_p_acc / float(self.n_hutchinson)).to(dtype=torch.float32)
         )
+        chi_net_p_capped = (
+            None
+            if chi_net_p_capped_acc is None
+            else (chi_net_p_capped_acc / float(self.n_hutchinson)).to(dtype=torch.float32)
+        )
 
         return ChiNetResult(
             chi_net=chi_net,
@@ -154,4 +173,5 @@ class HutchinsonEstimator(ChiNetEstimator):
                 "distribution": self.distribution,
             },
             chi_net_p=chi_net_p,
+            chi_net_p_capped=chi_net_p_capped,
         )

@@ -32,7 +32,7 @@ from tests.fixtures.tiny_transformer import (
     make_tiny_mlp_batch,
 )
 from vatis import analyze
-from vatis.analyzer import ALL_OBSERVABLES, P_OBSERVABLES, Analyzer
+from vatis.analyzer import ALL_OBSERVABLES, P_CAPPED_OBSERVABLES, P_OBSERVABLES, Analyzer
 from vatis.core.preconditioner import RAW_DESCRIPTOR, Preconditioner
 from vatis.models.hf import ModelBundle
 from vatis.models.local_bundle import load_local_bundle
@@ -116,7 +116,7 @@ def test_preconditioner_does_not_move_any_raw_row() -> None:
 
 
 def test_requesting_p_observables_without_a_preconditioner_raises() -> None:
-    with pytest.raises(ValueError, match="belong to the preconditioned ruler"):
+    with pytest.raises(ValueError, match="are preconditioned observables"):
         Analyzer(eval_batches={"v": make_tiny_mlp_batch()}, observables=["chi_pos_P"])
 
 
@@ -276,7 +276,8 @@ def test_adamw_preconditioner_through_the_pipeline(tmp_path: Path) -> None:
         rows = analyzer.run(source.model_specs())[0].rows
     raw = _by_observable(rows, RAW_DESCRIPTOR)
     p_rows = _by_observable(rows, "adamw")
-    assert set(p_rows) == set(P_OBSERVABLES)
+    # the adamw P has a 1/eps ceiling, so its two capped rows are written as well
+    assert set(p_rows) == set(P_OBSERVABLES) | set(P_CAPPED_OBSERVABLES)
     for value in p_rows.values():
         assert value == value and abs(value) < 1e30
     # exp_avg_sq is 0.1*(i+1) here, so P is far from I and the two rulers must
@@ -338,7 +339,9 @@ def test_step_zero_checkpoint_emits_raw_rows_only(tmp_path: Path) -> None:
     step10 = next(rows for cid, rows in by_step.items() if cid.endswith("step10"))
     assert {r.observable for r in step0} == set(ALL_OBSERVABLES)
     assert all(r.preconditioner == RAW_DESCRIPTOR for r in step0)
-    assert {r.observable for r in step10} == set(ALL_OBSERVABLES) | set(P_OBSERVABLES)
+    assert {r.observable for r in step10} == (
+        set(ALL_OBSERVABLES) | set(P_OBSERVABLES) | set(P_CAPPED_OBSERVABLES)
+    )
     assert {r.preconditioner for r in step10} == {RAW_DESCRIPTOR, "adamw"}
 
 
