@@ -7,7 +7,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
-- **Preconditioned ruler.** `Analyzer` / `analyze()` gained **`preconditioner`**
+- **Optimizer-aware measurement (preconditioned observables).** `Analyzer` / `analyze()` gained **`preconditioner`**
   (`None` | `"identity"` | `Preconditioner` | `callable(checkpoint_id)`). With a
   diagonal `P`, three more observables are measured on the effective kernel
   `Θ_P = J P Jᵀ` in the same pass, with no extra backward: `delta_loss_P`,
@@ -23,13 +23,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   builds `P = diag(1/(√v̂ + ε))` per checkpoint; `source.preconditioner()` picks
   the geometry factor from the saved optimizer state — that AdamW `P`, or `P = I`
   under the descriptor `"sgd"` for a bundle written by `torch.optim.SGD`.
+- **`delta_loss_P_capped` / `chi_net_P_capped`** rows next to the AdamW P
+  observables: the part contributed by coordinates at the `1/ε` ceiling of `P`
+  (second moment still zero). A few such coordinates can carry nearly all of a
+  P observable — on held-out tokens, or on an update batch containing a token
+  the run has not seen before — and these rows make that visible per value
+  instead of clipping `P`.
 - Parquet rows carry a **`preconditioner`** column (appended last): `"none"` on
   raw rows, the `P` descriptor on the new rows.
 - A warning when a published `chi_pos` / `chi_pos_P` leaves `[−1, 1]` by more
   than 0.5 (a Cauchy–Schwarz violation, i.e. inconsistent inputs such as a
   sum-reduced `loss_fn`).
 - `golden` test tier (`pytest -m golden`): trains a tiny transformer, writes a
-  bundle, runs both rulers end to end.
+  bundle, runs the raw and preconditioned observables end to end.
 - New hard dependency: `safetensors` (to read bundle weights).
 - `vatis.data.shift_hf_labels(labels)`: converts HuggingFace / TRL-style labels
   (aligned with `input_ids`, shifted by the model) to the pre-shifted labels

@@ -56,6 +56,11 @@ class ChiNetResult:
             two share every backward and differ only in the elementwise weight
             applied to the resulting VJP), so requesting it costs no extra
             gradient evaluation.
+        chi_net_p_capped: the part of ``chi_net_p`` contributed by the entries
+            of ``P`` that sit at its ceiling (``Preconditioner.ceiling``, i.e.
+            ``1/eps`` for AdamW), or ``None`` when the preconditioner has no
+            ceiling. The estimate is linear in ``P`` at fixed probes, so this
+            and the remaining ("live") part add up to ``chi_net_p``.
     """
 
     chi_net: torch.Tensor
@@ -63,6 +68,7 @@ class ChiNetResult:
     n_valid_tokens: int
     extras: dict[str, Any] = field(default_factory=dict)
     chi_net_p: torch.Tensor | None = None
+    chi_net_p_capped: torch.Tensor | None = None
 
 
 class ChiNetEstimator(ABC):

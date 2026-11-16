@@ -3,7 +3,7 @@
 Every vatis quantity that lives in *parameter space* is a flat 1-D vector:
 the gradient (``vatis.core.observables.parameter_grad_vector``, the analyzer's
 ``_zero_param_vector`` / ``_add_grads_into_flat``), and — for the
-preconditioned ruler — the diagonal preconditioner built from a saved
+preconditioned observables — the diagonal preconditioner built from a saved
 optimizer state. Those vectors are only comparable if **every one of them uses
 the same order and the same segment boundaries**.
 

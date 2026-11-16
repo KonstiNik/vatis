@@ -19,13 +19,13 @@ The flow per ``(checkpoint, eval_batch)`` is:
 
 Both unnormalized and normalized observables are emitted.
 
-Preconditioned ruler
---------------------
+Optimizer-aware measurement
+---------------------------
 
-When a ``preconditioner`` is configured the analyzer measures the **second**
-ruler in the same pass: ``delta_loss_P``, ``chi_net_P`` and ``chi_pos_P``, the
-LNP triple of the effective kernel ``Theta_P = J P J^T`` of a preconditioned
-update ``-eta P grad L`` (``docs/SPEC.md`` §"The preconditioned ruler"; for AdamW
+When a ``preconditioner`` is configured the analyzer also measures the
+preconditioned observables in the same pass: ``delta_loss_P``, ``chi_net_P`` and
+``chi_pos_P``, the LNP triple of the effective kernel ``Theta_P = J P J^T`` of a preconditioned
+update ``-eta P grad L`` (``docs/SPEC.md`` §"Optimizer-aware measurement"; for AdamW
 this is the geometry factor only, not the step that was taken — see §"What
 ``delta_loss_P`` is not" there). It costs no extra
 backward — ``delta_loss_P`` re-reduces the gradient vector step 3 already built
@@ -97,7 +97,7 @@ ALL_OBSERVABLES: tuple[str, ...] = (
     "chi_pos",
 )
 
-# Observables of the preconditioned ruler. Emitted only when a ``preconditioner``
+# The preconditioned observables. Emitted only when a ``preconditioner``
 # is configured, and always tagged with that preconditioner's descriptor in the
 # ``preconditioner`` column.
 #
@@ -114,10 +114,24 @@ P_OBSERVABLES: tuple[str, ...] = (
     "chi_pos_P",
 )
 
+# Diagnostic companions of the P observables, emitted only for a preconditioner
+# that has a ceiling (``Preconditioner.ceiling`` — ``1/eps`` for AdamW, reached
+# where the second moment is zero): the same quantity computed with ``P`` zeroed
+# everywhere except at the entries sitting at that ceiling. For
+# ``delta_loss_P`` and for a self-pair ``chi_net_P`` (both linear in ``P``) this
+# is the *part* of the value those entries contribute, so
+# ``delta_loss_P_capped / delta_loss_P`` is their share. They exist because a
+# handful of such entries can carry almost all of a P observable — see
+# ``docs/SPEC.md`` §"Coordinates at the ceiling".
+P_CAPPED_OBSERVABLES: tuple[str, ...] = (
+    "delta_loss_P_capped",
+    "chi_net_P_capped",
+)
+
 # What a ``preconditioner`` argument may be:
-#   - None / "none"                  -> raw ruler only (the default, and the
+#   - None / "none"                  -> raw observables only (the default, and the
 #                                       behaviour before this argument existed)
-#   - "identity"                     -> P = I, the SGD ruler measured through the
+#   - "identity"                     -> P = I, SGD's geometry measured through the
 #                                       preconditioned code path (T-identity)
 #   - a Preconditioner               -> the same fixed P at every checkpoint
 #   - fn(checkpoint_id) -> P | None  -> per-checkpoint P; returning None skips
@@ -176,8 +190,8 @@ class Analyzer:
             means all of ``ALL_OBSERVABLES``, plus all of ``P_OBSERVABLES`` when
             a ``preconditioner`` is configured. Pass an explicit list to select;
             naming a P observable without a ``preconditioner`` is an error.
-        preconditioner: the diagonal ``P`` of the preconditioned ruler, or
-            ``None`` (default) for the raw ruler only. See
+        preconditioner: the diagonal ``P`` for the preconditioned observables, or
+            ``None`` (default) for the raw observables only. See
             :data:`PreconditionerLike`. For a checkpoint bundle use
             ``LocalBundleSource.adamw_preconditioner()``, which reads each
             checkpoint's saved (pre-step) optimizer state.
@@ -234,18 +248,18 @@ class Analyzer:
             raise ValueError("at least one eval batch is required")
 
         self.preconditioner = _normalize_preconditioner(preconditioner)
-        valid_observables = ALL_OBSERVABLES + P_OBSERVABLES
+        valid_observables = ALL_OBSERVABLES + P_OBSERVABLES + P_CAPPED_OBSERVABLES
         if observables is None:
             observables = ALL_OBSERVABLES + (
-                P_OBSERVABLES if self.preconditioner is not None else ()
+                P_OBSERVABLES + P_CAPPED_OBSERVABLES if self.preconditioner is not None else ()
             )
         unknown = set(observables) - set(valid_observables)
         if unknown:
             raise ValueError(f"unknown observables {sorted(unknown)}; valid: {valid_observables}")
-        requested_p = set(observables) & set(P_OBSERVABLES)
+        requested_p = set(observables) & set(P_OBSERVABLES + P_CAPPED_OBSERVABLES)
         if requested_p and self.preconditioner is None:
             raise ValueError(
-                f"observables {sorted(requested_p)} belong to the preconditioned ruler "
+                f"observables {sorted(requested_p)} are preconditioned observables "
                 "but no preconditioner was given; pass preconditioner=... (e.g. "
                 "'identity', or LocalBundleSource.adamw_preconditioner())"
             )
@@ -275,9 +289,10 @@ class Analyzer:
         # special-case "cache not yet created".
         self._chi_loss_cache: dict[str, float] = {}
         self._chi_net_cache: dict[str, float] = {}
-        # Same, for the preconditioned ruler's chi_net^P (the cross pair takes
+        # Same, for the preconditioned chi_net^P (the cross pair takes
         # the geometric mean of the two batches' values, exactly as for raw).
         self._chi_net_p_cache: dict[str, float] = {}
+        self._chi_net_p_capped_cache: dict[str, float] = {}
 
     @staticmethod
     def _normalize_sinks(
@@ -480,7 +495,7 @@ class Analyzer:
     ) -> Preconditioner | None:
         """Resolve the configured preconditioner for one checkpoint.
 
-        Returns ``None`` when the raw ruler alone should be measured. The
+        Returns ``None`` when only the raw observables should be measured. The
         resolved ``P`` is moved to the model's device and checked against
         ``bundle.params``: its length must equal the number of parameter
         elements the analyzer flattens, otherwise ``P`` and the gradient are not
@@ -672,11 +687,17 @@ class Analyzer:
         elif chi_net_result.chi_net_p is None:
             raise RuntimeError(
                 f"chi_net estimator {estimator.name!r} was given a preconditioner but "
-                "returned no chi_net_p; the preconditioned ruler is implemented in "
+                "returned no chi_net_p; the preconditioned observables are implemented in "
                 "'hutchinson' and 'per_sequence_cv' only"
             )
         else:
             chi_net_p_local = chi_net_result.chi_net_p.to(dtype=torch.float64).to(device)
+        # Only a P with a ceiling has a capped part (None otherwise).
+        chi_net_p_capped_local = (
+            None
+            if chi_net_result.chi_net_p_capped is None
+            else chi_net_result.chi_net_p_capped.to(dtype=torch.float64).to(device)
+        )
 
         # ----- All-reduce: chi_loss, chi_net, n_valid, delta_loss grad -----
         # delta_loss needs the FULL gradient (sum across ranks) to compute its
@@ -691,6 +712,11 @@ class Analyzer:
                 None
                 if chi_net_p_local is None
                 else all_reduce_sum_scalar(float(chi_net_p_local), device)
+            )
+            chi_net_p_capped_global = (
+                None
+                if chi_net_p_capped_local is None
+                else all_reduce_sum_scalar(float(chi_net_p_capped_local), device)
             )
             n_valid_global = int(all_reduce_sum_scalar(float(n_valid_local), device))
             # Each rank's grad is grad_theta((1/n_local) Σ_local ℓ); we want
@@ -708,6 +734,9 @@ class Analyzer:
             chi_loss_raw_global = float(chi_loss_raw_local)
             chi_net_global = float(chi_net_local)
             chi_net_p_global = None if chi_net_p_local is None else float(chi_net_p_local)
+            chi_net_p_capped_global = (
+                None if chi_net_p_capped_local is None else float(chi_net_p_capped_local)
+            )
             n_valid_global = n_valid_local
             delta_loss_global = float(delta_loss_local)
 
@@ -716,6 +745,19 @@ class Analyzer:
         delta_loss_p_global = (
             None if precond is None else float(weighted_sum_sq_fp64(flat_grad_local, precond.diag))
         )
+        # ... and once more over the entries at P's ceiling only (exactly zero,
+        # without a pass, when there are none).
+        delta_loss_p_capped_global: float | None = None
+        if precond is not None and precond.ceiling is not None:
+            delta_loss_p_capped_global = (
+                float(
+                    weighted_sum_sq_fp64(
+                        flat_grad_local, precond.diag, min_weight=precond.capped_weight_floor
+                    )
+                )
+                if precond.count_capped() > 0
+                else 0.0
+            )
 
         wallclock_s = time.perf_counter() - t0
         n_valid_a = max(1, n_valid_global)  # avoid div-by-zero downstream
@@ -754,6 +796,8 @@ class Analyzer:
             delta_loss_p=delta_loss_p_global,
             chi_net_p=chi_net_p_global,
             chi_pos_p_value=chi_pos_p_value,
+            delta_loss_p_capped=delta_loss_p_capped_global,
+            chi_net_p_capped=chi_net_p_capped_global,
         )
 
         # Cache the (already-reduced) full gradient for cross-pair use.
@@ -831,7 +875,7 @@ class Analyzer:
             chi_pos(delta_loss_cross_value, chi_loss_cross_value, chi_net_cross_value)
         )
 
-        # Preconditioned ruler, same shape: the P-weighted gradient dot and the
+        # Preconditioned observables, same shape: the P-weighted gradient dot and the
         # geometric mean of the two batches' chi_net^P (i.e.
         # ||P^{1/2} J^A||_F * ||P^{1/2} J^B||_F, as the raw cross pair does).
         delta_loss_p_cross: float | None = None
@@ -843,6 +887,26 @@ class Analyzer:
             chi_pos_p_value = float(
                 chi_pos(delta_loss_p_cross, chi_loss_cross_value, chi_net_p_cross)
             )
+
+        # The same two quantities with P restricted to its ceiling entries. The
+        # dot is linear in P, so this is the capped part of delta_loss_P(A, B).
+        # The cross chi_net_P is a geometric mean, which is not: its capped row is
+        # the geometric mean of the two batches' capped parts.
+        delta_loss_p_capped_cross: float | None = None
+        chi_net_p_capped_cross: float | None = None
+        if precond is not None and precond.ceiling is not None:
+            delta_loss_p_capped_cross = (
+                float(
+                    weighted_dot_fp64(
+                        g_a, g_b, precond.diag, min_weight=precond.capped_weight_floor
+                    )
+                )
+                if precond.count_capped() > 0
+                else 0.0
+            )
+            chi_net_p_capped_cross = (
+                self._chi_net_p_capped_cache[name_a] * self._chi_net_p_capped_cache[name_b]
+            ) ** 0.5
 
         return self._emit_rows(
             ckpt_id=ckpt_id,
@@ -864,6 +928,8 @@ class Analyzer:
             delta_loss_p=delta_loss_p_cross,
             chi_net_p=chi_net_p_cross,
             chi_pos_p_value=chi_pos_p_value,
+            delta_loss_p_capped=delta_loss_p_capped_cross,
+            chi_net_p_capped=chi_net_p_capped_cross,
         )
 
     # ------------------------------------------------------------- emission
@@ -892,6 +958,8 @@ class Analyzer:
         delta_loss_p: float | None = None,
         chi_net_p: float | None = None,
         chi_pos_p_value: float | None = None,
+        delta_loss_p_capped: float | None = None,
+        chi_net_p_capped: float | None = None,
     ) -> list[ResultRow]:
         # Stash the per-batch chi_loss / chi_net for the cross pair use.
         # Caches are eagerly initialized in __init__.
@@ -900,6 +968,8 @@ class Analyzer:
             self._chi_net_cache[batch_a] = chi_net
             if chi_net_p is not None:
                 self._chi_net_p_cache[batch_a] = chi_net_p
+            if chi_net_p_capped is not None:
+                self._chi_net_p_capped_cache[batch_a] = chi_net_p_capped
 
         values: dict[str, float] = {
             "chi_loss": chi_loss,
@@ -923,6 +993,18 @@ class Analyzer:
             values["chi_pos_P"] = chi_pos_p_value
             for name in P_OBSERVABLES:
                 descriptors[name] = precond.descriptor
+            if precond.ceiling is not None:
+                if delta_loss_p_capped is None or chi_net_p_capped is None:
+                    raise RuntimeError(
+                        f"preconditioner {precond.descriptor!r} has a ceiling but the capped "
+                        f"parts are missing for ({batch_a!r}, {batch_b!r}): "
+                        f"delta_loss_P_capped={delta_loss_p_capped}, "
+                        f"chi_net_P_capped={chi_net_p_capped}"
+                    )
+                values["delta_loss_P_capped"] = delta_loss_p_capped
+                values["chi_net_P_capped"] = chi_net_p_capped
+                for name in P_CAPPED_OBSERVABLES:
+                    descriptors[name] = precond.descriptor
 
         # |chi_pos| <= 1 is a Cauchy-Schwarz consequence, so a violation is not a
         # measurement — it is an inconsistency between the three components, and
@@ -950,7 +1032,8 @@ class Analyzer:
         for name in self.observables:
             if name not in values:
                 # A P observable was requested but this checkpoint has no P (the
-                # factory declined — see the step-0 policy). Skipping the row is
+                # factory declined — see the step-0 policy), or a capped row was
+                # requested for a P without a ceiling. Skipping the row is
                 # deliberate: emitting a raw-valued or 1/eps-valued row under the
                 # 'adamw' descriptor would be a wrong answer that looks plausible.
                 continue
@@ -998,7 +1081,7 @@ def _normalize_preconditioner(
             return spec
         raise ValueError(
             f"preconditioner={spec!r} is not a recognized shorthand; use None/'none' "
-            "for the raw ruler, 'identity' for P = I, a Preconditioner instance, or a "
+            "for the raw observables only, 'identity' for P = I, a Preconditioner instance, or a "
             "callable(checkpoint_id) -> Preconditioner | None. For an Adam P from a "
             "checkpoint bundle use LocalBundleSource.adamw_preconditioner(), which has "
             "access to the saved optimizer state."

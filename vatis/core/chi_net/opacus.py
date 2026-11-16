@@ -8,8 +8,8 @@ compatibility requirements (no tied embeddings, no in-place ops, only
 opacus-supported layers).
 
 In v1 we ship only the stub. Calling ``compute`` raises NotImplementedError
-with a clear pointer to the supported alternatives. The preconditioned ruler
-(``chi_net^P``) is implemented in the two live estimators only, for the same
+with a clear pointer to the supported alternatives. The preconditioned
+``chi_net^P`` is implemented in the two live estimators only, for the same
 reason: there is no opacus path to insert the P weighting into yet.
 """
 

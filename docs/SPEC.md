@@ -28,7 +28,14 @@ with
 - `χ_pos = δL / (χ_loss · χ_net)` — recovered indirectly, no eNTK eigendecomposition.
 - `δL(A, B) = ⟨∇_θ L^A, ∇_θ L^B⟩` — two ordinary backwards plus a dot product.
 
-### The preconditioned ruler (`chi_pos_P`)
+### Optimizer-aware measurement (`chi_pos_P`)
+
+The observables above describe plain gradient descent. An optimizer-aware
+measurement asks the same questions about the update an optimizer actually
+forms. What vatis implements so far is the **preconditioner** part of that: the
+three *preconditioned observables* below, which account for how the optimizer
+rescales the gradient coordinate by coordinate (its geometry). Momentum and
+weight decay are not included yet — see "What `delta_loss_P` is not".
 
 An optimizer with update `Δθ = −η P ∇L` does not train on the raw eNTK but on
 the **effective kernel** `Θ_P = J P Jᵀ`, with `J = ∇_θ f` the parameter Jacobian
@@ -62,7 +69,7 @@ P sources:
 
 | source | `P` | how |
 | --- | --- | --- |
-| none | — (raw ruler only) | `preconditioner=None`, the default |
+| none | — (raw observables only) | `preconditioner=None`, the default |
 | `identity` | `I` | `preconditioner="identity"` |
 | `explicit` | user-supplied 1-D tensor | `Preconditioner.from_diagonal(...)` |
 | `adamw` | `diag(1/(√v̂ + ε))`, `v̂ = exp_avg_sq/(1−β2^t)` | `source.adamw_preconditioner()` on a checkpoint bundle |
@@ -99,9 +106,63 @@ refused.
   **The update batch is exposed in the same way:** `P` is the pre-step one, so a
   token the run sees for the first time at step `t` enters that step's
   `batch_a` rows at `1/ε`, while the step itself divides by a `v̂` that already
-  contains its gradient. vatis applies no clipping or mask —
-  `vatis.core.preconditioner.epsilon_cap_mask` identifies those coordinates so
-  you can report the share of `chi_net_P` they carry.
+  contains its gradient. vatis applies no clipping or mask; it reports what
+  those coordinates contribute instead — see "Coordinates at the ceiling".
+
+#### Coordinates at the ceiling (`*_capped` rows)
+
+AdamW's `P_i = 1/(√v̂_i + ε)` has a largest possible value, `1/ε`, and takes it
+exactly where the second moment is zero — on every coordinate that has not yet
+received a non-zero gradient. With `ε = 1e-8` such a coordinate weighs `√v̂/ε`
+times as much as one with history, typically five to seven orders of magnitude.
+Two situations make that matter:
+
+- **Held-out data.** A token that occurs in the measurement batch but never
+  occurred in training has a non-zero Jacobian column on its embedding row and
+  `P = 1/ε` there.
+- **The update batch itself.** `P` is built from the state *before* the step. A
+  token the run meets for the first time at step `t` still has `v = 0` when
+  step `t`'s own batch is measured, although its gradient on that batch is not
+  zero. (The step itself is not affected in this way: it divides by a `v̂` that
+  already includes that gradient.)
+
+In either case a handful of coordinates can carry nearly all of `delta_loss_P`
+and `chi_net_P`. In a small test model with a single first-seen token in the
+update batch, 12 of 276 coordinates carried more than 99% of both. `chi_pos_P`
+is then a statement about those few coordinates, not about the model.
+
+vatis does not clip, floor or mask `P` — that would silently replace the stated
+definition with another one. Instead, whenever the preconditioner has a ceiling
+(the `adamw` source; `Preconditioner.ceiling`), each P observable is accompanied
+by the same quantity computed with `P` set to zero everywhere except at the
+coordinates sitting at the ceiling:
+
+| row | meaning |
+| --- | --- |
+| `delta_loss_P_capped` | `Σ_{i at ceiling} P_i ∇_iL^A ∇_iL^B` — the part of `delta_loss_P` from those coordinates |
+| `chi_net_P_capped` | `Tr(J P_c Jᵀ)` with `P_c` = `P` restricted to those coordinates — for a self pair, the part of `chi_net_P` from them |
+
+How to read them:
+
+- `delta_loss_P_capped / delta_loss_P` and (self pairs) `chi_net_P_capped /
+  chi_net_P` are the shares. Near 0: the P observables describe the trained
+  coordinates. Near 1: they describe coordinates the optimizer has not touched.
+- Both quantities are linear in `P`, so the remainder is the value restricted
+  to coordinates with history, and
+  `(delta_loss_P − delta_loss_P_capped) / (chi_loss · (chi_net_P − chi_net_P_capped))`
+  is `chi_pos_P` on those coordinates alone — available without re-running.
+- For a cross pair `chi_net_P` is a geometric mean of the two batches' traces,
+  which is not linear in `P`; its capped row is the geometric mean of the two
+  capped parts. Use the two self-pair rows to form shares.
+- A value of exactly `0` means no coordinate is at the ceiling (or none of them
+  is touched by the batch).
+
+A coordinate counts as "at the ceiling" when `P_i ≥ (1 − 1e-6)/ε`
+(`vatis.core.preconditioner.epsilon_cap_mask` gives the same mask). The rows
+cost no backward and no additional parameter-sized vector: each gradient the
+estimator already has is reduced once more with the restricted weight. A `P`
+without a ceiling (`identity`, `sgd`, an `explicit` diagonal unless you pass
+`ceiling=`) has no such rows.
 
 #### What `delta_loss_P` is not
 
@@ -245,7 +306,7 @@ number of valid (non-pad, non-ignored) tokens.
 
 - **In:** HuggingFace causal-LM checkpoints (Pythia, OLMo, GPT-NeoX class).
   Native **checkpoint bundles** with optimizer state (`load_local_bundle`). The
-  **preconditioned ruler** `chi_pos_P` for diagonal `P` (`identity`, `explicit`,
+  **preconditioned observables** (`chi_pos_P`) for diagonal `P` (`identity`, `explicit`,
   `adamw` sources) alongside the raw one.
   Tokenized data already in model-ready form. DDP across user-specified
   `num_gpus`. Two `χ_net` estimators (`hutchinson`, `per_sequence_cv`) with
@@ -560,11 +621,32 @@ wallclock_s        float64
 preconditioner     str           # "none" on raw rows; the P descriptor on P rows
 ```
 
-The preconditioned ruler extends the format minimally: its results are new
-`observable` *values* (`delta_loss_P`, `chi_net_P`, `chi_pos_P`), not new
-columns, plus the single `preconditioner` descriptor column (appended last).
-Raw rows carry `preconditioner = "none"`; a run without a preconditioner emits
-exactly the rows it always did. To select one ruler, filter on `preconditioner`.
+The preconditioned observables extend the format minimally: they are new
+`observable` *values* (`delta_loss_P`, `chi_net_P`, `chi_pos_P`, and for a `P`
+with a ceiling `delta_loss_P_capped`, `chi_net_P_capped`), not new columns, plus
+the single `preconditioner` descriptor column (appended last). That column says
+which `P` a row's value was computed with: `"none"` on the raw rows — including
+`chi_loss`, which does not depend on the kernel and is written once — and the
+descriptor (`"adamw"`, `"sgd"`, ...) on the P rows. A run without a
+preconditioner emits exactly the rows it always did.
+
+The observable names already tell the raw and the preconditioned values apart,
+so the usual way to read a file is one pivot, which puts everything measured for
+a checkpoint and batch pair on one line:
+
+```python
+import pandas as pd
+
+df = pd.read_parquet("results.parquet")
+key = ["checkpoint_id", "batch_a", "batch_b"]
+wide = df.pivot(index=key, columns="observable", values="value")
+wide["preconditioner"] = df[df.preconditioner != "none"].groupby(key).preconditioner.first()
+# columns: chi_loss, chi_net, delta_loss, chi_pos, ..., chi_net_P, delta_loss_P, chi_pos_P, ...
+```
+
+Do not select the preconditioned values by filtering on `preconditioner`: that
+drops `chi_loss`, which they share with the raw ones. A checkpoint without P
+rows (an AdamW step-0 checkpoint) shows up as empty cells in the `_P` columns.
 There is no `chi_net_P_normalized` row: it is `chi_net_P / √(n_valid_a ·
 n_valid_b)` from the same row's own columns, and `chi_pos_P` — like `chi_pos` —
 is invariant under the normalization.
@@ -719,17 +801,17 @@ cross-validation test tier (gated, skipped in CI).
     transformer (Hutchinson convergence to the exact trace, `χ_loss` closed-form
     correctness, `δL` symmetry, normalization invariants, the chi_pos
     combinator, analyzer contract assertions, exact-NTK ground-truth tests).
-    The preconditioned ruler is checked against references that cannot share a
+    The preconditioned observables are checked against references that cannot share a
     bug with the code: the update `torch.optim.AdamW` actually applies, an
     explicit eigendecomposition of `Θ_P`, and closed forms (`P = I`,
     `P = (JᵀJ)⁺`). The bundle loader is checked against bundles written by a
     fixture that imports none of the loader's code.
   - `tests/golden/` — marked `@pytest.mark.golden`; runs only when the `-m`
     expression names `golden`. Trains a tiny transformer for ~100 AdamW steps,
-    writes a bundle, and runs both rulers over it end to end.
+    writes a bundle, and runs the raw and preconditioned observables over it end to end.
   - `tests/integration/` — gated behind `pytest -m integration`, skipped in CI.
     Verifies HF loading on a small hub checkpoint and the DDP path — including
-    the preconditioned ruler — with a 2-rank CPU loopback.
+    the preconditioned observables — with a 2-rank CPU loopback.
   - `tests/cross_validation/` — gated behind `pytest -m cross_validation`,
     skipped in CI (requires `perspic`). Cross-validates every observable
     (self-pair and cross-pair) against perspic as the reference implementation.
@@ -751,7 +833,8 @@ cross-validation test tier (gated, skipped in CI).
 | `Θ_P` | (not stored) | effective kernel `J P Jᵀ` |
 | `χ_net^P` | `chi_net_P` | `‖P^{1/2}∇_θ f‖²_F = Tr(Θ_P)` |
 | `δL^P` | `delta_loss_P` | `∇_θL^B · P ∇_θL^A` |
-| `χ_pos^P` | `chi_pos_P` | `δL^P / (χ_loss · χ_net^P)` — spectral position on the optimizer's ruler |
+| `χ_pos^P` | `chi_pos_P` | `δL^P / (χ_loss · χ_net^P)` — spectral position on the preconditioned kernel |
+| — | `delta_loss_P_capped`, `chi_net_P_capped` | the same two quantities with `P` restricted to the coordinates at its ceiling (`1/ε`) |
 | `Θ` | (not stored) | empirical NTK; never materialized |
 | `N_A`, `N_B` | `n_valid_a`, `n_valid_b` | valid (non-pad) token counts |
 | `n` | `n_hutchinson` | number of Hutchinson probe vectors |
@@ -774,8 +857,9 @@ cross-validation test tier (gated, skipped in CI).
   loader cannot detect a same-shape parameter permutation between
   `param_names.json` and the optimizer state (see "Native checkpoint bundles").
 - **AdamW's `P` puts coordinates that never received a non-zero gradient at
-  `1/ε`.** Check their share of `chi_net_P` with `epsilon_cap_mask` before
-  interpreting it on held-out data or on an update batch with first-seen tokens.
+  `1/ε`.** Read the `*_capped` rows before interpreting a P observable on
+  held-out data or on an update batch with first-seen tokens (see "Coordinates
+  at the ceiling").
 - **A resident `P` costs one extra parameter-sized fp32 vector** during a
   checkpoint's analysis, and building it peaks at about five (see "Native
   checkpoint bundles"). The cross-pair GPU/host offload heuristic does not
