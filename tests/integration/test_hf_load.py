@@ -57,7 +57,7 @@ def test_analyze_real_hf_model_runs(tmp_path: Path) -> None:
         revisions=["main"],
         eval_batches={"val": batch},
         n_hutchinson=4,
-        chi_net_method="per_sequence_cv",  # cheaper for B=2
+        chi_net_method="per_sequence_cv",  # the opt-in estimator, through the hub loader
         micro_batch_size=2,
         sink=str(out),
     )

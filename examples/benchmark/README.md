@@ -62,26 +62,18 @@ subdirectory (CPU-only; needs `vatis[examples]` for matplotlib).
   a correctness check that observables are rank-count-invariant.
 - **accuracy** — the χ_net estimators are unbiased, so accuracy is governed by
   variance, which falls like ~1/√n_hutchinson. `per_sequence_cv`'s control
-  variate gives lower variance than plain `hutchinson` at the same
-  `n_hutchinson`, most visibly in the high-`χ_pos` regime. (In the committed
-  sweep — pythia-14m at step3000, `χ_pos` ≈ 7e-8 — the two methods' relative
-  spreads agree to three significant digits at every `n_hutchinson`, in the
-  June file as in the November one, so that sweep does not show the reduction.)
+  variate is meant to lower the variance in the high-`χ_pos` regime. The
+  committed sweep (`accuracy_pythia-14m.json`, where `χ_pos` is tiny) does not
+  show it: run on the same probes, both estimators return practically the same
+  value for every seed. The file was regenerated in November 2026 with the
+  current code on an RTX 3090 Ti, with the settings recorded in it
+  (`ref_n_h = 4096`; `accuracy_sweep.sbatch` passes 2048).
 
-> The `accuracy/` sweep was re-run on 17 November 2026 with the current code on
-> an RTX 3090 Ti, with the settings recorded in its JSON (100 seeds, `n_h` 1–64,
-> reference at `n_h = 4096`); its values are a new probe draw, and the
-> conclusions (unbiased means, spread falling roughly like 1/√n) are unchanged.
-> Its sbatch file says `--ref-n-h 2048`, but both the June and the November JSON
-> use 4096.
->
-> The `single_gpu/` and `ddp_scaling/` results were measured in June 2026 with
-> the code of that time and have not been re-run since (no A100s here). Today
-> `chi_net` and `chi_pos` for the same seed are a different Hutchinson draw (the
-> probes are drawn on the CPU now, and every DDP rank beyond the first has its
-> own probe stream; see `CHANGELOG.md`), while `chi_loss` and `delta_loss` are
-> unchanged; the timings may differ as well, since drawing the probes on the
-> CPU may cost time that the June runs did not spend.
+> The `single_gpu/` and `ddp_scaling/` results are from June 2026 and were not
+> re-run (no A100s here). With the current code, `chi_net` and `chi_pos` would be
+> a different random probe draw for the same seed (`chi_loss` and `delta_loss`
+> would not change), and the timings may be higher, because the probes are now
+> drawn on the CPU.
 >
 > Numbers are hardware-specific and meant as orientation, not guarantees. For a
 > consumer-GPU smoke check and the end-to-end deployment-example findings, see

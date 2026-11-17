@@ -71,9 +71,8 @@ imports) → `spectral_position.png`, `lnp_components.png`, `gpu_activity.png`:
 model fit a single ~93 GiB GPU; the rationale is what you adapt for your own model:
 
 - **`chi_net_method="hutchinson"`** — one backward per probe. `per_sequence_cv`
-  (the small-batch default) keeps extra gradients resident and overflows the
-  card at 7B; hutchinson holds one gradient at a time (~73 GB). Trade-off:
-  higher variance per probe — raise `--n-hutchinson` to tighten `chi_net`.
+  needs more peak memory and overflows the card at 7B; hutchinson (the vatis
+  default) fits (~73 GB). Raise `--n-hutchinson` to tighten `chi_net`.
 - **`micro_batch_size=1`** — one sequence per backward, the safe default at 7B.
   Peak is essentially sequence-length-independent here (it is param-bound).
 - **`cross_grad_storage="auto"`** — the cross-pair dot needs *both* batches'
@@ -123,8 +122,7 @@ per-phase peak `torch.cuda` memory + GPU engine activity sampled via
   dataset (keep them on-distribution). `--n-per-batch`, `--seq-len`,
   `--max-prompt-frac` tune sample selection.
 - **Larger model:** keep `cross_grad_storage=auto` (offload) and `hutchinson`.
-  **Smaller model:** `auto` keeps everything on-GPU, and `per_sequence_cv`
-  becomes affordable (lower-variance `chi_net`).
+  **Smaller model:** `auto` keeps everything on-GPU.
 - `--no-cross-pairs` skips the cross observables; `--cross-grad-storage gpu|cpu`
   overrides the auto memory decision.
 - The example uses the standard cross-entropy SFT loss — vatis v1 supports the

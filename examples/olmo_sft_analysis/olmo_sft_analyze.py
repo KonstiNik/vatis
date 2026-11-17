@@ -92,8 +92,8 @@ def main() -> None:
         "--chi-net-method",
         default="hutchinson",
         help="chi_net estimator. Default 'hutchinson' (one backward per probe) is "
-        "what fits a 7B model; 'per_sequence_cv' is lower-variance but OOMs at 7B "
-        "(use it only for smaller models). See the README config section.",
+        "what fits a 7B model; 'per_sequence_cv' needs more peak memory and "
+        "OOMs at 7B (use it only for smaller models). See the README config section.",
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--sampler-interval-s", type=float, default=0.25)

@@ -361,8 +361,9 @@ def test_the_estimator_that_ran_is_recorded_when_it_was_selected_automatically(
 
 
 def test_a_cross_pair_of_two_estimators_names_both(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The automatic selection is per batch. If it picks differently for the two
-    batches of a pair, the pair's rows name both estimators, in pair order."""
+    """The estimator is resolved per batch. Today's selector gives every batch the
+    same one, so this is forced here with a patched selector: if two batches of a
+    pair differ, the pair's rows name both estimators, in pair order."""
     monkeypatch.setattr(
         analyzer_mod,
         "select_chi_net_method",

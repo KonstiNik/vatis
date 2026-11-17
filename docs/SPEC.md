@@ -306,7 +306,7 @@ estimation needs either (a) deterministic basis vectors over the full output
 dim — exact but `O(S·V)` backwards, infeasible for LMs — or (b) random probes
 (Hutchinson) — `O(n)` backwards with controllable variance.
 
-#### Method 1: `HutchinsonEstimator` (default for large `B`)
+#### Method 1: `HutchinsonEstimator` (default)
 
 Plain-torch Hutchinson at micro-batch level. For each micro-batch (sequences
 `[b₁, ..., b_M]`), draw `n_h` independent Rademacher vectors `v ∈ R^(M·S·V)`,
@@ -319,11 +319,10 @@ g, = torch.autograd.grad(projected, model.parameters())
 chi_net_accumulator += g.pow(2).sum()  # accumulates Σ_b ‖J_bᵀ v‖²
 ```
 
-Cost: `n_h` backwards per micro-batch. Variance is `~B×` higher per draw than the
-per-sequence path. **When to use:** large `B` (≥ 32), or when other methods don't
-apply. This is the always-works fallback.
+Cost: `n_h` forwards and `n_h` backwards per micro-batch. **When to use:** always
+applicable; it is the default at every batch size.
 
-#### Method 2: `PerSequenceControlVariateEstimator` (default for small `B`)
+#### Method 2: `PerSequenceControlVariateEstimator` (opt-in)
 
 For each sequence `b`, do **one extra backward** of `L_b` (per-sequence loss)
 w.r.t. `θ`. This gives `g_b = J_bᵀ u_b` where `u_b = ∇_f L_b` is known in closed
@@ -338,12 +337,39 @@ form. From `(g_b, u_b)`:
 These are used as a **control variate** for the Hutchinson estimate of
 `Tr(M_b)`: the loss-direction projection is correlated with the trace, known
 exactly, has zero variance; subtracting its noisy Hutchinson counterpart and
-adding back the exact value reduces total variance — substantially in the
-high-`χ_pos` regime.
+adding back the exact value is meant to reduce the total variance when the loss
+direction overlaps the top eigenmodes of `M_b` (the high-`χ_pos` regime).
 
-Cost per `(ckpt, batch)`: `n_h + B` backwards. Linear in `B`, so unattractive
-for `B > ~64`. **When to use:** moderate `B` (≤ 32), or when the per-sample
-alignment matrix is wanted.
+What the committed data show: in the accuracy sweep
+(`examples/benchmark/accuracy/accuracy_pythia-14m.json`: Pythia-14m, `B = 8`,
+sequence length 64, `micro_batch_size = 8`, 100 seeds per setting, both
+estimators run with the same seeds and therefore the same probes) the two
+estimators return practically the same value for every seed — they differ by
+less than 0.2% of one standard deviation at every `n_hutchinson` from 1 to 64 —
+so their spread is the same. The single-seed Pythia-160m table
+(`examples/benchmark/single_gpu/results_pythia-160m.md`; a synthetic random-token
+batch, the whole batch as one micro-batch) agrees: `chi_net`
+matches to the five digits it prints at `B` = 4, 8 and 16. `χ_pos` is of order
+1e-7 in both, so the loss direction carries almost none of the trace and the
+control-variate correction is negligible there. On the untrained toy fixture a
+comment in `tests/unit/test_chi_net.py` records that the control variate removes
+well under 1% of the standard deviation. There is no committed
+comparison of the two estimators' variance at `micro_batch_size = 1` on a model
+larger than 1.25M parameters, and none in the high-`χ_pos` regime where the
+correction is expected to matter.
+
+Cost: per micro-batch of `M` sequences, `per_sequence_cv` runs one forward and
+`n_h + M` backwards; `hutchinson` runs `n_h` forwards and `n_h` backwards. In
+the committed Pythia-160m table (`B` = 4, 8, 16, measured with the whole batch
+as one micro-batch) the wall-clock of the two is about equal at 32 probes,
+`per_sequence_cv` is slower at 8 probes and faster at 128, and its peak memory
+is higher (4.5–6.2 GB against 3.4–4.4 GB). Run time and memory at other
+micro-batch sizes and on larger models have not been measured.
+
+It is not selected by default (see "Default estimator"). Through `analyze()` and
+the CLI it returns the same set of observables as `hutchinson`; the per-sample
+alignment matrix is only available from a direct
+`PerSequenceControlVariateEstimator(compute_alignment_matrix=True)` call.
 
 #### Method 3: `OpacusEstimator` (opt-in fast path)
 
@@ -353,18 +379,20 @@ packing `B` samples per pass. Falls back with a clear error on tied embeddings
 (Pythia!), unsupported layers, or in-place ops.
 
 **Status:** stub only — `vatis/core/chi_net/opacus.py` raises
-`NotImplementedError`. Not yet implemented; never auto-selected.
+`NotImplementedError`. Not yet implemented; never selected by default.
 
-#### Auto-selection rule
+#### Default estimator
 
 ```python
 def select_chi_net_method(B_total: int, requested: str | None) -> str:
     if requested is not None:
         return requested  # user override always wins
-    if B_total <= 32:
-        return "per_sequence_cv"
     return "hutchinson"
 ```
+
+Through 0.2.x a batch of at most 32 sequences selected `per_sequence_cv`. It has
+not shown a lower variance and needs more peak memory (see Method 2), so the
+default is `hutchinson` at every batch size.
 
 #### `micro_batch_size` is a noise setting, not only a memory setting
 
@@ -431,8 +459,8 @@ number of valid (non-pad, non-ignored) tokens.
   **preconditioned observables** (`chi_pos_P`) for diagonal `P` (`identity`, `explicit`,
   `adamw` sources) alongside the raw one.
   Tokenized data already in model-ready form. DDP across user-specified
-  `num_gpus`. Two `χ_net` estimators (`hutchinson`, `per_sequence_cv`) with
-  auto-selection. Parquet result sink (canonical) plus optional W&B and
+  `num_gpus`. Two `χ_net` estimators (`hutchinson`, the default, and the
+  opt-in `per_sequence_cv`). Parquet result sink (canonical) plus optional W&B and
   TensorBoard. CLI via `python -m vatis run …` that wraps `torchrun`.
 - **Out:** Tokenization (examples tokenize inline; vatis core provides no
   tokenizer). Checkpoint discovery / sweep scheduling. FSDP. Tensor / pipeline
@@ -459,8 +487,8 @@ vatis/
 │   ├── observables.py     # chi_loss, delta_loss, chi_pos (combine χ_net from estimator)
 │   ├── chi_net/
 │   │   ├── base.py        # ChiNetEstimator ABC
-│   │   ├── hutchinson.py  # HutchinsonEstimator (always-works fallback)
-│   │   ├── per_seq_cv.py  # PerSequenceControlVariateEstimator (default for small B)
+│   │   ├── hutchinson.py  # HutchinsonEstimator (default)
+│   │   ├── per_seq_cv.py  # PerSequenceControlVariateEstimator (opt-in)
 │   │   └── opacus.py      # OpacusEstimator (stub)
 │   ├── probes.py          # Rademacher / Gaussian probe vector generation, masking
 │   ├── param_layout.py    # ParameterLayout: the canonical parameter flattening order
@@ -525,7 +553,7 @@ results = analyze(
     },
     observables=None,                           # None = all raw (+ all P if a preconditioner is set)
     preconditioner=None,                        # None | "identity" | Preconditioner | fn(ckpt_id) -> P | None
-    chi_net_method=None,                        # None = auto: per_seq_cv if B≤32 else hutchinson
+    chi_net_method=None,                        # None = hutchinson
     n_hutchinson=32,                            # interpretation depends on method
     hutchinson_distribution="rademacher",       # or "gaussian"
     micro_batch_size=1,                         # least memory AND least noise; raising it raises χ_net variance
@@ -916,11 +944,12 @@ These say how a row was obtained. They do not change any value.
 
 - **`chi_net_method`** — the `χ_net` estimator that actually ran for the row's
   batch, whatever selected it (an explicit `chi_net_method=...` or the
-  automatic rule). It is written on every row of the batch, including the ones
-  the estimator does not enter (`chi_loss`, `delta_loss`), like `n_hutchinson`.
-  The automatic rule decides per batch; if it picks different estimators for
-  the two batches of a cross pair, the pair's rows carry both, in pair order:
-  `"per_sequence_cv+hutchinson"`.
+  default). It is written on every row of the batch, including the ones the
+  estimator does not enter (`chi_loss`, `delta_loss`), like `n_hutchinson`.
+  The estimator is resolved per batch. With `hutchinson` as the default at
+  every batch size all batches of a run get the same one; should the two
+  batches of a cross pair ever differ, the pair's rows carry both, in pair
+  order: `"per_sequence_cv+hutchinson"`.
 - **`n_ranks`** — the number of processes of the run (the DDP world size), `1`
   for a single process. Every rank draws its own probe stream for its own
   shard, so a multi-rank `χ_net` is a different draw than a single-process one
