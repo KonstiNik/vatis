@@ -26,12 +26,12 @@ repetition.
 
 Run with::
 
-    .venv/bin/python examples/spectral_tail_experiment.py
-    .venv/bin/python examples/spectral_tail_experiment.py --model EleutherAI/pythia-70m
+    .venv/bin/python examples/spectral_tail/run.py
+    .venv/bin/python examples/spectral_tail/run.py --model EleutherAI/pythia-70m
 
 Run both models and then produce a cross-scale comparison::
 
-    .venv/bin/python examples/spectral_tail_experiment.py --compare
+    .venv/bin/python examples/spectral_tail/run.py --compare
 
 Set ``HF_HOME`` (in your shell or the repo-root ``.env``) to relocate the
 model cache; see ``run_config.py``. Outputs are written to
@@ -43,7 +43,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # examples/, for _helpers
 from run_config import configure_hf_cache  # noqa: E402
 
 configure_hf_cache()
@@ -101,7 +102,7 @@ CROSS_PAIRS: list[tuple[str, str]] = [
     (STYLE_A_NAME, STYLE_D_NAME),
 ]
 
-OUT_DIR = Path(__file__).parent / "spectral_tail"
+OUT_DIR = Path(__file__).parent
 
 
 def model_tag(model_name: str) -> str:

@@ -2,9 +2,9 @@
 
 Two end-to-end examples live under `examples/`, and this document covers both:
 
-1. **`pythia_sweep.py` (pythia-14m, HF checkpoints)** — the canonical deployment
+1. **`pythia_sweep/` (pythia-14m, HF checkpoints)** — the canonical deployment
    example. Everything up to "Reproducing" is about it.
-2. **`two_rulers_llama.py` (project Llama, native checkpoint bundle)** — the WP0
+2. **`optimizer_aware_llama/` (project Llama, native checkpoint bundle)** — the WP0
    GPU example: both rulers, `chi_pos` *and* `chi_pos^P`, over a bundle written by
    our own training run. See [WP0 GPU example](#wp0-gpu-example--two-rulers-on-a-project-llama-bundle)
    at the end.
@@ -22,7 +22,7 @@ things it surfaces on real checkpoints.
 
 ## What the deployment example evaluates on
 
-`examples/pythia_sweep.py` uses **two real-text eval batches**:
+`examples/pythia_sweep/run.py` uses **two real-text eval batches**:
 
 - **prose**: the opening of Jane Austen's *Pride and Prejudice* (public
   domain), tokenized with the model's own tokenizer and sliced into
@@ -103,14 +103,14 @@ statistically equivalent to every other.
 ## Reproducing
 
 ```bash
-.venv/bin/python examples/pythia_sweep.py      # compute → results.parquet + plots
-.venv/bin/python examples/analyze_results.py   # analyze → cos_similarity.png (zero vatis imports)
+.venv/bin/python examples/pythia_sweep/run.py       # compute → results.parquet + plots
+.venv/bin/python examples/pythia_sweep/evaluate.py  # analyze → cos_similarity.png (zero vatis imports)
 ```
 
 (Needs the `examples` extra for matplotlib: `uv pip install ".[examples]"`. Set
 `HF_HOME` via your shell or the repo-root `.env` to relocate the model cache.)
 
-`analyze_results.py` reads `results.parquet` and produces `cos_similarity.png` —
+`pythia_sweep/evaluate.py` reads `results.parquet` and produces `cos_similarity.png` —
 the normalized cross-batch gradient correlation
 `cos(g_A, g_B) = δL(A,B) / sqrt(δL(A,A) · δL(B,B))` — plus a printed summary.
 The cosine view exists because the raw cross `delta_loss` plot is visually
@@ -122,7 +122,7 @@ decline (`+0.31 → +0.012`, ~26×) — i.e. **most of the prose-vs-code gradien
 decorrelation is over by step512**, well before the absolute cross delta_loss
 even starts looking interesting.
 
-The analysis script is intentionally separate from `pythia_sweep.py`: compute is
+The analysis script is intentionally separate from `pythia_sweep/run.py`: compute is
 expensive (~1 min on an RTX 3090 Ti), analysis is cheap (sub-second), and the analysis script
 imports only `pyarrow` (not vatis) — making the parquet schema the contract, the
 right pattern for any downstream consumer.
@@ -135,7 +135,7 @@ Outputs (under `examples/pythia_sweep/`):
   batch).
 - `delta_loss.png`, `chi_pos.png` — self pairs + the prose×code cross pair
   (symlog, since the cross values cross zero).
-- `cos_similarity.png` (from `analyze_results.py`) — the normalized cross-batch
+- `cos_similarity.png` (from `evaluate.py`) — the normalized cross-batch
   correlation, with gradient magnitudes divided out.
 
 These files were regenerated on 17 November 2026 with the current code. Against
@@ -146,7 +146,7 @@ size the probe noise predicts. Every number quoted above still holds.
 
 ## WP0 GPU example — two rulers on a project Llama bundle
 
-`examples/two_rulers_llama.py` (compute) + `examples/two_rulers_llama_evaluate.py`
+`examples/optimizer_aware_llama/run.py` (compute) + `examples/optimizer_aware_llama/evaluate.py`
 (figure and tables) are the end-to-end example for the **native checkpoint
 bundle** path and the **preconditioned ruler**: a real training run writes a
 bundle, vatis measures `chi_pos` and `chi_pos^P` over every checkpoint on one
@@ -164,10 +164,10 @@ bash runs/example_bundle_run.sh 300 32
 #   -> $WP0_EXAMPLE_ROOT/eval_batches    3 held-out measurement batches (.npy)
 
 # vatis venv, separate process:
-.venv/bin/python examples/two_rulers_llama.py \
+.venv/bin/python examples/optimizer_aware_llama/run.py \
     --bundle "$WP0_EXAMPLE_ROOT/bundle" \
     --eval-batches "$WP0_EXAMPLE_ROOT/eval_batches" --device cuda
-.venv/bin/python examples/two_rulers_llama_evaluate.py --dir examples/output
+.venv/bin/python examples/optimizer_aware_llama/evaluate.py --dir examples/optimizer_aware_llama
 ```
 
 `--device cuda` is the default and falls back to CPU with a printed note, so the
@@ -272,7 +272,7 @@ The result file carries this split on every P row: `chi_net_P_capped` and
 `preconditioner_capped_fraction` is the diagonal share. For batch B,
 `chi_net_P_capped / chi_net_P` gives the last column of the table above.
 
-### Outputs (under `examples/output/`)
+### Outputs (under `examples/optimizer_aware_llama/`)
 
 Regenerated on 17 November 2026 with the current code, using the command above
 (`--device cuda`, seed 0).
@@ -286,7 +286,7 @@ Regenerated on 17 November 2026 with the current code, using the command above
   table, the `P = I` re-check, the epsilon-ceiling records, the data-fallback
   flag.
 - `performance.csv` — the timing table on its own.
-- `two_rulers_llama.png` — the figure: `chi_pos` and `chi_pos^P` versus training
+- `chi_pos_raw_vs_adamw.png` — the figure: `chi_pos` and `chi_pos^P` versus training
   step (left) and versus train loss (right, time running left to right), for the
   eval batch's self pair and the two cross pairs. Symlog y, because a cross pair
   is signed and this run does cross zero late in training.

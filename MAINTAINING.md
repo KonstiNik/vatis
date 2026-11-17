@@ -107,8 +107,7 @@ Then bring the content over — **two options**:
   git cherry-pick -n <commit>
   git restore --staged --worktree \
       CLAUDE.md MAINTAINING.md \
-      examples/spectral_tail examples/spectral_tail_experiment.py \
-      examples/spectral_tail_evaluate.py examples/dpo_spectral_filter
+      examples/spectral_tail examples/dpo_spectral_filter
   git commit
   ```
 
@@ -127,7 +126,7 @@ git checkout main && git merge promote/<x> && git push origin main
 ```
 
 ### Never promote (dev-only)
-`CLAUDE.md`, `MAINTAINING.md`, `examples/spectral_tail*`,
+`CLAUDE.md`, `MAINTAINING.md`, `examples/spectral_tail/`,
 `examples/dpo_spectral_filter/`, and anything else research/scaffolding. When in
 doubt, check what `main` currently tracks: `git ls-tree -r --name-only main`.
 
@@ -135,8 +134,13 @@ doubt, check what `main` currently tracks: `git ls-tree -r --name-only main`.
 `vatis/`, `tests/`, `pyproject.toml`, `uv.lock`, `LICENSE`, `README.md`,
 `.github/`, `.gitignore`, `docs/SPEC.md`, `CONTRIBUTING.md`, `CHANGELOG.md`,
 `.env.example`, `run_config.py`, and `examples/` minus the research dirs
-(`_helpers.py`, `pythia_sweep.py`, `analyze_results.py`, `BENCHMARK.md`,
-`pythia_sweep/`, `benchmark/`).
+(`_helpers.py`, `BENCHMARK.md`, `pythia_sweep/`, `benchmark/`).
+
+An example is one folder under `examples/` (its scripts, README and committed
+outputs together) and is promoted or left behind as a unit. On `main` the
+Pythia example still sits at its old top-level paths (`examples/pythia_sweep.py`,
+`examples/analyze_results.py`); a path-scoped checkout from `dev` adds the new
+folder but does not delete them, so remove them by hand at the next promotion.
 
 ## Cutting a release
 

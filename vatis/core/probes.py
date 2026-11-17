@@ -16,7 +16,7 @@ set everywhere.
 
 **The Rademacher draw is bit-packed**, because the naive version is far too slow
 to ship. Generating one ``fp32`` element per probe entry on the CPU costs a *full
-CPU RNG call per entry*; measured on the ``two_rulers_llama`` example's probe shape
+CPU RNG call per entry*; measured on the ``optimizer_aware_llama`` example's probe shape
 ``(8, 512, 4096)`` = 16.8M entries, RTX 3090 Ti:
 
 ===========================================================  ==============

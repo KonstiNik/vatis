@@ -2,7 +2,7 @@
 
 This script demonstrates the *analysis* half of a typical vatis
 workflow. The compute half — running ``analyze()`` over a checkpoint
-sweep — is in ``examples/pythia_sweep.py``; that's the expensive step
+sweep — is in ``examples/pythia_sweep/run.py``; that's the expensive step
 (it loads model weights and runs backward passes). This script is the
 cheap step: it reads the parquet output and produces *derived*
 observables that are useful for interpreting the LNA results but
@@ -10,8 +10,8 @@ aren't part of the canonical row schema.
 
 Why a separate script? Two reasons:
 
-1. **Iteration speed.** ``pythia_sweep.py`` takes ~20 s with a warm
-   HF cache and ~50 s cold. ``analyze_results.py`` runs in well under
+1. **Iteration speed.** ``run.py`` takes ~20 s with a warm
+   HF cache and ~50 s cold. ``evaluate.py`` runs in well under
    a second. If you want to try a different normalization, a
    different plot style, or a different derived quantity, you do it
    here without re-running compute.
@@ -44,7 +44,7 @@ grow several orders of magnitude over training and dominate the raw
 ``delta_loss`` numbers) so the *direction* trajectory is visible.
 
 This matters because the raw cross ``delta_loss`` plot in
-``pythia_sweep.py`` looks non-monotonic — the cross value drops from
+``run.py`` looks non-monotonic — the cross value drops from
 +3.25 at step1 to +0.67 at step512, then *climbs back* to +2.62 at
 step1000 before declining to negative values. That looks like a big
 effect because the absolute number 4×'d. The cosine similarity tells
@@ -61,7 +61,7 @@ essentially-orthogonal regime.
 Outputs
 =======
 
-- ``examples/cos_similarity.png`` — one line per cross pair, training
+- ``examples/pythia_sweep/cos_similarity.png`` — one line per cross pair, training
   step on x-axis (log), cos in [-1, +1] on y-axis (linear).
 - A summary table printed to stdout showing all cross pairs at all
   checkpoints with the derived correlation alongside the canonical
@@ -72,11 +72,11 @@ Usage
 
 ::
 
-    .venv/bin/python examples/analyze_results.py
+    .venv/bin/python examples/pythia_sweep/evaluate.py
 
 Optionally pass an alternate parquet path::
 
-    .venv/bin/python examples/analyze_results.py path/to/other.parquet
+    .venv/bin/python examples/pythia_sweep/evaluate.py path/to/other.parquet
 """
 
 from __future__ import annotations
@@ -92,17 +92,18 @@ matplotlib.use("Agg")  # headless
 import matplotlib.pyplot as plt
 import pyarrow.parquet as pq
 
-from _helpers import step_from_revision
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # examples/, for _helpers
+from _helpers import step_from_revision  # noqa: E402
 
-DEFAULT_PARQUET = Path(__file__).parent / "pythia_sweep" / "results.parquet"
-COS_PLOT_PATH = Path(__file__).parent / "pythia_sweep" / "cos_similarity.png"
+DEFAULT_PARQUET = Path(__file__).parent / "results.parquet"
+COS_PLOT_PATH = Path(__file__).parent / "cos_similarity.png"
 
 
 def main(parquet_path: Path = DEFAULT_PARQUET) -> None:
     if not parquet_path.exists():
         sys.exit(
             f"results file not found: {parquet_path}\n"
-            f"Run examples/pythia_sweep.py first to produce it."
+            f"Run examples/pythia_sweep/run.py first to produce it."
         )
 
     table = pq.read_table(parquet_path)
@@ -119,7 +120,7 @@ def main(parquet_path: Path = DEFAULT_PARQUET) -> None:
     if not cross_pairs:
         sys.exit(
             f"no cross pairs found in {parquet_path}.\n"
-            f"Re-run pythia_sweep.py with cross_pairs=[(a, b)] to enable this analysis."
+            f"Re-run examples/pythia_sweep/run.py with cross_pairs=[(a, b)] to enable this analysis."
         )
     all_steps = sorted({s for d in by_obs.values() for s in d})
 

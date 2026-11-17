@@ -1,6 +1,6 @@
 """Evaluate the spectral tail experiment across model scales.
 
-Reads parquet files produced by ``spectral_tail_experiment.py`` and
+Reads parquet files produced by ``examples/spectral_tail/run.py`` and
 generates comparison plots. No vatis imports -- only reads the parquet
 contract.
 
@@ -12,7 +12,7 @@ from all available models on the same axes.
 
 Usage::
 
-    .venv/bin/python examples/spectral_tail_evaluate.py
+    .venv/bin/python examples/spectral_tail/evaluate.py
 
 Reads from ``examples/spectral_tail/results_*.parquet``.
 Writes plots to ``examples/spectral_tail/``.
@@ -31,9 +31,11 @@ matplotlib.use("Agg")
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import pyarrow.parquet as pq
-from _helpers import step_from_revision
 
-DATA_DIR = Path(__file__).parent / "spectral_tail"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # examples/, for _helpers
+from _helpers import step_from_revision  # noqa: E402
+
+DATA_DIR = Path(__file__).parent
 FIG_DIR = DATA_DIR / "figures"
 
 # Models we expect results for, in order of scale.
@@ -131,7 +133,7 @@ def main() -> None:
             print(f"  skipping {model_name}: {pq_path} not found")
 
     if not available:
-        sys.exit("no result files found -- run spectral_tail_experiment.py first")
+        sys.exit("no result files found -- run examples/spectral_tail/run.py first")
 
     all_data: dict[str, dict[tuple[str, str, str], list[tuple[int, float]]]] = {}
     for model_name, pq_path in available:

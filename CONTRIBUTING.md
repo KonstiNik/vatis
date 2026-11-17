@@ -46,7 +46,7 @@ pytest -m "not integration and not cross_validation"
 - If a change contradicts the spec, update [`docs/SPEC.md`](docs/SPEC.md) in the
   same PR.
 - Keep examples runnable: after changing the analyzer or an estimator, re-run
-  `examples/pythia_sweep.py` and sanity-check the plots.
+  `examples/pythia_sweep/run.py` and sanity-check the plots.
 
 ## Math reference
 

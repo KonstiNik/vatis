@@ -14,7 +14,7 @@ Reads ``results.parquet`` (the canonical vatis output) and ``resources.json``
 
 It also prints a markdown observable table and a resource summary.
 
-Like ``examples/analyze_results.py``, this script has **zero vatis imports** —
+Like ``examples/pythia_sweep/evaluate.py``, this script has **zero vatis imports** —
 only ``pyarrow`` and ``matplotlib`` (and stdlib ``json``). The parquet schema
 plus the resources JSON are the entire contract with the compute step.
 

@@ -1,9 +1,9 @@
 """WP0 GPU end-to-end example, phase 2: the figure and the tables.
 
-Reads what ``examples/two_rulers_llama.py`` wrote and produces the deliverables a
+Reads what ``examples/optimizer_aware_llama/run.py`` wrote and produces the deliverables a
 human actually looks at:
 
-- ``examples/output/two_rulers_llama.png`` — ONE figure, two panels:
+- ``examples/optimizer_aware_llama/chi_pos_raw_vs_adamw.png`` — ONE figure, two panels:
   ``chi_pos`` and ``chi_pos^P`` versus training step, and versus train loss.
 - the printed performance table (wall time per checkpoint, peak GPU memory,
   total runtime) and the epsilon-ceiling diagnostic.
@@ -19,7 +19,7 @@ and does not belong in the observable schema, so the compute phase writes it to
 
 Run with::
 
-    python examples/two_rulers_llama_evaluate.py --dir examples/output
+    python examples/optimizer_aware_llama/evaluate.py --dir examples/optimizer_aware_llama
 
 Two things the figure has to get right, because both are real and easy to
 misread:
@@ -52,7 +52,7 @@ matplotlib.use("Agg")  # headless — no display backend
 import matplotlib.pyplot as plt  # noqa: E402
 import pyarrow.parquet as pq  # noqa: E402
 
-DEFAULT_DIR = Path(__file__).parent / "output"
+DEFAULT_DIR = Path(__file__).parent
 
 # Hue carries the ruler (the comparison this figure exists for); linestyle and
 # marker carry the batch pair. Two hues, so the palette stays trivially
@@ -78,7 +78,7 @@ def load(directory: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if not parquet.is_file() or not summary_path.is_file():
         raise SystemExit(
             f"missing inputs in {directory}: expected results.parquet and run_summary.json. "
-            "Run examples/two_rulers_llama.py first (phase 1, the expensive one)."
+            "Run examples/optimizer_aware_llama/run.py first (phase 1, the expensive one)."
         )
     rows = pq.read_table(parquet).to_pylist()
     summary = json.loads(summary_path.read_text())
@@ -243,7 +243,7 @@ def plot(
         0.012, 0.012, caption(summary, scale_name), fontsize=7.5, color=TEXT_MUTED, va="bottom"
     )
 
-    path = directory / "two_rulers_llama.png"
+    path = directory / "chi_pos_raw_vs_adamw.png"
     fig.savefig(path, dpi=150)
     plt.close(fig)
     return path

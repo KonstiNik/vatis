@@ -1,8 +1,8 @@
 # Which update rule reconstructs the step an AdamW run took?
 
 A small check on one training run, produced by
-`examples/adamw_vs_sgd_reconstruction.py` (compute) and
-`examples/adamw_vs_sgd_reconstruction_evaluate.py` (table and figure). It is
+`examples/adamw_vs_sgd_reconstruction/run.py` (compute) and
+`examples/adamw_vs_sgd_reconstruction/evaluate.py` (table and figure). It is
 not a study: one run, one seed, an 11M-parameter model, thirteen steps, two
 batches.
 
@@ -51,10 +51,10 @@ misses is visible.
   is itself below 1e-6), and the learning-rate and clip-factor rows to 3e-7.
 
 ```bash
-python examples/adamw_vs_sgd_reconstruction.py --bundle <run>/bundle \
+python examples/adamw_vs_sgd_reconstruction/run.py --bundle <run>/bundle \
     --eval-batches <run>/eval_batches --clip-grad-norm 1.0 --device cuda \
     --steps 0 1 2 5 9 661 665 6611 6615 33057 33062 66105 66110
-python examples/adamw_vs_sgd_reconstruction_evaluate.py
+python examples/adamw_vs_sgd_reconstruction/evaluate.py
 ```
 
 ## What it shows

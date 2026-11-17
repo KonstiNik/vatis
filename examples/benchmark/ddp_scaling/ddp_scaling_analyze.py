@@ -9,7 +9,7 @@ Reads every ``*.json`` written by ``ddp_scaling_worker.py`` and emits:
   3. Weak scaling: fixed batch-per-GPU → wallclock should stay ~flat while
      total data (and throughput) grows ~linearly.
 
-No GPU, no vatis import — just reads the JSON contract (like analyze_results.py).
+No GPU, no vatis import — just reads the JSON contract (like pythia_sweep/evaluate.py).
 
     .venv/bin/python examples/benchmark/ddp_scaling_analyze.py \\
         --in-dir examples/benchmark/ddp_scaling_out \\

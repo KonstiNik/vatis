@@ -37,18 +37,18 @@ per-checkpoint download/load, not the chi_net computation.
 
 Run with::
 
-    .venv/bin/python examples/pythia_sweep.py
+    .venv/bin/python examples/pythia_sweep/run.py
 
 Set ``HF_HOME`` (in your shell or the repo-root ``.env``) to relocate the
 model cache off your home filesystem; see ``run_config.py``.
 
 Outputs are written next to this script:
 
-- ``examples/results.parquet``  — canonical long-format result table
-- ``examples/chi_loss.png``      — chi_loss_normalized vs step (self pairs only)
-- ``examples/chi_net.png``       — chi_net_normalized vs step (self pairs only)
-- ``examples/delta_loss.png``    — delta_loss vs step (self + cross)
-- ``examples/chi_pos.png``       — chi_pos vs step (self + cross)
+- ``examples/pythia_sweep/results.parquet``  — canonical long-format result table
+- ``examples/pythia_sweep/chi_loss.png``      — chi_loss_normalized vs step (self pairs only)
+- ``examples/pythia_sweep/chi_net.png``       — chi_net_normalized vs step (self pairs only)
+- ``examples/pythia_sweep/delta_loss.png``    — delta_loss vs step (self + cross)
+- ``examples/pythia_sweep/chi_pos.png``       — chi_pos vs step (self + cross)
 """
 
 from __future__ import annotations
@@ -58,7 +58,8 @@ from pathlib import Path
 
 # Pin the HF cache before transformers / vatis are imported. This keeps
 # the home filesystem from filling up with checkpoint shards.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # examples/, for _helpers
 from run_config import configure_hf_cache  # noqa: E402
 
 configure_hf_cache()
@@ -121,7 +122,7 @@ EVAL_BATCH_NAMES = (PROSE_NAME, CODE_NAME)
 # row label; ⟨g_A, g_B⟩ is symmetric.
 CROSS_PAIRS: list[tuple[str, str]] = [(PROSE_NAME, CODE_NAME)]
 
-OUT_DIR = Path(__file__).parent / "pythia_sweep"
+OUT_DIR = Path(__file__).parent
 PARQUET_PATH = OUT_DIR / "results.parquet"
 PLOTS = {
     "chi_loss_normalized": OUT_DIR / "chi_loss.png",
