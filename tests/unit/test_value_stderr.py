@@ -18,11 +18,12 @@ pair combines two independently probed batches through a geometric mean. The
    Jacobian, and ``ChiNetResult.chi_net_var`` must be the sum over micro-batches
    of their ``s^2 / n``. This pins the definition, the ``n - 1``, the ``1 / n``
    and the sum over micro-batches, on a padded transformer batch.
-2. *Against the exact variance*: for Rademacher probes the variance of one
-   per-probe value is ``2 sum_{i != j} A_ij^2`` (``A`` the micro-batch's
+2. *Against the exact variance*: the variance of one per-probe value
+   ``v^T A v`` is ``2 sum_{i != j} A_ij^2`` for Rademacher probes and
+   ``2 sum_{i, j} A_ij^2`` for Gaussian ones (``A`` the micro-batch's
    output-space Gram matrix, projected for ``per_sequence_cv``), so the true
    variance of ``chi_net`` is known without sampling. The reported variance,
-   averaged over seeds, must equal it.
+   averaged over seeds, must equal it, for both distributions.
 3. *Against the empirical spread*, through ``analyze()``: over many analyzer
    seeds, the mean of ``value_stderr**2`` must equal the sample variance of
    ``value``, for every row type that carries a standard error — both
@@ -66,7 +67,7 @@ from vatis.core.chi_net.hutchinson import HutchinsonEstimator
 from vatis.core.chi_net.per_seq_cv import PerSequenceControlVariateEstimator
 from vatis.core.normalization import normalization_factor
 from vatis.core.preconditioner import Preconditioner
-from vatis.core.probes import make_probe, mask_probe
+from vatis.core.probes import ProbeDistribution, make_probe, mask_probe
 from vatis.models.hf import ModelBundle
 from vatis.sinks.base import ResultRow
 
@@ -74,9 +75,11 @@ FP64 = torch.float64
 
 # Number of standard errors every statistical comparison below allows. A normal
 # variable leaves +-4 sigma with probability 6.3e-5; the statistical tests of
-# this file make 70 such comparisons (many of them on the same runs), so if every
+# this file make 82 such comparisons (many of them on the same runs), so if every
 # reported standard error is right the chance that some comparison fails is below
-# 70 * 6.3e-5 = 0.5% -- and the seeds are fixed, so a pass stays a pass.
+# 82 * 6.3e-5 = 0.5%. The seeds are fixed, so on one torch build and platform the
+# outcome is the same on every run; another build can draw different probes or
+# round differently, and is then a new draw from that 0.5%.
 Z_SIGMA = 4.0
 
 # Rows whose standard error comes straight from the per-probe spread ...
@@ -226,14 +229,22 @@ def _micro_row_ranges(case: dict[str, Any], micro: int) -> list[tuple[int, int, 
 
 
 def _estimate(
-    case: dict[str, Any], method: str, *, n_h: int, micro: int, seed: int
+    case: dict[str, Any],
+    method: str,
+    *,
+    n_h: int,
+    micro: int,
+    seed: int,
+    distribution: ProbeDistribution = "rademacher",
 ) -> ChiNetResult:
     estimator: HutchinsonEstimator | PerSequenceControlVariateEstimator
     if method == "hutchinson":
-        estimator = HutchinsonEstimator(n_hutchinson=n_h)
+        estimator = HutchinsonEstimator(n_hutchinson=n_h, distribution=distribution)
     else:
         estimator = PerSequenceControlVariateEstimator(
-            n_hutchinson=n_h, compute_alignment_matrix=method.endswith(":store")
+            n_hutchinson=n_h,
+            distribution=distribution,
+            compute_alignment_matrix=method.endswith(":store"),
         )
     return estimator.compute(
         case["model"],
@@ -350,48 +361,68 @@ def test_variances_are_absent_exactly_where_the_estimates_are(method: str) -> No
 # ================================================== 2. against the exact variance
 
 
+def _exact_probe_variance(a: torch.Tensor, distribution: str) -> float:
+    """``Var[v^T A v]`` for one probe ``v`` with iid entries and symmetric ``A``.
+
+    Rademacher: ``2 sum_{i != j} A_ij^2`` -- ``v_i^2 = 1`` removes the diagonal
+    (``rademacher_trace_std``, squared, at one probe). Gaussian: by Isserlis,
+    ``E[v_i v_j v_k v_l] = d_ij d_kl + d_ik d_jl + d_il d_jk``, hence
+    ``E[(v^T A v)^2] = (Tr A)^2 + 2 ||A||_F^2`` and the variance is
+    ``2 ||A||_F^2 = 2 sum_{i, j} A_ij^2`` -- the diagonal counts.
+    """
+    if distribution == "rademacher":
+        return rademacher_trace_std(a, 1) ** 2
+    assert distribution == "gaussian"
+    return 2.0 * float((a * a).sum())
+
+
 @pytest.mark.slow
+@pytest.mark.parametrize("distribution", ["rademacher", "gaussian"])
 @pytest.mark.parametrize("micro", [1, 3])
 @pytest.mark.parametrize("method", ["hutchinson", "per_sequence_cv"])
-def test_reported_variance_is_unbiased_for_the_exact_rademacher_variance(
-    method: str, micro: int
+def test_reported_variance_is_unbiased_for_the_exact_probe_variance(
+    method: str, micro: int, distribution: ProbeDistribution
 ) -> None:
     """Averaged over seeds, the reported variance is the variance that is known exactly.
 
-    A Rademacher probe ``v`` gives ``Var[v^T A v] = 2 sum_{i != j} A_ij^2``
-    (``rademacher_trace_std``), the probes of different micro-batches are
-    independent, so with ``A_m`` the block of micro-batch ``m``
+    One probe ``v`` gives a per-probe value ``v^T A v`` whose variance is known
+    in closed form for both probe distributions (``_exact_probe_variance``).
+    The probes of different micro-batches are independent, so with ``A_m`` the
+    block of micro-batch ``m``
 
-        Var[chi_net] = sum_m 2 sum_{i != j} (A_m)_ij^2 / n_h
+        Var[chi_net] = sum_m Var[v^T A_m v] / n_h
 
     -- no sampling on this side of the comparison. ``micro = 3`` puts all three
     sequences under one probe, so ``A_m`` includes the cross-sequence blocks; at
     ``micro = 1`` it does not, and the two variances differ.
 
-    Tolerance: the mean of ``K`` independent reported variances has standard
-    error ``sd / sqrt(K)``, ``sd`` their sample standard deviation; ``Z_SIGMA``
-    of those.
+    Tolerance, the same for both distributions: the mean of ``K`` independent
+    reported variances has standard error ``sd / sqrt(K)``, ``sd`` their sample
+    standard deviation; ``Z_SIGMA`` of those.
 
     Number of seeds: enough for that tolerance to be below a quarter of the
     exact value (the guard at the end). With four probes one micro-batch yields
     a three-degrees-of-freedom spread estimate, whose relative standard
-    deviation is about 1; three micro-batches halve it. Hence 150 seeds at
-    ``micro = 1`` and 300 at ``micro = 3``.
+    deviation is about 1 for either distribution; three micro-batches halve it.
+    Hence 150 seeds at ``micro = 1`` and 300 at ``micro = 3``.
     """
     case = _lm_case()
     n_h = 4
     n_seeds = {1: 150, 3: 300}[micro]
     matrices = _probe_matrices(case, method)
-    exact = {
-        name: sum(
-            rademacher_trace_std(a[lo:hi, lo:hi], n_h) ** 2
-            for _s, _e, lo, hi in _micro_row_ranges(case, micro)
+
+    def exact_variance(a: torch.Tensor, cut: int, dist: str) -> float:
+        return sum(
+            _exact_probe_variance(a[lo:hi, lo:hi], dist) / n_h
+            for _s, _e, lo, hi in _micro_row_ranges(case, cut)
         )
-        for name, a in matrices.items()
-    }
+
+    exact = {name: exact_variance(a, micro, distribution) for name, a in matrices.items()}
     reported: dict[str, list[float]] = {name: [] for name in matrices}
     for seed in range(n_seeds):
-        result = _estimate(case, method, n_h=n_h, micro=micro, seed=1000 + seed)
+        result = _estimate(
+            case, method, n_h=n_h, micro=micro, seed=1000 + seed, distribution=distribution
+        )
         assert result.chi_net_var is not None
         assert result.chi_net_p_var is not None
         assert result.chi_net_p_capped_var is not None
@@ -403,25 +434,29 @@ def test_reported_variance_is_unbiased_for_the_exact_rademacher_variance(
         mean = float(values.mean())
         stderr = float(values.std(unbiased=True)) / math.sqrt(n_seeds)
         assert abs(mean - want) <= Z_SIGMA * stderr, (
-            f"{method} micro={micro} {name}: mean reported variance {mean:.6e} over "
-            f"{n_seeds} seeds, exact {want:.6e} "
+            f"{method} micro={micro} {distribution} {name}: mean reported variance "
+            f"{mean:.6e} over {n_seeds} seeds, exact {want:.6e} "
             f"({(mean - want) / stderr:+.2f} standard errors, ratio {mean / want:.3f})"
         )
         # vacuity guard: the comparison resolves the two formulas a slip would
         # most plausibly produce -- dividing by n instead of n - 1 (3/4 of the
         # exact value at n_h = 4), or not dividing by n at all (4 times it).
         assert Z_SIGMA * stderr < 0.25 * want, (name, stderr, want)
+        if name == "raw":
+            # ... and the probe distribution: the measured variance is that of
+            # *this* distribution, not of the other one, whose closed form
+            # differs by the diagonal of A. Asserted on the raw row only, where
+            # the diagonal's share is largest; for the P and capped rows at
+            # ``micro = 3`` the two closed forms are 18-32% apart, about the
+            # size of the tolerance, and nothing is claimed there.
+            other = "gaussian" if distribution == "rademacher" else "rademacher"
+            other_exact = exact_variance(matrices[name], micro, other)
+            assert abs(mean - other_exact) > Z_SIGMA * stderr, (distribution, mean, other_exact)
 
-    if method == "hutchinson":
+    if method == "hutchinson" and distribution == "rademacher":
         # ... and the micro-batch cut is part of what is reported.
-        one = sum(
-            rademacher_trace_std(matrices["raw"][lo:hi, lo:hi], n_h) ** 2
-            for _s, _e, lo, hi in _micro_row_ranges(case, 1)
-        )
-        whole = sum(
-            rademacher_trace_std(matrices["raw"][lo:hi, lo:hi], n_h) ** 2
-            for _s, _e, lo, hi in _micro_row_ranges(case, 3)
-        )
+        one = exact_variance(matrices["raw"], 1, distribution)
+        whole = exact_variance(matrices["raw"], 3, distribution)
         assert whole > 1.2 * one, (one, whole)
 
 
@@ -572,6 +607,17 @@ def test_reported_stderr_matches_the_spread_over_seeds(
     ``Z_SIGMA`` standard errors of that difference (``_reported_minus_empirical``);
     the propagated rows additionally get the relative bias their first-order
     formula is known to have (``_first_order_allowance``).
+
+    What this test does **not** pin: that the two batches of a cross pair are
+    probed independently, which the cross-pair formula assumes. With 256 seeds
+    the comparison resolves the variance to a few tens of percent, and a review
+    showed that both batches drawing from one probe stream (the batch name
+    dropped from the per-call seed) under-reports the cross-pair variance
+    without failing here (to 0.71 of the observed one in the review; 0.66-0.79
+    when re-measured over 1500 seeds on a copy with that defect). The seed derivation is
+    pinned by ``tests/unit/test_ddp_probe_streams.py``; its consequence for a
+    cross pair is pinned without statistics by
+    ``test_two_batches_of_a_cross_pair_draw_different_probes`` below.
     """
     n_seeds = 256
     bundle, precond, _ = _mlp_bundle()
@@ -776,6 +822,37 @@ def test_propagated_rows_are_the_stated_functions_of_the_sampled_ones(method: st
             * math.sqrt((stderr("a", "a", obs) / va) ** 2 + (stderr("b", "b", obs) / vb) ** 2)
         )
         assert stderr("a", "b", obs) == pytest.approx(want, rel=1e-12), obs
+
+
+def test_two_batches_of_a_cross_pair_draw_different_probes() -> None:
+    """The cross-pair standard error adds two batches' errors as independent.
+
+    That is only right if the two batches are probed with different streams.
+    Deterministic check: the *same* data under two batch names. Everything that
+    involves no probe is then identical for the two names, and if they shared a
+    probe stream the sampled values would be identical as well -- bit for bit --
+    while the reported cross-pair error would still be that of two independent
+    draws, too small by a factor ``sqrt(2)``. With separate streams the sampled
+    values differ.
+    """
+    batch = _mlp_batch(6, 1)
+    rows = _one_run(
+        eval_batches={"first": batch, "second": batch}, cross_pairs=[("first", "second")]
+    )
+    first = {obs: row for (a, b, obs), row in rows.items() if (a, b) == ("first", "first")}
+    second = {obs: row for (a, b, obs), row in rows.items() if (a, b) == ("second", "second")}
+    assert set(first) == set(second) == {*NOT_SAMPLED, *DIRECT, *PROPAGATED}
+    for obs in NOT_SAMPLED:
+        assert first[obs].value == second[obs].value, obs
+    assert first["chi_net"].hutchinson_seed != second["chi_net"].hutchinson_seed
+    for obs in (*DIRECT, *PROPAGATED):
+        relative = abs(first[obs].value - second[obs].value) / abs(first[obs].value)
+        assert relative > 1e-4, (
+            f"{obs}: {first[obs].value!r} for both names of one batch -- the two batches "
+            "of a cross pair are drawing the same probes, so their errors are not "
+            "independent and the cross-pair value_stderr is too small"
+        )
+        assert first[obs].value_stderr != second[obs].value_stderr, obs
 
 
 def test_a_capped_part_that_is_exactly_zero_has_stderr_zero() -> None:
