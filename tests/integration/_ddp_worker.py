@@ -153,6 +153,9 @@ def update_response_setup(
         step=3,
         first_moment=[1e-2 * torch.randn(p.shape, generator=gen) for p in params],
         second_moment=[1e-3 * torch.rand(p.shape, generator=gen) for p in params],
+        # Low enough to engage: the clip factor then depends on the norm of the
+        # WHOLE gradient, which a rank only has after the all-reduce.
+        clip_grad_norm=0.5,
         descriptor="adamw_update",
         update_batch=update_batch,
         next_weights=lambda: successor,

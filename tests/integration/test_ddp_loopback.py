@@ -73,7 +73,11 @@ from tests.integration._ddp_worker import (
     update_response_setup,
 )
 from vatis import analyze
-from vatis.analyzer import REALIZED_CHANGE_OBSERVABLES, UPDATE_RESPONSE_OBSERVABLES
+from vatis.analyzer import (
+    REALIZED_CHANGE_OBSERVABLES,
+    UPDATE_RESPONSE_OBSERVABLES,
+    UPDATE_STEP_OBSERVABLES,
+)
 from vatis.core.chi_net import build_estimator
 from vatis.core.observables import chi_pos
 from vatis.core.preconditioner import Preconditioner
@@ -576,3 +580,25 @@ def test_ddp_update_response_matches_single_process(tmp_path: Path, batch_size: 
             (r["batch_b"], r["n_valid_a"], r["n_valid_b"]) for r in rows if r["observable"] in names
         }
         assert len(counts) == 2, counts
+
+    # The step's learning rate and clip factor: one row each on the update batch's
+    # own pair, the same on every rank. The rule clips, and the factor is below
+    # one, so it was formed from the all-reduced gradient — a rank's partial
+    # gradient has another norm.
+    base_step = {
+        (r.batch_a, r.batch_b, r.observable): r.value
+        for r in results[0].rows
+        if r.observable in UPDATE_STEP_OBSERVABLES
+    }
+    assert set(base_step) == {("val", "val", "update_lr"), ("val", "val", "update_clip_factor")}
+    assert base_step[("val", "val", "update_lr")] == 1e-2
+    assert 0.0 < base_step[("val", "val", "update_clip_factor")] < 1.0
+    for rank, rows in enumerate(ranks):
+        got_step = {
+            (r["batch_a"], r["batch_b"], r["observable"]): r["value"]
+            for r in rows
+            if r["observable"] in UPDATE_STEP_OBSERVABLES
+        }
+        assert set(got_step) == set(base_step), rank
+        for key, expected in base_step.items():
+            assert abs(got_step[key] - expected) <= DDP_REL * abs(expected), (rank, key)

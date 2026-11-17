@@ -570,6 +570,12 @@ def test_golden_update_response(tmp_path: Path, architecture: str) -> None:
             assert total == pytest.approx(parts, rel=1e-12, abs=1e-18)
             if step == 0:
                 assert rows[(*key, "loss_change_first_order_hist")].value == 0.0
+            if name == "update_batch":
+                # The step's own facts, recorded with the rows they scale.
+                assert rows[(*key, "update_lr")].value == LR
+                assert rows[(*key, "update_clip_factor")].value == 1.0
+            else:
+                assert (*key, "update_lr") not in rows
             if not has_successor:
                 continue
 

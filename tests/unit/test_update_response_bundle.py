@@ -44,6 +44,7 @@ from vatis.analyzer import (
     P_OBSERVABLES,
     REALIZED_CHANGE_OBSERVABLES,
     UPDATE_RESPONSE_OBSERVABLES,
+    UPDATE_STEP_OBSERVABLES,
     Analyzer,
     analyze,
 )
@@ -197,20 +198,27 @@ def test_rows_are_keyed_by_update_batch_and_evaluated_batch(
         new = [
             r
             for r in rows
-            if r.observable in UPDATE_RESPONSE_OBSERVABLES + REALIZED_CHANGE_OBSERVABLES
+            if r.observable
+            in UPDATE_RESPONSE_OBSERVABLES + UPDATE_STEP_OBSERVABLES + REALIZED_CHANGE_OBSERVABLES
         ]
         expected = set(UPDATE_RESPONSE_OBSERVABLES)
         if step in WITH_SUCCESSOR:
             expected |= set(REALIZED_CHANGE_OBSERVABLES)
+        # The step's learning rate and clip factor sit on the update batch's own pair.
+        step_rows = {"update_lr", "update_clip_factor"}
         for batch in ("train", "val"):
             got = {r.observable for r in new if (r.batch_a, r.batch_b) == ("train", batch)}
-            assert got == expected, f"step {step}, pair (train, {batch})"
+            assert got == expected | (step_rows if batch == "train" else set()), (
+                f"step {step}, pair (train, {batch})"
+            )
         assert {(r.batch_a, r.batch_b) for r in new} == {("train", "train"), ("train", "val")}
         for row in new:
             assert row.n_hutchinson is None and row.hutchinson_seed is None
             assert row.wallclock_s is None
             assert row.preconditioner == (
-                "adamw_update" if row.observable in UPDATE_RESPONSE_OBSERVABLES else "none"
+                "adamw_update"
+                if row.observable in UPDATE_RESPONSE_OBSERVABLES + UPDATE_STEP_OBSERVABLES
+                else "none"
             )
             assert (
                 row.n_valid_a == 4 * 15
@@ -233,7 +241,10 @@ def test_existing_rows_are_unchanged_bit_for_bit(adamw_run: tuple[Path, Training
         kept = [
             r
             for r in with_response[step]
-            if r.observable not in UPDATE_RESPONSE_OBSERVABLES + REALIZED_CHANGE_OBSERVABLES
+            if r.observable
+            not in UPDATE_RESPONSE_OBSERVABLES
+            + UPDATE_STEP_OBSERVABLES
+            + REALIZED_CHANGE_OBSERVABLES
         ]
         assert len(old) == len(kept) > 0
         for a, b in zip(old, kept, strict=True):
@@ -1119,3 +1130,91 @@ def test_allow_unlisted_params_is_harmless_when_every_parameter_is_listed(
     run_dir, record = adamw_run
     source = _source(run_dir, steps=[1], allow_unlisted_params=True)
     _assert_matches_the_run(record, _run(source))
+
+
+# ------------------------------------- the step's learning rate and clip factor
+
+
+def test_the_learning_rate_row_is_the_rate_the_step_applied(tmp_path: Path) -> None:
+    """One rate for every parameter: ``update_lr``, at every checkpoint, step 0 included."""
+    run_dir, record = _write(
+        tmp_path,
+        make_scheduler=lambda opt: torch.optim.lr_scheduler.LinearLR(
+            opt, start_factor=0.05, end_factor=1.0, total_iters=6
+        ),
+    )
+    rows_by_step = _run(_source(run_dir))
+    assert 0 in rows_by_step
+    seen = set()
+    for step, rows in rows_by_step.items():
+        rate = _value(rows, "train", "update_lr")
+        assert rate == record.steps[step].lr
+        seen.add(rate)
+        assert not _has(rows, "update_lr_min") and not _has(rows, "update_lr_max")
+        # Only on the update batch's own pair, tagged like the formula rows.
+        (row,) = [r for r in rows if r.observable == "update_lr"]
+        assert (row.batch_a, row.batch_b, row.preconditioner) == ("train", "train", "adamw_update")
+        assert row.n_hutchinson is None and row.wallclock_s is None
+    assert len(seen) >= 5, "the schedule did not move the rate"
+
+
+def test_different_rates_per_group_give_a_range_not_one_number(tmp_path: Path) -> None:
+    """No ``update_lr`` when parameter groups have different rates: the smallest and
+    the largest are recorded instead, and nothing that looks like *the* rate."""
+    run_dir, _record = _write(
+        tmp_path,
+        lambda model: torch.optim.AdamW(
+            decay_groups(model, weight_decay=0.5, lr_no_decay=1e-3), lr=3e-3, betas=(0.9, 0.95)
+        ),
+    )
+    for rows in _run(_source(run_dir, steps=[0, 2])).values():
+        assert not _has(rows, "update_lr")
+        assert _value(rows, "train", "update_lr_min") == 1e-3
+        assert _value(rows, "train", "update_lr_max") == 3e-3
+
+
+def test_the_clip_factor_row_is_the_factor_torch_applied(tmp_path: Path) -> None:
+    run_dir, record = _write(tmp_path, clip_grad_norm=0.5)
+    rows_by_step = _run(_source(run_dir))
+    factors = {}
+    for step, rows in rows_by_step.items():
+        recorded = record.steps[step]
+        applied = float(recorded.grad_seen.norm() / recorded.grad_update.norm())
+        factors[step] = _value(rows, "train", "update_clip_factor")
+        assert factors[step] == pytest.approx(applied, rel=RTOL)
+        assert 0.0 < factors[step] <= 1.0
+        (row,) = [r for r in rows if r.observable == "update_clip_factor"]
+        assert (row.batch_a, row.batch_b, row.preconditioner) == ("train", "train", "adamw_update")
+        # It is recoverable from the update batch's own delta_loss row (= ||g||^2).
+        norm = _value(rows, "train", "delta_loss") ** 0.5
+        assert factors[step] == pytest.approx(min(1.0, 0.5 / (norm + 1e-6)), rel=1e-9)
+    assert 0 in factors and factors[0] < 1.0, "the clip did not engage at the first step"
+
+
+def test_the_clip_factor_of_a_run_that_did_not_clip_is_exactly_one(
+    adamw_run: tuple[Path, TrainingRecord],
+) -> None:
+    run_dir, _record = adamw_run
+    for rows in _run(_source(run_dir)).values():
+        assert _value(rows, "train", "update_clip_factor") == 1.0
+
+
+def test_step_rows_for_sgd_and_on_request_only(tmp_path: Path) -> None:
+    run_dir, _record = _write(
+        tmp_path,
+        lambda model: torch.optim.SGD(model.parameters(), lr=0.05, momentum=0.9),
+        optimizer_name="sgd",
+        bundle_steps=(0, 1),
+    )
+    source = _source(run_dir)
+    rows = _run(source)[1]
+    (row,) = [r for r in rows if r.observable == "update_lr"]
+    assert (row.value, row.preconditioner) == (0.05, "sgd_update")
+    # Not without an update rule, and selectable like any other row.
+    assert not any(
+        r.observable in UPDATE_STEP_OBSERVABLES for r in _run(source, update_response=None)[1]
+    )
+    picked = _run(source, observables=["delta_loss", "update_clip_factor"])[1]
+    assert {r.observable for r in picked} == {"delta_loss", "update_clip_factor"}
+    with pytest.raises(ValueError, match="no update_response was given"):
+        Analyzer(eval_batches={"a": held_out_batch()}, observables=["update_lr"])

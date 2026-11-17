@@ -271,6 +271,15 @@ class OptimizerUpdate:
         norm = math.sqrt(float(_sum_sq_fp64(grad_update)))
         return min(1.0, float(self.clip_grad_norm) / (norm + _CLIP_NORM_EPS))
 
+    def learning_rates(self) -> tuple[float, float]:
+        """The smallest and the largest learning rate any parameter was updated with.
+
+        Equal when every parameter group has the same rate, which is the only
+        case in which "the learning rate of the step" is one number.
+        """
+        rates = [float(h.lr) for h in self.hypers]
+        return min(rates), max(rates)
+
     # ------------------------------------------------------------------- parts
 
     def iter_parts(

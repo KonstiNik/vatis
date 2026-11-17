@@ -156,6 +156,26 @@ UPDATE_RESPONSE_OBSERVABLES: tuple[str, ...] = (
     "loss_change_first_order",
 )
 
+# Two facts about the step itself, recorded next to the rows they scale so that
+# a result file can be read without the bundle: the learning rate the step
+# applied and the factor its gradient was clipped by. Emitted once per
+# checkpoint, on the pair (update batch, update batch), tagged with the update
+# rule's descriptor like the formula rows.
+#
+# - ``update_lr`` exists only when every parameter was updated with the same
+#   rate. When parameter groups have different rates there is no single number,
+#   and ``update_lr_min`` / ``update_lr_max`` are written instead (the smallest
+#   and the largest rate of any group) — never an average.
+# - ``update_clip_factor`` is ``min(1, c / (||g|| + 1e-6))`` for a run that
+#   clipped the global gradient norm at ``c``, and exactly 1 for a run that did
+#   not clip: either way the factor the gradient reached the optimizer with.
+UPDATE_STEP_OBSERVABLES: tuple[str, ...] = (
+    "update_lr",
+    "update_lr_min",
+    "update_lr_max",
+    "update_clip_factor",
+)
+
 # Measured only where the source can also supply ``theta_{t+1}``: the same
 # first-order change from the two stored weight vectors, the loss change the
 # step realized on B, and their difference (what first order leaves over).
@@ -243,7 +263,9 @@ class Analyzer:
             it the analyzer emits the :data:`UPDATE_RESPONSE_OBSERVABLES` rows
             — and the :data:`REALIZED_CHANGE_OBSERVABLES` rows where the factory
             supplies ``theta_{t+1}`` — on the pair (update batch, ``B``) for
-            every eval batch ``B``. The update batch must be one of the eval
+            every eval batch ``B``, plus the step's learning rate and clip
+            factor (:data:`UPDATE_STEP_OBSERVABLES`) on the update batch's own
+            pair. The update batch must be one of the eval
             batches; the analyzer finds it by comparing them with the batch the
             factory reports and refuses when none matches. For a checkpoint
             bundle: ``update_response=source.update_response()`` with
@@ -318,7 +340,9 @@ class Analyzer:
                 "LocalBundleSource.update_response()"
             )
         self.update_response = update_response
-        response_observables = UPDATE_RESPONSE_OBSERVABLES + REALIZED_CHANGE_OBSERVABLES
+        response_observables = (
+            UPDATE_RESPONSE_OBSERVABLES + UPDATE_STEP_OBSERVABLES + REALIZED_CHANGE_OBSERVABLES
+        )
         valid_observables = (
             ALL_OBSERVABLES + P_OBSERVABLES + P_CAPPED_OBSERVABLES + response_observables
         )
@@ -1183,6 +1207,17 @@ class Analyzer:
             for name, t in terms.items()
         }
 
+        # The step's learning rate and clip factor, on the update batch's own
+        # pair. Both come from the rule and the all-reduced gradient, so every
+        # DDP rank holds the same numbers.
+        lowest, highest = update.learning_rates()
+        if lowest == highest:
+            values[update_name]["update_lr"] = lowest
+        else:
+            values[update_name]["update_lr_min"] = lowest
+            values[update_name]["update_lr_max"] = highest
+        values[update_name]["update_clip_factor"] = update.clip_coefficient(grads[update_name])
+
         requested = set(self.observables)
         need_loss = bool(requested & {"loss_change", "loss_change_residual"})
         need_weights = bool(requested & {"loss_change_first_order_weights", "loss_change_residual"})
@@ -1230,7 +1265,7 @@ class Analyzer:
                         wallclock_s=None,
                         preconditioner=(
                             update.descriptor
-                            if observable in UPDATE_RESPONSE_OBSERVABLES
+                            if observable in UPDATE_RESPONSE_OBSERVABLES + UPDATE_STEP_OBSERVABLES
                             else RAW_DESCRIPTOR
                         ),
                     )
