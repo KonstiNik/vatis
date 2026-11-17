@@ -213,7 +213,10 @@ class Analyzer:
             checkpoint's saved (pre-step) optimizer state.
         chi_net_method: ``"hutchinson"``, ``"per_sequence_cv"``, ``"opacus"``,
             or ``None`` for auto.
-        n_hutchinson: number of probe vectors per micro-batch.
+        n_hutchinson: number of probe vectors per micro-batch. With at least
+            two, the rows whose value depends on the probes carry its standard
+            error in ``value_stderr``; with one there is no spread to estimate
+            it from and the column is null.
         hutchinson_distribution: ``"rademacher"`` (default) or ``"gaussian"``.
         micro_batch_size: number of sequences per backward. Default 1.
         cross_pairs: optional list of ``(name_a, name_b)`` tuples to compute

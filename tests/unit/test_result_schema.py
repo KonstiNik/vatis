@@ -464,26 +464,27 @@ def test_read_results_keeps_columns_it_does_not_know(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("relative_path", "has_preconditioner"),
-    [
-        ("examples/pythia_sweep/results.parquet", False),
-        ("examples/output/results.parquet", True),
-    ],
+    "relative_path",
+    ["examples/pythia_sweep/results.parquet", "examples/output/results.parquet"],
 )
-def test_the_result_files_shipped_with_the_examples_stay_readable(
-    relative_path: str, has_preconditioner: bool
-) -> None:
-    """Real files written by the two earlier column sets, as committed."""
+def test_the_result_files_shipped_with_the_examples_stay_readable(relative_path: str) -> None:
+    """Real files written by earlier versions, as committed.
+
+    When this was written the first had the original eleven columns and the
+    second those plus ``preconditioner``. The test does not depend on that: for
+    whatever columns a shipped file has, ``read_results`` must hand them back
+    unchanged and fill in the rest as documented.
+    """
     path = _REPO_ROOT / relative_path
     plain = pq.read_table(path)
-    assert ("preconditioner" in plain.column_names) == has_preconditioner
-    assert not set(plain.column_names) & {name for name, _ in NEW_COLUMNS}
     table = read_results(path)
     assert table.column_names == list(RESULT_COLUMNS)
-    assert table.num_rows == plain.num_rows
-    for name in plain.column_names:
-        assert table.column(name).to_pylist() == plain.column(name).to_pylist(), name
-    if not has_preconditioner:
-        assert set(table.column("preconditioner").to_pylist()) == {"none"}
-    for name, _ in NEW_COLUMNS:
-        assert table.column(name).null_count == table.num_rows, name
+    assert table.num_rows == plain.num_rows > 0
+    for name, _ in CURRENT_COLUMNS:
+        got = table.column(name).to_pylist()
+        if name in plain.column_names:
+            assert got == plain.column(name).to_pylist(), name
+        elif name == "preconditioner":
+            assert set(got) == {"none"}
+        else:
+            assert table.column(name).null_count == table.num_rows, name
