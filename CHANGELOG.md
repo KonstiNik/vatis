@@ -37,6 +37,34 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   instead of clipping `P`.
 - Parquet rows carry a **`preconditioner`** column (appended last): `"none"` on
   raw rows, the `P` descriptor on the new rows.
+- **Eight more result columns**, appended after `preconditioner`; null where one
+  does not apply to a row. No existing column or value changes.
+  - `chi_net_method` (str): the `χ_net` estimator that ran for the row's batch.
+  - `n_ranks` (int32): the number of processes (DDP world size) of the run.
+  - `preconditioner_eps`, `preconditioner_beta2` (float64): `ε` and `β2` of an
+    AdamW `P`, on the rows computed with it.
+  - `preconditioner_capped_fraction` (float64): the fraction of the coordinates
+    of `P` at its ceiling (`1/ε` for AdamW), on the rows computed with it.
+  - `value_probe_stderr` (float64): the standard error of `value` under the draw of
+    the Hutchinson probes, on `chi_net`, `chi_net_normalized`, `chi_pos` and
+    their `_P` / `_P_capped` counterparts, self and cross pairs; null on
+    `chi_loss` / `delta_loss` rows and with `n_hutchinson = 1`. It is the probe
+    sampling error at the micro-batch cut and rank count of the run, not a
+    data-sampling error; for `chi_pos` and cross pairs it is a first-order
+    propagation (`docs/SPEC.md` → "Standard error of the sampled values").
+  - `micro_batch_size` (int32): the `micro_batch_size` the run was made with.
+  - `hutchinson_distribution` (str): the distribution the probes were drawn
+    from (`rademacher` / `gaussian`).
+
+  `chi_net_method`, `n_ranks`, `micro_batch_size` and `hutchinson_distribution`
+  describe the run and are on every row, like `n_hutchinson`.
+- `vatis.sinks.read_results(path_or_paths)`: reads result files of any earlier
+  column set into the current one (and concatenates several), so files written
+  before a column existed stay usable next to new ones.
+- `ChiNetResult.chi_net_var` / `chi_net_p_var` / `chi_net_p_capped_var`: the
+  estimators' own variance of each estimate (sum over micro-batches of the
+  per-probe sample variance over `n_hutchinson`). `Preconditioner.eps`,
+  `.beta2` (set by `Preconditioner.adamw`) and `.capped_fraction()`.
 - A warning when a published `chi_pos` / `chi_pos_P` leaves `[−1, 1]` by more
   than 0.5 (a Cauchy–Schwarz violation, i.e. inconsistent inputs such as a
   sum-reduced `loss_fn`).

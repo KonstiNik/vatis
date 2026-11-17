@@ -38,6 +38,15 @@ all-reduce of ``chi_net_P_capped`` changed nothing any tier asserts.
 ``test_ddp_shipped_rng_capped_row_equals_the_per_rank_streams`` adds the same row
 under the shipped RNG, against the per-rank streams.
 
+The provenance columns and ``value_probe_stderr`` have their own section at the end:
+every rank's rows name the estimator, the world size, the micro-batch size and
+the probe distribution of the run, the rows of an AdamW
+``P`` carry its ``eps`` / ``beta2`` / capped fraction, and the standard error of
+the all-reduced ``chi_net`` is the root of the **sum over ranks** of the
+variances the estimator reports on each rank's stream -- at
+``micro_batch_size = 2`` on the uneven split, so the sum over micro-batches
+within a rank and the sum across ranks are both exercised on the real path.
+
 The multi-GPU path remains unvalidated: this is a CPU gloo loopback
 (``CUDA_VISIBLE_DEVICES=""``), because NCCL wants one device per rank.
 """
@@ -63,7 +72,14 @@ from tests.fixtures.tiny_transformer import (
     causal_lm_valid_mask,
     make_tiny_lm_batch,
 )
-from tests.integration._ddp_worker import ShapeKeyedProbe, ceiling_preconditioner
+from tests.integration._ddp_worker import (
+    ADAMW_BETA2,
+    ADAMW_EPS,
+    ShapeKeyedProbe,
+    adamw_preconditioner,
+    adamw_second_moment,
+    ceiling_preconditioner,
+)
 from vatis import analyze
 from vatis.core.chi_net import build_estimator
 from vatis.core.observables import chi_pos
@@ -89,6 +105,9 @@ def _run_ddp_rows(
     preconditioner: bool = False,
     ceiling: bool = False,
     duplicate_half: bool = False,
+    adamw: bool = False,
+    micro_batch_size: int | None = None,
+    distribution: str | None = None,
 ) -> list[list[dict[str, Any]]]:
     """Spawn a 2-rank torchrun pinned to CPU, return every rank's rows (as dicts)."""
     env = os.environ.copy()
@@ -120,6 +139,12 @@ def _run_ddp_rows(
         cmd.append("--ceiling")
     if duplicate_half:
         cmd.append("--duplicate-half")
+    if adamw:
+        cmd.append("--adamw")
+    if micro_batch_size is not None:
+        cmd += ["--micro-batch-size", str(micro_batch_size)]
+    if distribution is not None:
+        cmd += ["--hutchinson-distribution", distribution]
     result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
     if result.returncode != 0:
         raise RuntimeError(
@@ -488,3 +513,176 @@ def test_ddp_shipped_rng_capped_row_equals_the_per_rank_streams(
     for observable, want in expected.items():
         rel = abs(ddp[observable] - want) / abs(want)
         assert rel < DDP_REL, (method, observable, ddp[observable], want, rel)
+
+
+# ------------------------------------------------ provenance columns and value_probe_stderr
+
+_P_ROWS = ("delta_loss_P", "chi_net_P", "chi_pos_P", "delta_loss_P_capped", "chi_net_P_capped")
+
+
+def _rank_stream_variances(
+    bundle: ModelBundle,
+    precond: Preconditioner,
+    batch: dict[str, torch.Tensor],
+    *,
+    method: str,
+    n_h: int,
+    micro_batch_size: int,
+    call_seed: int,
+    world_size: int,
+) -> list[dict[str, float]]:
+    """Per rank, the variances the estimator reports on that rank's shard and stream.
+
+    The same construction as :func:`_sum_over_rank_streams`, for the three
+    variances instead of the three estimates, and not yet summed, so a test can
+    see that every rank contributes.
+    """
+    estimator = build_estimator(method, n_hutchinson=n_h, distribution="rademacher")
+    per_rank = []
+    for rank in range(world_size):
+        shard, _, _ = shard_batch(batch, rank=rank, world_size=world_size)
+        gen = torch.Generator().manual_seed(analyzer_mod._rank_probe_seed(call_seed, rank))
+        result = estimator.compute(
+            bundle.model,
+            shard,
+            bundle.forward_fn,
+            loss_fn=bundle.loss_fn,
+            valid_mask_fn=causal_lm_valid_mask,
+            params=bundle.params,
+            micro_batch_size=micro_batch_size,
+            generator=gen,
+            preconditioner=precond,
+        )
+        assert result.chi_net_var is not None
+        assert result.chi_net_p_var is not None
+        assert result.chi_net_p_capped_var is not None
+        per_rank.append(
+            {
+                "chi_net": float(result.chi_net_var),
+                "chi_net_P": float(result.chi_net_p_var),
+                "chi_net_P_capped": float(result.chi_net_p_capped_var),
+            }
+        )
+    return per_rank
+
+
+@pytest.mark.parametrize(
+    ("method", "distribution", "micro"),
+    [("hutchinson", "rademacher", 1), ("per_sequence_cv", "gaussian", 2)],
+)
+def test_ddp_rows_record_the_estimator_the_ranks_and_the_adamw_p(
+    tmp_path: Path, method: str, distribution: str, micro: int
+) -> None:
+    """What a two-rank run writes into the provenance columns, on every rank.
+
+    ``n_ranks`` is the world size (2, where a single process writes 1),
+    ``chi_net_method`` the estimator, ``micro_batch_size`` and
+    ``hutchinson_distribution`` the micro-batch size and probe distribution the
+    run was made with -- once with the defaults, once with Gaussian probes at
+    micro-batch 2 -- on every row. The rows computed with the
+    AdamW ``P`` carry its ``eps`` and ``beta2`` and the fraction of its
+    coordinates whose second moment is zero -- counted here from the second
+    moment itself -- and the raw rows carry none of the three.
+    """
+    rank_rows = _run_ddp_rows(
+        tmp_path / f"ddp_provenance_{method}_{distribution}.json",
+        seed=0,
+        batch_size=5,
+        n_h=4,
+        method=method,
+        preconditioner=True,
+        adamw=True,
+        micro_batch_size=micro,
+        distribution=distribution,
+    )
+    bundle, _ = _toy_bundle(0)
+    exp_avg_sq = adamw_second_moment(sum(p.numel() for p in bundle.params))
+    zero_fraction = float((exp_avg_sq == 0).sum()) / exp_avg_sq.numel()
+    assert 0.05 < zero_fraction < 0.2
+    assert len(rank_rows) == 2
+    for rank, rows in enumerate(rank_rows):
+        assert {r["observable"] for r in rows} >= set(_P_ROWS), rank
+        for r in rows:
+            assert r["n_ranks"] == 2, (rank, r)
+            assert r["chi_net_method"] == method, (rank, r)
+            assert r["micro_batch_size"] == micro, (rank, r)
+            assert r["hutchinson_distribution"] == distribution, (rank, r)
+            if r["observable"] in _P_ROWS:
+                assert r["preconditioner"] == "adamw", (rank, r)
+                assert r["preconditioner_eps"] == ADAMW_EPS, (rank, r)
+                assert r["preconditioner_beta2"] == ADAMW_BETA2, (rank, r)
+                assert r["preconditioner_capped_fraction"] == zero_fraction, (rank, r)
+            else:
+                assert r["preconditioner"] == "none", (rank, r)
+                assert r["preconditioner_eps"] is None, (rank, r)
+                assert r["preconditioner_beta2"] is None, (rank, r)
+                assert r["preconditioner_capped_fraction"] is None, (rank, r)
+
+
+@pytest.mark.parametrize("method", ["hutchinson", "per_sequence_cv"])
+def test_ddp_stderr_is_the_root_of_the_summed_rank_variances(tmp_path: Path, method: str) -> None:
+    """``value_probe_stderr`` of a two-rank run, exactly, on the real ``torchrun`` path.
+
+    Each rank's estimator reports the variance of its own partial ``chi_net``
+    (a sum over its micro-batches); the all-reduce must sum those across the
+    ranks, and the row's standard error is the square root. Checked against the
+    estimator run here on each rank's shard and documented stream -- the shipped
+    RNG, no statistics. Batch 5 over 2 ranks at ``micro_batch_size = 2``: rank 0
+    has micro-batches of 2 and 1 sequences, rank 1 one of 2.
+
+    Then the rows derived from ``chi_net``: ``chi_net_normalized`` and
+    ``chi_pos`` (and ``chi_pos_P``) carry the same relative error, and the rows
+    without a probe carry none. Every rank holds the same all-reduced numbers.
+    """
+    world_size, n_h, batch_size, micro = 2, 4, 5, 2
+    rank_rows = _run_ddp_rows(
+        tmp_path / f"ddp_stderr_{method}.json",
+        seed=0,
+        batch_size=batch_size,
+        n_h=n_h,
+        method=method,
+        preconditioner=True,
+        adamw=True,
+        micro_batch_size=micro,
+    )
+    ddp = {r["observable"]: r for r in rank_rows[0]}
+    bundle, _ = _toy_bundle(0)
+    precond = adamw_preconditioner(sum(p.numel() for p in bundle.params))
+    batch = make_tiny_lm_batch(batch_size=batch_size, seed=0, pad_fraction=0.25, device="cpu")
+    call_seed = analyzer_mod._per_call_seed(0, "toy@step0", "val")
+    per_rank = _rank_stream_variances(
+        bundle,
+        precond,
+        batch,
+        method=method,
+        n_h=n_h,
+        micro_batch_size=micro,
+        call_seed=call_seed,
+        world_size=world_size,
+    )
+    for observable in ("chi_net", "chi_net_P", "chi_net_P_capped"):
+        parts = [rank[observable] for rank in per_rank]
+        # vacuity guard: a rank that carries a share q of the summed variance
+        # changes the standard error by a factor sqrt(1 - q) when it is left
+        # out. With q > 1% for both ranks that is more than 0.5%, against a
+        # comparison at DDP_REL = 1e-6 -- a missing all-reduce cannot pass.
+        assert all(part > 0.01 * sum(parts) for part in parts), (observable, parts)
+        want = sum(parts) ** 0.5
+        got = ddp[observable]["value_probe_stderr"]
+        assert abs(got - want) / want < DDP_REL, (method, observable, got, want)
+        assert 0.0 < got < ddp[observable]["value"], (observable, got)
+
+    def relative(observable: str) -> float:
+        return ddp[observable]["value_probe_stderr"] / abs(ddp[observable]["value"])
+
+    assert relative("chi_net_normalized") == pytest.approx(relative("chi_net"), rel=1e-12)
+    assert relative("chi_pos") == pytest.approx(relative("chi_net"), rel=1e-12)
+    assert relative("chi_pos_P") == pytest.approx(relative("chi_net_P"), rel=1e-12)
+    for observable in ("chi_loss", "chi_loss_normalized", "delta_loss", "delta_loss_P"):
+        assert ddp[observable]["value_probe_stderr"] is None, observable
+    assert ddp["delta_loss_P_capped"]["value_probe_stderr"] is None
+
+    other = {r["observable"]: r for r in rank_rows[1]}
+    assert set(other) == set(ddp)
+    for observable, row in ddp.items():
+        assert other[observable]["value_probe_stderr"] == row["value_probe_stderr"], observable
