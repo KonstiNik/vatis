@@ -363,8 +363,9 @@ been measured, so do not read a number for your model off this table.
 
 - [`docs/SPEC.md`](docs/SPEC.md) — full spec: architecture, public API, result
   format, distributed semantics, scope.
-- `examples/` — runnable sweeps plus the single-GPU / DDP-scaling / accuracy
-  benchmarks under `examples/benchmark/`.
+- [`examples/`](examples/README.md) — runnable sweeps plus the single-GPU /
+  DDP-scaling / accuracy benchmarks under `examples/benchmark/`; start with the
+  index, `examples/README.md`.
   `examples/adamw_vs_sgd_reconstruction/` uses the rows of the step that was
   taken on a real bundle (a small check on one run, with its measured table);
   `examples/benchmark/update_response/` measures what those rows cost.
