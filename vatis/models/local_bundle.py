@@ -135,6 +135,8 @@ CLIP_FROM_METADATA = "metadata"
 # run trained in fp32 or fp64. Anything narrower (BF16, F16) holds a rounded
 # ``theta_t``, and the difference of two such files is not the step.
 _EXACT_WEIGHT_DTYPES = frozenset({"F32", "F64"})
+# ... and the loader dtypes that keep such a file's values as they are.
+_EXACT_LOADER_DTYPES = frozenset({torch.float32, torch.float64})
 # Relative tolerance of the cross-check between a checkpoint's ``meta.json``
 # ``lr`` and the learning rate saved in its optimizer state.
 _LR_RTOL = 1e-6
@@ -1384,6 +1386,7 @@ class LocalBundleSource:
         clip_grad_norm: float | str | None = CLIP_FROM_METADATA,
         realized: bool = True,
         on_step_mismatch: str = "raise",
+        unlisted_params_frozen: bool = False,
     ) -> Callable[[str], OptimizerUpdate | None]:
         """The update each step applied, as a per-checkpoint factory for the analyzer.
 
@@ -1425,9 +1428,24 @@ class LocalBundleSource:
           (not clipped) or ``clip_grad_norm=<max norm>`` (global-norm clipping as
           ``torch.nn.utils.clip_grad_norm_`` over all parameters does it). A
           stated value that contradicts the recorded one is refused as well.
-          The norm is taken over the bundle's canonical parameters, i.e. over
-          every parameter unless the source was opened with
-          ``allow_unlisted_params``.
+          The norm is taken over the bundle's canonical parameters.
+        - *Parameters outside the canonical list* (a source opened with
+          ``allow_unlisted_params`` whose model has parameters that
+          ``param_names.json`` does not name). They are in no gradient vector
+          and in no saved optimizer state. If the run trained them, their part
+          of the update is missing from every row while ``loss_change`` still
+          contains its effect; if they merely had gradients when the norm was
+          clipped, the clipping factor is wrong. Nothing in a bundle says
+          either way, so such a bundle is **refused** unless you confirm with
+          ``unlisted_params_frozen=True`` that those parameters received no
+          gradient and no update during the run.
+        - *A parameter that is not in the graph of the update batch* gets no
+          gradient at all. torch then skips it entirely if its ``.grad`` is
+          ``None`` (the default ``zero_grad()``), and applies momentum and
+          weight decay to it if its ``.grad`` holds zeros
+          (``zero_grad(set_to_none=False)``). The analyzer knows which
+          parameters these are; the rows are refused when the saved state
+          would move such a parameter, and are exact when it would not.
         - *Gradient accumulation, dropout, mixed precision, anything else the
           loop did to the gradient*: not detectable. The bundle contract is that
           one optimizer step on ``batch_a.npy`` at the stored weights reproduces
@@ -1436,13 +1454,16 @@ class LocalBundleSource:
 
         **The realized loss change** (``realized=True``, default). Where the
         bundle also holds step ``t + 1`` (whether or not it is among the
-        selected ``steps``) and both weight files are stored as fp32 or wider,
+        selected ``steps``), both weight files are stored as fp32 or wider and
+        the source itself was opened with ``dtype="fp32"``,
         the factory hands the analyzer ``theta_{t+1}``, and three more rows are
         measured: ``update_response_weights = grad L^B . (theta_{t+1} -
         theta_t)`` from the two weight files, ``loss_change = L_B(theta_{t+1}) -
         L_B(theta_t)`` and their difference ``loss_change_residual``. With bf16
-        (or fp16) weight files those rows are **skipped with a warning**: the
-        difference of two rounded weight files is dominated by the rounding
+        (or fp16) weight files — or with a source that loads the weights as
+        bf16 / fp16, which rounds them in memory just the same — those rows are
+        **skipped with a warning**: the
+        difference of two rounded sets of weights is dominated by the rounding
         early in training, and a residual computed from it would be an
         artefact. A checkpoint without a stored successor has no such rows and
         no warning.
@@ -1454,6 +1475,10 @@ class LocalBundleSource:
             on_step_mismatch: as for :meth:`adamw_preconditioner` — what to do
                 when the optimizer state's own step counter differs from the
                 checkpoint directory's step (``"raise"`` or ``"warn"``).
+            unlisted_params_frozen: only matters for a source opened with
+                ``allow_unlisted_params``: confirms that the model's parameters
+                outside ``param_names.json`` received no gradient and no update
+                during the run. Without it such a bundle is refused.
 
         Returns:
             ``fn(checkpoint_id) -> OptimizerUpdate``.
@@ -1463,6 +1488,24 @@ class LocalBundleSource:
 
         def build(checkpoint_id: str) -> OptimizerUpdate | None:
             checkpoint = self.checkpoint_for(checkpoint_id)
+            if self.allow_unlisted_params and not unlisted_params_frozen:
+                bundle = checkpoint.model_bundle
+                listed = {id(p) for p in bundle.params}
+                unlisted = [
+                    name for name, p in bundle.model.named_parameters() if id(p) not in listed
+                ]
+                if unlisted:
+                    raise ValueError(
+                        f"{checkpoint.identifier}: the model has parameters outside "
+                        f"param_names.json ({_abbrev(unlisted)}; the source was opened with "
+                        "allow_unlisted_params). They are in no gradient vector and in no "
+                        "saved optimizer state: if the run trained them, their part of the "
+                        "update is missing from every update_response row while loss_change "
+                        "still contains its effect, and if they had gradients when the norm "
+                        "was clipped, the clipping factor is wrong. The bundle does not say. "
+                        "Pass unlisted_params_frozen=True to confirm that they received no "
+                        "gradient and no update during the run."
+                    )
             update = optimizer_update_from_state(
                 checkpoint.optimizer_state,
                 checkpoint_step=checkpoint.step,
@@ -1484,8 +1527,10 @@ class LocalBundleSource:
         """A loader for ``theta_{t+1}``, or ``None`` when it must not be used.
 
         ``None`` without a word when the bundle holds no step ``t + 1``; ``None``
-        with a ``UserWarning`` when it does but one of the two weight files is
-        stored narrower than fp32.
+        with a ``UserWarning`` when it does but the two sets of weights the
+        analyzer would compare are rounded: one of the weight files is stored
+        narrower than fp32, or this source loads the weights narrower than fp32
+        (``dtype="bf16"`` / ``"fp16"``), which rounds unrounded files in memory.
         """
         step = checkpoint.step + 1
         path = self._step_dirs.get(step)
@@ -1499,15 +1544,24 @@ class LocalBundleSource:
             )
             - _EXACT_WEIGHT_DTYPES
         }
+        reasons = []
         if narrow:
+            reasons.append(f"the weight files are stored as {narrow}")
+        if self.torch_dtype not in _EXACT_LOADER_DTYPES:
+            reasons.append(
+                f'the source was opened with dtype="{self.dtype}", which rounds the weights '
+                "when they are loaded"
+            )
+        if reasons:
             warnings.warn(
-                f"{checkpoint.identifier}: the bundle holds step {step} as well, but the "
-                f"weight files are stored as {narrow}. Such a file holds a rounded theta, "
-                "and the difference of two rounded files is dominated by the rounding "
-                "early in training, so the realized loss change and its residual "
+                f"{checkpoint.identifier}: the bundle holds step {step} as well, but "
+                f"{' and '.join(reasons)}. The analyzer would then compare two rounded "
+                "thetas, and the difference of two rounded thetas is dominated by the "
+                "rounding early in training, so the realized loss change and its residual "
                 "(update_response_weights, loss_change, loss_change_residual) are SKIPPED "
-                "for this checkpoint. They need fp32 weight files. The update_response "
-                "rows built from the optimizer state are unaffected.",
+                "for this checkpoint. They need fp32 weight files, loaded with "
+                'dtype="fp32". The update_response rows built from the optimizer state '
+                "are still reported.",
                 UserWarning,
                 stacklevel=3,
             )
