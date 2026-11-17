@@ -39,6 +39,13 @@ approximated by one value. That is also why this is not a
 product with an update vector, which exists for any per-parameter rule, while a
 single diagonal ``P`` without the learning rate does not.
 
+A parameter the optimizer was handed **no gradient** for (``.grad is None``:
+it is not in the graph of the update batch) is a special case: torch skips it
+altogether — no momentum, no weight decay — whereas a parameter holding a zero
+gradient gets both. The flat gradient vector cannot tell the two apart, so the
+caller says which parameters received none (``no_gradient``), and the rule
+refuses when its update for such a parameter would not be zero.
+
 What this module cannot know is whether ``g`` really is the gradient the
 optimizer saw. It takes the gradient it is handed, applies global-norm clipping
 if told to (:attr:`OptimizerUpdate.clip_grad_norm`), and that is all; the
@@ -272,6 +279,7 @@ class OptimizerUpdate:
         params: Sequence[torch.Tensor],
         *,
         chunk: int = _CHUNK,
+        no_gradient: Mapping[int, str] | None = None,
     ) -> Iterator[tuple[int, int, torch.Tensor, torch.Tensor, torch.Tensor]]:
         """Yield the update, chunk by chunk, split into its three parts.
 
@@ -286,6 +294,18 @@ class OptimizerUpdate:
             params: ``theta_t``, one tensor per parameter in the same order.
             chunk: maximal number of elements per item; bounds the fp64
                 temporaries.
+            no_gradient: parameter index -> display name, for the parameters
+                that received **no gradient at all** on the update batch (not a
+                zero one: none). torch skips such a parameter entirely when its
+                ``.grad`` is ``None`` and applies momentum and weight decay to
+                it when it holds zeros; which of the two the run did is not in
+                the saved state. The rule applies momentum and decay (it sees a
+                zero gradient), so it is only right for such a parameter when
+                that update is zero anyway — otherwise this raises.
+
+        Raises:
+            ValueError: a size mismatch, or a parameter named in ``no_gradient``
+                whose rebuilt update is not zero.
         """
         if grad_update.ndim != 1:
             raise ValueError(
@@ -336,6 +356,20 @@ class OptimizerUpdate:
                     parts = _adam_parts(hyper, int(self.step), g, theta, m, v)
                 else:
                     parts = _sgd_parts(hyper, g, theta, m)
+                if no_gradient is not None and index in no_gradient:
+                    moved = max(float(part.abs().max()) for part in parts)
+                    if moved != 0.0:
+                        raise ValueError(
+                            f"parameter {index} ({no_gradient[index]}) receives no gradient on "
+                            "the update batch (it is not in the graph), yet the saved state "
+                            "gives it a non-zero update through momentum or weight decay "
+                            f"(largest entry {moved:.3e}). torch skips a parameter whose "
+                            ".grad is None altogether, and applies momentum and decay to one "
+                            "whose .grad holds zeros (zero_grad(set_to_none=False)); the "
+                            "bundle does not say which the run did, so the update of this "
+                            "parameter cannot be rebuilt. Exclude it from the bundle's "
+                            "parameter list."
+                        )
                 yield (offset + lo, offset + hi, *parts)
             offset += n
 
@@ -343,6 +377,8 @@ class OptimizerUpdate:
         self,
         grad_update: torch.Tensor,
         params: Sequence[torch.Tensor],
+        *,
+        no_gradient: Mapping[int, str] | None = None,
     ) -> torch.Tensor:
         """``theta_{t+1} - theta_t`` as this rule predicts it: a flat fp64 vector.
 
@@ -350,7 +386,9 @@ class OptimizerUpdate:
         diagnostics on small models. :meth:`response` never builds it.
         """
         out = torch.empty(grad_update.numel(), dtype=torch.float64, device=grad_update.device)
-        for start, stop, d_grad, d_hist, d_wd in self.iter_parts(grad_update, params):
+        for start, stop, d_grad, d_hist, d_wd in self.iter_parts(
+            grad_update, params, no_gradient=no_gradient
+        ):
             out[start:stop] = d_grad + d_hist + d_wd
         return out
 
@@ -361,6 +399,8 @@ class OptimizerUpdate:
         grad_update: torch.Tensor,
         grads_eval: Mapping[str, torch.Tensor],
         params: Sequence[torch.Tensor],
+        *,
+        no_gradient: Mapping[int, str] | None = None,
     ) -> dict[str, UpdateResponseTerms]:
         """``grad L^B . dtheta`` for every evaluation gradient, split in three.
 
@@ -371,12 +411,15 @@ class OptimizerUpdate:
                 gradient may live on another device than ``grad_update`` (a
                 host-offloaded one): chunks are moved as needed.
             params: ``theta_t``, one tensor per parameter, canonical order.
+            no_gradient: the parameters that received no gradient at all on the
+                update batch; see :meth:`iter_parts`.
 
         Returns:
             name -> :class:`UpdateResponseTerms`, accumulated in fp64.
 
         Raises:
-            ValueError: a size mismatch, or a non-finite result (for instance
+            ValueError: a size mismatch, a parameter without a gradient whose
+                rebuilt update is not zero, or a non-finite result (for instance
                 ``eps = 0`` on a coordinate whose second moment is zero, where
                 the optimizer's own update is ``0 / 0``).
         """
@@ -388,7 +431,9 @@ class OptimizerUpdate:
                 )
         device = grad_update.device
         sums = {name: torch.zeros(3, dtype=torch.float64, device=device) for name in grads_eval}
-        for start, stop, d_grad, d_hist, d_wd in self.iter_parts(grad_update, params):
+        for start, stop, d_grad, d_hist, d_wd in self.iter_parts(
+            grad_update, params, no_gradient=no_gradient
+        ):
             for name, g in grads_eval.items():
                 ge = g[start:stop].to(dtype=torch.float64, device=device)
                 acc = sums[name]

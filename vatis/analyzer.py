@@ -517,6 +517,18 @@ class Analyzer:
         # The update rule is resolved first: it keeps the saved optimizer state,
         # which the P source would otherwise load, release and have reloaded.
         update = self._resolve_update_response(ckpt_id)
+        # With an update rule the eval batches are fetched once, here, and the
+        # update batch is located among them before anything expensive runs: a
+        # rule that cannot be placed fails now, not after every chi_net
+        # estimate of the checkpoint. (A resampling spec hands out another batch
+        # each time it is asked, so the self pairs below get these very ones.)
+        raw_batches: dict[str, Any] | None = None
+        update_name: str | None = None
+        if update is not None:
+            raw_batches = {
+                name: spec.get_batch(ckpt_id) for name, spec in self.eval_batches.items()
+            }
+            update_name = _locate_update_batch(update, raw_batches, ckpt_id)
         precond = self._resolve_preconditioner(bundle, ckpt_id)
 
         # Self pairs first. We cache a batch's full parameter-space gradient
@@ -537,19 +549,23 @@ class Analyzer:
         )
         per_batch_grad_cache: dict[str, torch.Tensor] = {}
         per_batch_n_valid: dict[str, int] = {}
-        per_batch_raw: dict[str, Any] = {}
+        no_gradient: tuple[int, ...] = ()
 
         for name, spec in self.eval_batches.items():
             self_result, g_full = self._compute_self_pair(
-                bundle, ckpt_id, revision, name, spec, precond
+                bundle,
+                ckpt_id,
+                revision,
+                name,
+                spec,
+                precond,
+                raw_batch=None if raw_batches is None else raw_batches[name],
+                track_no_gradient=name == update_name,
             )
             result.rows.extend(self_result)
             per_batch_n_valid[name] = self._last_n_valid
-            if update is not None:
-                # The very batch the self pair measured (a resampling spec would
-                # hand out another one if asked again).
-                per_batch_raw[name] = self._last_raw_batch
-            self._last_raw_batch = None
+            if name == update_name:
+                no_gradient = self._last_no_gradient
             if g_full is not None and name in cached_names:
                 # Cache for the cross-pair dot. Offload to host RAM when keeping
                 # it on the GPU would crowd out a later batch's backward (large
@@ -582,16 +598,18 @@ class Analyzer:
             )
             result.rows.extend(cross_rows)
 
-        if update is not None:
+        if update is not None and raw_batches is not None and update_name is not None:
             result.rows.extend(
                 self._compute_update_response(
                     bundle=bundle,
                     ckpt_id=ckpt_id,
                     revision=revision,
                     update=update,
+                    update_name=update_name,
+                    no_gradient=no_gradient,
                     grads=per_batch_grad_cache,
                     n_valid=per_batch_n_valid,
-                    raw_batches=per_batch_raw,
+                    raw_batches=raw_batches,
                 )
             )
 
@@ -658,6 +676,9 @@ class Analyzer:
         batch_name: str,
         spec: EvalBatchSpec,
         precond: Preconditioner | None = None,
+        *,
+        raw_batch: Any = None,
+        track_no_gradient: bool = False,
     ) -> tuple[list[ResultRow], torch.Tensor | None]:
         """Compute chi_loss / delta_loss / chi_net / chi_pos for one batch.
 
@@ -666,14 +687,20 @@ class Analyzer:
         ``delta_loss_P`` re-reduces the same gradient vector with the ``P``
         weight and ``chi_net_P`` comes from the same estimator call.
 
+        ``raw_batch`` is the batch to measure when the caller has already
+        fetched it from ``spec`` (the update-response path does, once, for every
+        eval batch); otherwise it is fetched here. With ``track_no_gradient`` the
+        indices of the parameters that received **no** gradient from any
+        micro-batch on any rank — ``autograd`` returned ``None`` for them, they
+        are not in the graph — are left in ``self._last_no_gradient``.
+
         Returns the rows AND the flat parameter-space gradient of the total
         loss (used as a cache for cross pairs).
         """
         t0 = time.perf_counter()
         device = next(bundle.model.parameters()).device
 
-        raw = spec.get_batch(ckpt_id)
-        self._last_raw_batch = raw
+        raw = spec.get_batch(ckpt_id) if raw_batch is None else raw_batch
         # Shard across DDP ranks; if single-GPU shard_batch is a no-op slice.
         local_batch, local_b, _global_b = shard_batch(
             raw, rank=get_rank(), world_size=get_world_size()
@@ -721,6 +748,13 @@ class Analyzer:
         # *local* mean loss. The all-reduce step weights it by n_valid_local
         # to recover the *global* mean loss gradient.
         flat_grad_local = _zero_param_vector(bundle.params, device)
+        # Slot 0 counts the backwards that ran, slot i + 1 the backwards that
+        # handed parameter i a gradient. Kept (and all-reduced) only on request.
+        received = (
+            torch.zeros(len(bundle.params) + 1, dtype=torch.float32, device=device)
+            if track_no_gradient
+            else None
+        )
         n_total_for_loss = n_valid_local
         if n_total_for_loss == 0:
             # No valid tokens on this rank. Still emit zeros and let the
@@ -753,6 +787,11 @@ class Analyzer:
                     allow_unused=True,
                 )
                 _add_grads_into_flat(flat_grad_local, grads, bundle.params)
+                if received is not None:
+                    received[0] += 1.0
+                    for index, grad in enumerate(grads):
+                        if grad is not None:
+                            received[index + 1] += 1.0
                 del logits
             delta_loss_local = _sum_sq_fp64(flat_grad_local)
 
@@ -866,6 +905,8 @@ class Analyzer:
                 rank_weight = 0.0
             flat_grad_local.mul_(rank_weight)
             dist.all_reduce(flat_grad_local, op=dist.ReduceOp.SUM)
+            if received is not None:
+                dist.all_reduce(received, op=dist.ReduceOp.SUM)
             delta_loss_global = float(_sum_sq_fp64(flat_grad_local))
         else:
             chi_loss_raw_global = float(chi_loss_raw_local)
@@ -941,6 +982,11 @@ class Analyzer:
         # On non-distributed runs flat_grad_local is the full grad (unscaled).
         # On distributed runs we already wrote the reweighted+reduced version.
         self._last_n_valid = n_valid_a
+        self._last_no_gradient = (
+            ()
+            if received is None or float(received[0]) == 0.0
+            else tuple(i for i, count in enumerate(received[1:].tolist()) if count == 0.0)
+        )
         return rows, flat_grad_local.detach()
 
     # ------------------------------------------------------------- cross pair
@@ -1090,42 +1136,42 @@ class Analyzer:
         ckpt_id: str,
         revision: str,
         update: OptimizerUpdate,
+        update_name: str,
+        no_gradient: Sequence[int],
         grads: dict[str, torch.Tensor],
         n_valid: dict[str, int],
         raw_batches: dict[str, Any],
     ) -> list[ResultRow]:
         """Rows for the update that was taken, on (update batch, B) for every B.
 
-        ``grads`` are the full (all-reduced) loss gradients the self pairs
-        built, so every DDP rank computes the same dot products and nothing is
-        reduced again; only the two loss evaluations of the realized change run
-        on the rank's shard and are all-reduced.
+        ``update_name`` is the eval batch that is the step's update batch
+        (:func:`_locate_update_batch`) and ``no_gradient`` the indices of the
+        parameters it gave no gradient to. ``grads`` are the full (all-reduced)
+        loss gradients the self pairs built, so every DDP rank computes the same
+        dot products and nothing is reduced again; only the two loss evaluations
+        of the realized change run on the rank's shard and are all-reduced.
+
+        The realized-change work is done only for the rows that were asked for:
+        ``theta_{t+1}`` is loaded only if one of the three is among
+        ``self.observables``, and the two forward passes per batch run only for
+        ``loss_change`` / ``loss_change_residual``.
         """
-        if update.update_batch is None:
-            raise ValueError(
-                f"checkpoint {ckpt_id!r}: the update rule does not carry the batch the step "
-                "consumed (OptimizerUpdate.update_batch), so the analyzer cannot tell which "
-                "eval batch's gradient the update is built from"
-            )
-        matching = [
-            name for name, raw in raw_batches.items() if _same_batch(raw, update.update_batch)
-        ]
-        if not matching:
-            raise ValueError(
-                f"checkpoint {ckpt_id!r}: none of the eval batches {sorted(raw_batches)} is "
-                "the batch this step consumed, so its gradient — which the update is "
-                "built from — is not among the ones measured. Add the update batch to "
-                "eval_batches (for a checkpoint bundle: source.batch_a_spec()); it is "
-                "matched by its tensors, not by its name."
-            )
-        update_name = matching[0]
         missing = [name for name in raw_batches if name not in grads]
         if missing:
             raise RuntimeError(
                 f"checkpoint {ckpt_id!r}: no gradient was kept for {missing}; the update "
                 "response needs the loss gradient of every eval batch"
             )
-        terms = update.response(grads[update_name], grads, bundle.params)
+        names = _parameter_names(bundle)
+        try:
+            terms = update.response(
+                grads[update_name],
+                grads,
+                bundle.params,
+                no_gradient={index: names[index] for index in no_gradient},
+            )
+        except ValueError as exc:
+            raise ValueError(f"checkpoint {ckpt_id!r}: {exc}") from exc
 
         values: dict[str, dict[str, float]] = {
             name: {
@@ -1137,7 +1183,14 @@ class Analyzer:
             for name, t in terms.items()
         }
 
-        successor = update.next_weights() if update.next_weights is not None else None
+        requested = set(self.observables)
+        need_loss = bool(requested & {"loss_change", "loss_change_residual"})
+        need_weights = bool(requested & {"update_response_weights", "loss_change_residual"})
+        successor = (
+            update.next_weights()
+            if update.next_weights is not None and (need_loss or need_weights)
+            else None
+        )
         if successor is not None:
             if not isinstance(successor, ModelBundle):
                 raise TypeError(
@@ -1146,13 +1199,16 @@ class Analyzer:
                 )
             successor.model.eval()
             for name, raw in raw_batches.items():
-                from_weights = float(
-                    weight_delta_dot_fp64(grads[name], successor.params, bundle.params)
-                )
-                change = self._mean_loss(successor, raw) - self._mean_loss(bundle, raw)
-                values[name]["update_response_weights"] = from_weights
-                values[name]["loss_change"] = change
-                values[name]["loss_change_residual"] = change - from_weights
+                if need_weights:
+                    from_weights = float(
+                        weight_delta_dot_fp64(grads[name], successor.params, bundle.params)
+                    )
+                    values[name]["update_response_weights"] = from_weights
+                if need_loss:
+                    change = self._mean_loss(successor, raw) - self._mean_loss(bundle, raw)
+                    values[name]["loss_change"] = change
+                if need_loss and need_weights:
+                    values[name]["loss_change_residual"] = change - from_weights
 
         rows: list[ResultRow] = []
         for name, by_observable in values.items():
@@ -1223,7 +1279,7 @@ class Analyzer:
     # ------------------------------------------------------------- emission
 
     _last_n_valid: int = 0
-    _last_raw_batch: Any = None
+    _last_no_gradient: tuple[int, ...] = ()
 
     def _emit_rows(
         self,
@@ -1383,6 +1439,38 @@ def _normalize_preconditioner(
         f"unsupported preconditioner type: {type(spec).__name__}; expected str, "
         "Preconditioner, callable(checkpoint_id) -> Preconditioner | None, or None"
     )
+
+
+def _locate_update_batch(update: OptimizerUpdate, raw_batches: dict[str, Any], ckpt_id: str) -> str:
+    """The name of the eval batch that is the batch the step consumed.
+
+    Called before any forward pass of the checkpoint, so both ways this can
+    fail cost nothing: a rule that does not carry its update batch, and an
+    update batch that is not among the eval batches. Batches are compared by
+    their tensors (:func:`_same_batch`), never by name; the first match wins.
+    """
+    if update.update_batch is None:
+        raise ValueError(
+            f"checkpoint {ckpt_id!r}: the update rule does not carry the batch the step "
+            "consumed (OptimizerUpdate.update_batch), so the analyzer cannot tell which "
+            "eval batch's gradient the update is built from"
+        )
+    for name, raw in raw_batches.items():
+        if _same_batch(raw, update.update_batch):
+            return name
+    raise ValueError(
+        f"checkpoint {ckpt_id!r}: none of the eval batches {sorted(raw_batches)} is "
+        "the batch this step consumed, so its gradient — which the update is "
+        "built from — is not among the ones measured. Add the update batch to "
+        "eval_batches (for a checkpoint bundle: source.batch_a_spec()); it is "
+        "matched by its tensors, not by its name."
+    )
+
+
+def _parameter_names(bundle: ModelBundle) -> list[str]:
+    """A display name for each entry of ``bundle.params`` (for error messages)."""
+    by_identity = {id(p): name for name, p in bundle.model.named_parameters()}
+    return [by_identity.get(id(p), f"params[{i}]") for i, p in enumerate(bundle.params)]
 
 
 def _same_batch(a: Any, b: Any) -> bool:
