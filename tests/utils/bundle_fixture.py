@@ -45,6 +45,7 @@ import json
 import math
 import os
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -72,6 +73,11 @@ DEFAULT_LR = 3e-3
 DEFAULT_BETAS = (0.9, 0.95)
 DEFAULT_EPS = 1e-8
 DEFAULT_WEIGHT_DECAY = 0.01
+# Storage dtype of ``model.safetensors``. bf16 is the frozen schema's; fp32 keeps
+# ``theta_t`` exactly (the loop trains in fp32), which the realized loss change
+# between consecutive checkpoints needs.
+WEIGHT_DTYPES = {"bf16": torch.bfloat16, "fp32": torch.float32}
+DEFAULT_WEIGHT_DTYPE = "bf16"
 
 
 # ------------------------------------------------------------- default model
@@ -323,6 +329,8 @@ def write_training_bundle(
     seed: int = 0,
     tie_head: bool = True,
     model_config_extra: dict[str, Any] | None = None,
+    weight_dtype: str = DEFAULT_WEIGHT_DTYPE,
+    bundle_steps: Sequence[int] | None = None,
 ) -> BundleFixture:
     """Run a tiny AdamW loop and write a bundle in the frozen schema.
 
@@ -332,6 +340,11 @@ def write_training_bundle(
     would consume — so the bundle spans ``theta_0 ... theta_{n_steps}`` and the
     realized change in a held-out loss across the whole run is measurable from
     the bundle alone.
+
+    ``bundle_steps`` replaces the every-``bundle_every``-th-step rule by an
+    explicit list of steps (it may include ``n_steps``), e.g. to bundle
+    consecutive steps. ``weight_dtype="fp32"`` stores the weights unrounded.
+    Both default to the frozen schema's behaviour.
 
     Returns:
         A :class:`BundleFixture` describing what was written.
@@ -380,8 +393,10 @@ def write_training_bundle(
             n_steps=n_steps,
             bundle_every=bundle_every,
             param_records=param_records,
+            weight_dtype=weight_dtype,
         ),
     )
+    wanted = None if bundle_steps is None else {int(s) for s in bundle_steps}
 
     tokens = token_stream(
         n_rows=batch_size * (n_steps + 1), seq_len=seq_len, vocab_size=vocab_size, seed=seed + 1
@@ -411,7 +426,7 @@ def write_training_bundle(
         optimizer.zero_grad(set_to_none=True)
         # L(theta_t; A_t) — from theta_t, i.e. BEFORE the step-t update.
         loss = lm_loss(model(batch["input_ids"]), batch)
-        if step % bundle_every == 0 or step == n_steps:
+        if (step % bundle_every == 0 or step == n_steps) if wanted is None else step in wanted:
             _write_checkpoint(
                 run_dir,
                 step,
@@ -422,6 +437,7 @@ def write_training_bundle(
                 tokens_seen=step * batch_size * seq_len,
                 lr=lr,
                 wall_time=time.perf_counter() - started,
+                weight_dtype=weight_dtype,
             )
             written.append(step)
             fixture.update_batches[step] = np.array(ids_np, dtype=np.int32, copy=True)
@@ -472,6 +488,7 @@ def _metadata(
     n_steps: int,
     bundle_every: int,
     param_records: list[tuple[str, tuple[int, ...]]],
+    weight_dtype: str = DEFAULT_WEIGHT_DTYPE,
 ) -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -490,6 +507,9 @@ def _metadata(
             "weight_decay": weight_decay,
         },
         "lr_schedule": {"name": "constant", "lr": lr, "warmup_steps": 0},
+        # What the loop does to the gradient between backward() and step(): nothing.
+        "gradient_clip_val": None,
+        "weight_dtype": weight_dtype,
         "seed": seed,
         "B_train": batch_size,
         "seq_len": seq_len,
@@ -528,11 +548,12 @@ def _write_checkpoint(
     tokens_seen: int,
     lr: float,
     wall_time: float,
+    weight_dtype: str = DEFAULT_WEIGHT_DTYPE,
 ) -> Path:
     ckpt_dir = run_dir / "checkpoints" / f"step_{step:08d}"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     weights = {
-        name: p.detach().to(device="cpu", dtype=torch.bfloat16).clone()
+        name: p.detach().to(device="cpu", dtype=WEIGHT_DTYPES[weight_dtype]).clone()
         for name, p in model.named_parameters()
     }
     save_file(weights, str(ckpt_dir / "model.safetensors"))

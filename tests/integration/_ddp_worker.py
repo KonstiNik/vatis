@@ -27,6 +27,18 @@ second rank then reproduces the first rank's number bit for bit.
 at it, so the run also produces the two ``*_capped`` rows. Without it no DDP
 test sees them — a ``P`` without a ceiling has no capped part to all-reduce.
 
+``--update-response`` adds a second eval batch and an explicit update rule
+(:func:`update_response_setup`), so the run also produces the
+``loss_change_first_order*`` rows and — the rule supplies a second set of weights — the
+realized-change rows. Those involve no probes, so they must agree with a single
+process as they are; what the test sees is whether the dot products use the
+all-reduced gradients and whether the two loss evaluations are all-reduced.
+
+``--gated`` (with ``--update-response``) uses :class:`GatedTiny` and marks one
+sequence of the update batch (:func:`gate_batch`): the model then has a
+parameter that is in the graph on one rank's shard only. Whether the ranks agree
+that it received a gradient is what the all-reduce of that record is for.
+
 ``--adamw`` (with ``--preconditioner``) uses :func:`adamw_preconditioner`
 instead: a ``P`` built by ``Preconditioner.adamw`` from a seeded second moment
 with zeros in it, so the rows carry ``preconditioner_eps`` /
@@ -59,6 +71,7 @@ from tests.fixtures.tiny_transformer import (  # noqa: E402
 )
 from vatis import analyze  # noqa: E402
 from vatis.core.preconditioner import Preconditioner  # noqa: E402
+from vatis.core.update_response import AdamHyper, OptimizerUpdate  # noqa: E402
 from vatis.distributed.ddp import (  # noqa: E402
     get_rank,
     init_distributed,
@@ -116,6 +129,84 @@ def ceiling_preconditioner(n_params: int) -> Preconditioner:
     at_ceiling = torch.rand(n_params, generator=gen) < 0.1
     diag[at_ceiling] = CEILING
     return Preconditioner.from_diagonal(diag, descriptor="explicit", ceiling=CEILING)
+
+
+# A sequence that starts with this token switches the gate of :class:`GatedTiny` on.
+GATE_TOKEN = 7
+
+
+class GatedTiny(torch.nn.Module):
+    """The tiny transformer plus one parameter that only some data reaches.
+
+    ``gate`` scales the logits of the sequences that start with ``GATE_TOKEN``.
+    A batch without such a sequence leaves it out of the graph altogether:
+    autograd then returns ``None`` for it, not zeros.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.inner = TinyTransformer()
+        self.gate = torch.nn.Parameter(torch.tensor(0.5))
+
+    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+        logits: torch.Tensor = self.inner(input_ids)
+        hit = input_ids[:, 0] == GATE_TOKEN
+        if bool(hit.any()):
+            logits = logits * (1.0 + self.gate * hit.to(logits.dtype)[:, None, None])
+        return logits
+
+
+def gate_batch(batch: dict[str, torch.Tensor], rows: tuple[int, ...]) -> dict[str, torch.Tensor]:
+    """A copy of ``batch`` in which exactly the sequences ``rows`` start with ``GATE_TOKEN``.
+
+    The first input token is no target of the shifted loss, so the labels stay.
+    """
+    ids = batch["input_ids"].clone()
+    first = ids[:, 0]
+    first[first == GATE_TOKEN] = GATE_TOKEN + 1
+    first[list(rows)] = GATE_TOKEN
+    return {**batch, "input_ids": ids}
+
+
+def update_response_setup(
+    bundle: ModelBundle, update_batch: dict[str, torch.Tensor]
+) -> OptimizerUpdate:
+    """An explicit AdamW update rule for ``bundle``, with a successor to step to.
+
+    Seeded moments after three updates, weight decay on, and ``theta_{t+1}`` a
+    seeded small displacement of the model's weights (it does not have to be the
+    step the rule describes: the realized-change rows only compare two sets of
+    weights). Shared by the worker and the single-process baseline of the driver
+    test, like :func:`ceiling_preconditioner`.
+    """
+    gen = torch.Generator().manual_seed(11)
+    params = bundle.params
+    successor_model = type(bundle.model)().eval()
+    with torch.no_grad():
+        for new, old in zip(successor_model.parameters(), params, strict=True):
+            new.copy_(old + 1e-3 * torch.randn(old.shape, generator=gen))
+    successor = ModelBundle(
+        model=successor_model,
+        params=list(successor_model.parameters()),
+        forward_fn=bundle.forward_fn,
+        loss_fn=bundle.loss_fn,
+        valid_mask_fn=bundle.valid_mask_fn,
+        identifier="toy@step1",
+    )
+    return OptimizerUpdate(
+        family="adam",
+        hypers=[AdamHyper(lr=1e-2, beta1=0.9, beta2=0.95, eps=1e-8, weight_decay=0.1)]
+        * len(params),
+        step=3,
+        first_moment=[1e-2 * torch.randn(p.shape, generator=gen) for p in params],
+        second_moment=[1e-3 * torch.rand(p.shape, generator=gen) for p in params],
+        # Low enough to engage: the clip factor then depends on the norm of the
+        # WHOLE gradient, which a rank only has after the all-reduce.
+        clip_grad_norm=0.5,
+        descriptor="adamw_update",
+        update_batch=update_batch,
+        next_weights=lambda: successor,
+    )
 
 
 # The hyper-parameters of the ``--adamw`` P. ``eps`` is large on purpose: the
@@ -176,6 +267,16 @@ def main() -> int:
         action="store_true",
         help="batch = two copies of a (batch-size // 2)-sample batch: identical shards on 2 ranks",
     )
+    parser.add_argument(
+        "--update-response",
+        action="store_true",
+        help="add a second eval batch and an explicit update rule (update-response rows)",
+    )
+    parser.add_argument(
+        "--gated",
+        action="store_true",
+        help="with --update-response: a parameter that only rank 0's shard gives a gradient to",
+    )
     args = parser.parse_args()
 
     if args.pin_probes:
@@ -186,7 +287,7 @@ def main() -> int:
     init_distributed()
     try:
         torch.manual_seed(args.seed)
-        model = TinyTransformer().eval()
+        model = (GatedTiny() if args.gated else TinyTransformer()).eval()
         for p in model.parameters():
             p.requires_grad_(True)
         bundle = ModelBundle(
@@ -219,11 +320,23 @@ def main() -> int:
             batch = make_tiny_lm_batch(
                 batch_size=args.batch_size, seed=args.seed, pad_fraction=0.25, device="cpu"
             )
+        eval_batches = {"val": batch}
+        update = None
+        if args.update_response:
+            eval_batches["other"] = make_tiny_lm_batch(
+                batch_size=args.batch_size, seed=args.seed + 1, pad_fraction=0.25, device="cpu"
+            )
+            if args.gated:
+                # Sequence 0 is in rank 0's shard; no other sequence has the token.
+                batch = eval_batches["val"] = gate_batch(batch, (0,))
+                eval_batches["other"] = gate_batch(eval_batches["other"], ())
+            update = update_response_setup(bundle, batch)
         results = analyze(
             model=bundle,
             revisions=["step0"],
-            eval_batches={"val": batch},
+            eval_batches=eval_batches,
             preconditioner=precond,
+            update_response=None if update is None else (lambda ckpt_id: update),
             chi_net_method=args.chi_net_method,
             hutchinson_distribution=args.hutchinson_distribution,
             n_hutchinson=args.n_hutchinson,

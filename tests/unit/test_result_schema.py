@@ -571,13 +571,18 @@ def test_read_results_keeps_columns_it_does_not_know(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "relative_path",
-    ["examples/pythia_sweep/results.parquet", "examples/output/results.parquet"],
+    [
+        "examples/pythia_sweep/results.parquet",
+        "examples/output/results.parquet",
+        "examples/adamw_vs_sgd_reconstruction/results.parquet",
+    ],
 )
 def test_the_result_files_shipped_with_the_examples_stay_readable(relative_path: str) -> None:
     """Real files written by earlier versions, as committed.
 
-    When this was written the first had the original eleven columns and the
-    second those plus ``preconditioner``. The test does not depend on that: for
+    When this was written the first had the original eleven columns, the second
+    those plus ``preconditioner`` and the third every column of the current
+    format. The test does not depend on that: for
     whatever columns a shipped file has, ``read_results`` must hand them back
     unchanged and fill in the rest as documented.
     """

@@ -356,7 +356,9 @@ class Preconditioner:
         already folded into ``exp_avg_sq`` is exactly that counter, and it is
         therefore the bias-correction exponent that matches the saved tensor.
         The ``P`` that the step-``t`` update *actually applies* additionally folds
-        in the step-``t`` gradient — one EMA update — and is **not implemented**:
+        in the step-``t`` gradient — one EMA update — and is **not what this
+        builder returns** (:mod:`vatis.core.update_response` forms it, for the
+        ``loss_change_first_order*`` rows):
         ``v_hat_{t+1} = (1 - w) * v_hat_t + w * g_t**2`` with
         ``w = (1 - beta2) / (1 - beta2**(t + 1))``. That weight is ``O(1 - beta2)``
         only once ``t >> 1 / (1 - beta2)``; early in a run it is ``~1 / (t + 1)``

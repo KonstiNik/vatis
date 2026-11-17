@@ -37,6 +37,18 @@ bit: the P accumulators are additive, never in the raw path.
 The rows land in the existing long format as new ``observable`` values, plus one
 ``preconditioner`` descriptor column that carries ``"none"`` on every raw row.
 
+The update that was taken
+-------------------------
+
+When an ``update_response`` is configured the analyzer additionally measures,
+for every eval batch ``B``, the first-order loss change under the update the
+optimizer applied at that checkpoint, ``grad L^B . (theta_{t+1} - theta_t)``,
+split into its gradient, history and weight-decay parts
+(:mod:`vatis.core.update_response`) — and, where ``theta_{t+1}`` is available,
+the realized loss change and what the first-order term leaves over. These need
+no extra backward either (two extra forwards per batch for the realized change):
+they are dot products of the gradients the self pairs already built.
+
 Provenance and sampling error
 -----------------------------
 
@@ -86,6 +98,7 @@ from vatis.core.preconditioner import (
     weighted_dot_fp64,
     weighted_sum_sq_fp64,
 )
+from vatis.core.update_response import OptimizerUpdate, weight_delta_dot_fp64
 from vatis.data.batches import EvalBatchSpec, normalize_eval_batches
 from vatis.data.collate import iter_micro_batches, move_batch
 from vatis.distributed.ddp import (
@@ -144,6 +157,56 @@ P_CAPPED_OBSERVABLES: tuple[str, ...] = (
     "delta_loss_P_capped",
     "chi_net_P_capped",
 )
+
+# The first-order loss change under the update the optimizer applied at the
+# checkpoint, ``grad L^B . dtheta`` with ``dtheta`` rebuilt from the optimizer
+# state saved before the step: its three parts and their sum
+# (``docs/SPEC.md`` §"The response to the update that was taken"). Emitted only
+# when an ``update_response`` is configured, on the pair (update batch, B) for
+# every eval batch B, tagged with the update rule's descriptor
+# (``"adamw_update"``, ...). Unlike ``delta_loss`` these are loss changes: they
+# carry the learning rate and the sign (negative = the loss on B goes down).
+UPDATE_RESPONSE_OBSERVABLES: tuple[str, ...] = (
+    "loss_change_first_order_grad",
+    "loss_change_first_order_hist",
+    "loss_change_first_order_wd",
+    "loss_change_first_order",
+)
+
+# Two facts about the step itself, recorded next to the rows they scale so that
+# a result file can be read without the bundle: the learning rate the step
+# applied and the factor its gradient was clipped by. Emitted once per
+# checkpoint, on the pair (update batch, update batch), tagged with the update
+# rule's descriptor like the formula rows.
+#
+# - ``update_lr`` exists only when every parameter was updated with the same
+#   rate. When parameter groups have different rates there is no single number,
+#   and ``update_lr_min`` / ``update_lr_max`` are written instead (the smallest
+#   and the largest rate of any group) — never an average.
+# - ``update_clip_factor`` is ``min(1, c / (||g|| + 1e-6))`` for a run that
+#   clipped the global gradient norm at ``c``, and exactly 1 for a run that did
+#   not clip: either way the factor the gradient reached the optimizer with.
+UPDATE_STEP_OBSERVABLES: tuple[str, ...] = (
+    "update_lr",
+    "update_lr_min",
+    "update_lr_max",
+    "update_clip_factor",
+)
+
+# Measured only where the source can also supply ``theta_{t+1}``: the same
+# first-order change from the two stored weight vectors, the loss change the
+# step realized on B, and their difference (what first order leaves over).
+# No optimizer formula enters them, so they are tagged ``"none"``.
+REALIZED_CHANGE_OBSERVABLES: tuple[str, ...] = (
+    "loss_change_first_order_weights",
+    "loss_change",
+    "loss_change_residual",
+)
+
+# What an ``update_response`` argument may be: a per-checkpoint factory
+# ``fn(checkpoint_id) -> OptimizerUpdate | None`` (``None`` skips the rows for
+# that checkpoint). For a checkpoint bundle: ``LocalBundleSource.update_response()``.
+UpdateResponseFactory = Callable[[str], OptimizerUpdate | None]
 
 # What a ``preconditioner`` argument may be:
 #   - None / "none"                  -> raw observables only (the default, and the
@@ -212,6 +275,19 @@ class Analyzer:
             :data:`PreconditionerLike`. For a checkpoint bundle use
             ``LocalBundleSource.adamw_preconditioner()``, which reads each
             checkpoint's saved (pre-step) optimizer state.
+        update_response: a per-checkpoint factory of the update the optimizer
+            applied (:data:`UpdateResponseFactory`), or ``None`` (default). With
+            it the analyzer emits the :data:`UPDATE_RESPONSE_OBSERVABLES` rows
+            — and the :data:`REALIZED_CHANGE_OBSERVABLES` rows where the factory
+            supplies ``theta_{t+1}`` — on the pair (update batch, ``B``) for
+            every eval batch ``B``, plus the step's learning rate and clip
+            factor (:data:`UPDATE_STEP_OBSERVABLES`) on the update batch's own
+            pair. The update batch must be one of the eval
+            batches; the analyzer finds it by comparing them with the batch the
+            factory reports and refuses when none matches. For a checkpoint
+            bundle: ``update_response=source.update_response()`` with
+            ``source.batch_a_spec()`` among the eval batches. Independent of
+            ``preconditioner``.
         chi_net_method: ``"hutchinson"``, ``"per_sequence_cv"``, ``"opacus"``,
             or ``None`` for the default, ``"hutchinson"``.
         n_hutchinson: number of probe vectors per micro-batch. With at least
@@ -259,6 +335,7 @@ class Analyzer:
         eval_batches: dict[str, Any],
         observables: Sequence[str] | None = None,
         preconditioner: PreconditionerLike | None = None,
+        update_response: UpdateResponseFactory | None = None,
         chi_net_method: str | None = None,
         n_hutchinson: int = 32,
         hutchinson_distribution: str = "rademacher",
@@ -276,14 +353,35 @@ class Analyzer:
             raise ValueError("at least one eval batch is required")
 
         self.preconditioner = _normalize_preconditioner(preconditioner)
-        valid_observables = ALL_OBSERVABLES + P_OBSERVABLES + P_CAPPED_OBSERVABLES
+        if update_response is not None and not callable(update_response):
+            raise TypeError(
+                f"unsupported update_response type: {type(update_response).__name__}; "
+                "expected a callable(checkpoint_id) -> OptimizerUpdate | None, e.g. "
+                "LocalBundleSource.update_response()"
+            )
+        self.update_response = update_response
+        response_observables = (
+            UPDATE_RESPONSE_OBSERVABLES + UPDATE_STEP_OBSERVABLES + REALIZED_CHANGE_OBSERVABLES
+        )
+        valid_observables = (
+            ALL_OBSERVABLES + P_OBSERVABLES + P_CAPPED_OBSERVABLES + response_observables
+        )
         if observables is None:
-            observables = ALL_OBSERVABLES + (
-                P_OBSERVABLES + P_CAPPED_OBSERVABLES if self.preconditioner is not None else ()
+            observables = (
+                ALL_OBSERVABLES
+                + (P_OBSERVABLES + P_CAPPED_OBSERVABLES if self.preconditioner is not None else ())
+                + (response_observables if self.update_response is not None else ())
             )
         unknown = set(observables) - set(valid_observables)
         if unknown:
             raise ValueError(f"unknown observables {sorted(unknown)}; valid: {valid_observables}")
+        requested_response = set(observables) & set(response_observables)
+        if requested_response and self.update_response is None:
+            raise ValueError(
+                f"observables {sorted(requested_response)} describe the update the optimizer "
+                "applied but no update_response was given; pass update_response=... (for a "
+                "checkpoint bundle: LocalBundleSource.update_response())"
+            )
         requested_p = set(observables) & set(P_OBSERVABLES + P_CAPPED_OBSERVABLES)
         if requested_p and self.preconditioner is None:
             raise ValueError(
@@ -352,8 +450,11 @@ class Analyzer:
             return out
         raise TypeError(f"unsupported sink type: {type(sink).__name__}")
 
-    def _resolve_cross_grad_storage(self, bundle: ModelBundle) -> str:
+    def _resolve_cross_grad_storage(self, bundle: ModelBundle, n_cached: int | None = None) -> str:
         """Decide where cached cross-pair gradients live: ``"gpu"`` or ``"cpu"``.
+
+        ``n_cached`` is the number of batches whose gradient is kept; by default
+        the batches named in ``cross_pairs`` (an update response keeps all).
 
         Explicit ``"gpu"``/``"cpu"`` pass through. ``"auto"`` offloads to host
         RAM only when keeping the cached fp32 gradient(s) on the GPU would not
@@ -377,14 +478,15 @@ class Analyzer:
         device = next((p.device for p in bundle.params), self.device)
         if device.type != "cuda" or not torch.cuda.is_available():
             return "gpu"  # no host-offload target that would help
-        cross_names = {n for pair in self.cross_pairs for n in pair if pair[0] != pair[1]}
+        if n_cached is None:
+            n_cached = len({n for pair in self.cross_pairs for n in pair if pair[0] != pair[1]})
         n_params = sum(p.numel() for p in bundle.params)
         weights_bytes = sum(p.numel() * p.element_size() for p in bundle.params)
         total = torch.cuda.get_device_properties(device).total_memory
         offload = _should_offload_cross_grads(
             n_params=n_params,
             weights_bytes=weights_bytes,
-            n_cross_batches=len(cross_names),
+            n_cross_batches=n_cached,
             total_device_bytes=total,
         )
         return "cpu" if offload else "gpu"
@@ -464,6 +566,21 @@ class Analyzer:
         # this checkpoint" — either no preconditioner was configured at all, or
         # the factory declined (see the step-0 policy in
         # ``LocalBundleSource.adamw_preconditioner``).
+        # The update rule is resolved first: it keeps the saved optimizer state,
+        # which the P source would otherwise load, release and have reloaded.
+        update = self._resolve_update_response(ckpt_id)
+        # With an update rule the eval batches are fetched once, here, and the
+        # update batch is located among them before anything expensive runs: a
+        # rule that cannot be placed fails now, not after every chi_net
+        # estimate of the checkpoint. (A resampling spec hands out another batch
+        # each time it is asked, so the self pairs below get these very ones.)
+        raw_batches: dict[str, Any] | None = None
+        update_name: str | None = None
+        if update is not None:
+            raw_batches = {
+                name: spec.get_batch(ckpt_id) for name, spec in self.eval_batches.items()
+            }
+            update_name = _locate_update_batch(update, raw_batches, ckpt_id)
         precond = self._resolve_preconditioner(bundle, ckpt_id)
 
         # Self pairs first. We cache a batch's full parameter-space gradient
@@ -474,17 +591,34 @@ class Analyzer:
         # was requested. So we cache selectively and drop the local reference
         # otherwise, freeing it before the next batch's backward.
         cross_names = {n for pair in self.cross_pairs for n in pair if pair[0] != pair[1]}
-        grad_storage = self._resolve_cross_grad_storage(bundle) if cross_names else "gpu"
+        # The update response dots EVERY batch's gradient with the update, so
+        # with it all of them are kept (one P-sized vector per eval batch).
+        cached_names = set(self.eval_batches) if update is not None else cross_names
+        grad_storage = (
+            self._resolve_cross_grad_storage(bundle, n_cached=len(cached_names))
+            if cached_names
+            else "gpu"
+        )
         per_batch_grad_cache: dict[str, torch.Tensor] = {}
         per_batch_n_valid: dict[str, int] = {}
+        no_gradient: tuple[int, ...] = ()
 
         for name, spec in self.eval_batches.items():
             self_result, g_full = self._compute_self_pair(
-                bundle, ckpt_id, revision, name, spec, precond
+                bundle,
+                ckpt_id,
+                revision,
+                name,
+                spec,
+                precond,
+                raw_batch=None if raw_batches is None else raw_batches[name],
+                track_no_gradient=name == update_name,
             )
             result.rows.extend(self_result)
             per_batch_n_valid[name] = self._last_n_valid
-            if g_full is not None and name in cross_names:
+            if name == update_name:
+                no_gradient = self._last_no_gradient
+            if g_full is not None and name in cached_names:
                 # Cache for the cross-pair dot. Offload to host RAM when keeping
                 # it on the GPU would crowd out a later batch's backward (large
                 # models); otherwise keep it on-device. The cross dot
@@ -515,6 +649,21 @@ class Analyzer:
                 precond=precond,
             )
             result.rows.extend(cross_rows)
+
+        if update is not None and raw_batches is not None and update_name is not None:
+            result.rows.extend(
+                self._compute_update_response(
+                    bundle=bundle,
+                    ckpt_id=ckpt_id,
+                    revision=revision,
+                    update=update,
+                    update_name=update_name,
+                    no_gradient=no_gradient,
+                    grads=per_batch_grad_cache,
+                    n_valid=per_batch_n_valid,
+                    raw_batches=raw_batches,
+                )
+            )
 
         if is_main_rank() and self.sinks:
             for s in self.sinks:
@@ -579,6 +728,9 @@ class Analyzer:
         batch_name: str,
         spec: EvalBatchSpec,
         precond: Preconditioner | None = None,
+        *,
+        raw_batch: Any = None,
+        track_no_gradient: bool = False,
     ) -> tuple[list[ResultRow], torch.Tensor | None]:
         """Compute chi_loss / delta_loss / chi_net / chi_pos for one batch.
 
@@ -587,13 +739,20 @@ class Analyzer:
         ``delta_loss_P`` re-reduces the same gradient vector with the ``P``
         weight and ``chi_net_P`` comes from the same estimator call.
 
+        ``raw_batch`` is the batch to measure when the caller has already
+        fetched it from ``spec`` (the update-response path does, once, for every
+        eval batch); otherwise it is fetched here. With ``track_no_gradient`` the
+        indices of the parameters that received **no** gradient from any
+        micro-batch on any rank — ``autograd`` returned ``None`` for them, they
+        are not in the graph — are left in ``self._last_no_gradient``.
+
         Returns the rows AND the flat parameter-space gradient of the total
         loss (used as a cache for cross pairs).
         """
         t0 = time.perf_counter()
         device = next(bundle.model.parameters()).device
 
-        raw = spec.get_batch(ckpt_id)
+        raw = spec.get_batch(ckpt_id) if raw_batch is None else raw_batch
         # Shard across DDP ranks; if single-GPU shard_batch is a no-op slice.
         local_batch, local_b, _global_b = shard_batch(
             raw, rank=get_rank(), world_size=get_world_size()
@@ -641,6 +800,13 @@ class Analyzer:
         # *local* mean loss. The all-reduce step weights it by n_valid_local
         # to recover the *global* mean loss gradient.
         flat_grad_local = _zero_param_vector(bundle.params, device)
+        # Slot 0 counts the backwards that ran, slot i + 1 the backwards that
+        # handed parameter i a gradient. Kept (and all-reduced) only on request.
+        received = (
+            torch.zeros(len(bundle.params) + 1, dtype=torch.float32, device=device)
+            if track_no_gradient
+            else None
+        )
         n_total_for_loss = n_valid_local
         if n_total_for_loss == 0:
             # No valid tokens on this rank. Still emit zeros and let the
@@ -673,6 +839,11 @@ class Analyzer:
                     allow_unused=True,
                 )
                 _add_grads_into_flat(flat_grad_local, grads, bundle.params)
+                if received is not None:
+                    received[0] += 1.0
+                    for index, grad in enumerate(grads):
+                        if grad is not None:
+                            received[index + 1] += 1.0
                 del logits
             delta_loss_local = _sum_sq_fp64(flat_grad_local)
 
@@ -806,6 +977,8 @@ class Analyzer:
                 rank_weight = 0.0
             flat_grad_local.mul_(rank_weight)
             dist.all_reduce(flat_grad_local, op=dist.ReduceOp.SUM)
+            if received is not None:
+                dist.all_reduce(received, op=dist.ReduceOp.SUM)
             delta_loss_global = float(_sum_sq_fp64(flat_grad_local))
         else:
             chi_loss_raw_global = float(chi_loss_raw_local)
@@ -891,6 +1064,22 @@ class Analyzer:
         # On non-distributed runs flat_grad_local is the full grad (unscaled).
         # On distributed runs we already wrote the reweighted+reduced version.
         self._last_n_valid = n_valid_a
+        if received is not None and float(received[0]) == 0.0:
+            # Asked which parameters the update batch gave a gradient to, and no
+            # backward pass ran at all (on any rank: the record is all-reduced).
+            # "No parameter is without a gradient" would be the wrong reading.
+            raise ValueError(
+                f"checkpoint {ckpt_id!r}: no backward pass ran on the update batch "
+                f"{batch_name!r} (it has no valid token), so there is no gradient to "
+                "rebuild the optimizer step from. The rows of the step that was taken "
+                "need the batch the step was computed on, with the labels the run "
+                "trained on."
+            )
+        self._last_no_gradient = (
+            ()
+            if received is None
+            else tuple(i for i, count in enumerate(received[1:].tolist()) if count == 0.0)
+        )
         return rows, flat_grad_local.detach()
 
     # ------------------------------------------------------------- cross pair
@@ -1063,9 +1252,224 @@ class Analyzer:
             chi_net_p_capped_stderr=chi_net_p_capped_cross_stderr,
         )
 
+    # -------------------------------------------------------- update response
+
+    def _resolve_update_response(self, ckpt_id: str) -> OptimizerUpdate | None:
+        """The update the optimizer applied at this checkpoint, or ``None``."""
+        if self.update_response is None:
+            return None
+        update = self.update_response(ckpt_id)
+        if update is not None and not isinstance(update, OptimizerUpdate):
+            raise TypeError(
+                f"update_response factory returned {type(update).__name__} for checkpoint "
+                f"{ckpt_id!r}; expected an OptimizerUpdate or None"
+            )
+        return update
+
+    def _compute_update_response(
+        self,
+        *,
+        bundle: ModelBundle,
+        ckpt_id: str,
+        revision: str,
+        update: OptimizerUpdate,
+        update_name: str,
+        no_gradient: Sequence[int],
+        grads: dict[str, torch.Tensor],
+        n_valid: dict[str, int],
+        raw_batches: dict[str, Any],
+    ) -> list[ResultRow]:
+        """Rows for the update that was taken, on (update batch, B) for every B.
+
+        ``update_name`` is the eval batch that is the step's update batch
+        (:func:`_locate_update_batch`) and ``no_gradient`` the indices of the
+        parameters it gave no gradient to. ``grads`` are the full (all-reduced)
+        loss gradients the self pairs built, so every DDP rank computes the same
+        dot products and nothing is reduced again; only the two loss evaluations
+        of the realized change run on the rank's shard and are all-reduced.
+
+        The realized-change work is done only for the rows that were asked for:
+        ``theta_{t+1}`` is loaded only if one of the three is among
+        ``self.observables``, and the two forward passes per batch run only for
+        ``loss_change`` / ``loss_change_residual``.
+        """
+        missing = [name for name in raw_batches if name not in grads]
+        if missing:
+            raise RuntimeError(
+                f"checkpoint {ckpt_id!r}: no gradient was kept for {missing}; the update "
+                "response needs the loss gradient of every eval batch"
+            )
+        names = _parameter_names(bundle)
+        try:
+            terms = update.response(
+                grads[update_name],
+                grads,
+                bundle.params,
+                no_gradient={index: names[index] for index in no_gradient},
+            )
+        except ValueError as exc:
+            raise ValueError(f"checkpoint {ckpt_id!r}: {exc}") from exc
+
+        values: dict[str, dict[str, float]] = {
+            name: {
+                "loss_change_first_order_grad": t.grad,
+                "loss_change_first_order_hist": t.hist,
+                "loss_change_first_order_wd": t.wd,
+                "loss_change_first_order": t.total,
+            }
+            for name, t in terms.items()
+        }
+
+        # The step's learning rate and clip factor, on the update batch's own
+        # pair. Both come from the rule and the all-reduced gradient, so every
+        # DDP rank holds the same numbers.
+        lowest, highest = update.learning_rates()
+        if lowest == highest:
+            values[update_name]["update_lr"] = lowest
+        else:
+            values[update_name]["update_lr_min"] = lowest
+            values[update_name]["update_lr_max"] = highest
+        values[update_name]["update_clip_factor"] = update.clip_coefficient(grads[update_name])
+
+        requested = set(self.observables)
+        need_loss = bool(requested & {"loss_change", "loss_change_residual"})
+        need_weights = bool(requested & {"loss_change_first_order_weights", "loss_change_residual"})
+        successor = None
+        if update.next_weights is not None and (need_loss or need_weights):
+            # The realized rows compare two weight vectors, so neither may be
+            # rounded. A bundle source checks its files and its loader before it
+            # offers ``next_weights``; a rule built by hand is checked here, on
+            # the tensors themselves. theta_t first: if it is rounded,
+            # theta_(t+1) is not even loaded.
+            narrow = _narrow_float_dtypes(bundle.params)
+            if not narrow:
+                successor = update.next_weights()
+                if not isinstance(successor, ModelBundle):
+                    raise TypeError(
+                        f"next_weights returned {type(successor).__name__} for checkpoint "
+                        f"{ckpt_id!r}; expected a ModelBundle"
+                    )
+                narrow = _narrow_float_dtypes(successor.params)
+            if narrow:
+                warnings.warn(
+                    f"checkpoint {ckpt_id!r}: the weights before or after the step are held "
+                    f"as {', '.join(narrow)}, which is narrower than fp32. The analyzer would "
+                    "then compare two rounded thetas, and the difference of two rounded "
+                    "thetas is dominated by the rounding early in training, so the realized "
+                    "loss change and its residual (loss_change_first_order_weights, "
+                    "loss_change, loss_change_residual) are SKIPPED for this checkpoint. They "
+                    "need both models in fp32. The loss_change_first_order* rows built from "
+                    "the optimizer state are still reported.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                successor = None
+        if successor is not None:
+            successor.model.eval()
+            for name, raw in raw_batches.items():
+                if need_weights:
+                    from_weights = float(
+                        weight_delta_dot_fp64(grads[name], successor.params, bundle.params)
+                    )
+                    values[name]["loss_change_first_order_weights"] = from_weights
+                if need_loss:
+                    change = self._mean_loss(successor, raw) - self._mean_loss(bundle, raw)
+                    values[name]["loss_change"] = change
+                if need_loss and need_weights:
+                    values[name]["loss_change_residual"] = change - from_weights
+
+        n_ranks = get_world_size()
+        rows: list[ResultRow] = []
+        for name, by_observable in values.items():
+            for observable in self.observables:
+                if observable not in by_observable:
+                    continue
+                rows.append(
+                    ResultRow(
+                        checkpoint_id=ckpt_id,
+                        revision=revision,
+                        batch_a=update_name,
+                        batch_b=name,
+                        n_valid_a=n_valid[update_name],
+                        n_valid_b=n_valid[name],
+                        observable=observable,
+                        value=float(by_observable[observable]),
+                        # The settings of the run go on these rows as on every
+                        # other row, so that any subset of a file says which run
+                        # it came from; for the pair's two batches as a cross
+                        # pair records them.
+                        n_hutchinson=self.n_hutchinson,
+                        hutchinson_seed=None,
+                        wallclock_s=None,
+                        preconditioner=(
+                            update.descriptor
+                            if observable in UPDATE_RESPONSE_OBSERVABLES + UPDATE_STEP_OBSERVABLES
+                            else RAW_DESCRIPTOR
+                        ),
+                        chi_net_method=_pair_label(
+                            self._chi_net_method_cache.get(update_name),
+                            self._chi_net_method_cache.get(name),
+                        ),
+                        n_ranks=n_ranks,
+                        # Not rows of a preconditioner P, whatever the descriptor
+                        # says about the update rule: the three P columns stay
+                        # null. Nothing here is sampled either.
+                        preconditioner_eps=None,
+                        preconditioner_beta2=None,
+                        preconditioner_capped_fraction=None,
+                        value_probe_stderr=None,
+                        micro_batch_size=self.micro_batch_size,
+                        hutchinson_distribution=_pair_label(
+                            self._hutchinson_distribution_cache.get(update_name),
+                            self._hutchinson_distribution_cache.get(name),
+                        ),
+                    )
+                )
+        return rows
+
+    def _mean_loss(self, bundle: ModelBundle, raw: Any) -> float:
+        """The mean loss of one eval batch at ``bundle``'s weights, in fp64.
+
+        Forward only. The same loss and the same mask as every other
+        accumulator (``_label_folded_loss_fn`` / ``_intersected_valid_mask_fn``),
+        assembled over micro-batches and DDP ranks as a token-weighted mean. The
+        logits are upcast to fp64 before the loss, so the difference of two such
+        values — the realized loss change of one step, often five orders of
+        magnitude below the loss itself — is not limited by fp32 round-off in
+        the cross entropy.
+        """
+        device = next(bundle.model.parameters()).device
+        local_batch, _local_b, _global_b = shard_batch(
+            raw, rank=get_rank(), world_size=get_world_size()
+        )
+        local_batch = move_batch(local_batch, device)
+        valid_mask_fn = _intersected_valid_mask_fn(bundle.valid_mask_fn, self.ignore_index)
+        loss_fn = _label_folded_loss_fn(bundle.loss_fn, valid_mask_fn, self.ignore_index)
+        loss_sum = 0.0
+        n_tokens = 0
+        for _start, _stop, micro in iter_micro_batches(local_batch, self.micro_batch_size):
+            with torch.no_grad():
+                logits = bundle.forward_fn(bundle.model, micro)
+            n_micro = int(valid_mask_fn(micro, logits).sum().item())
+            if n_micro == 0:
+                continue
+            # A leaf that requires grad: the label-folding closure verifies a
+            # rewritten mask through the gradient w.r.t. the logits.
+            logits64 = logits.detach().to(dtype=torch.float64).requires_grad_(True)
+            loss_sum += float(loss_fn(logits64, micro).detach()) * n_micro
+            n_tokens += n_micro
+            del logits, logits64
+        if is_distributed():
+            loss_sum = all_reduce_sum_scalar(loss_sum, device)
+            n_tokens = int(all_reduce_sum_scalar(float(n_tokens), device))
+        if n_tokens == 0:
+            raise ValueError("cannot evaluate a loss on a batch without valid tokens")
+        return loss_sum / n_tokens
+
     # ------------------------------------------------------------- emission
 
     _last_n_valid: int = 0
+    _last_no_gradient: tuple[int, ...] = ()
 
     def _emit_rows(
         self,
@@ -1270,6 +1674,71 @@ def _normalize_preconditioner(
         f"unsupported preconditioner type: {type(spec).__name__}; expected str, "
         "Preconditioner, callable(checkpoint_id) -> Preconditioner | None, or None"
     )
+
+
+def _locate_update_batch(update: OptimizerUpdate, raw_batches: dict[str, Any], ckpt_id: str) -> str:
+    """The name of the eval batch that is the batch the step consumed.
+
+    Called before any forward pass of the checkpoint, so both ways this can
+    fail cost nothing: a rule that does not carry its update batch, and an
+    update batch that is not among the eval batches. Batches are compared by
+    their tensors (:func:`_same_batch`), never by name; the first match wins.
+    """
+    if update.update_batch is None:
+        raise ValueError(
+            f"checkpoint {ckpt_id!r}: the update rule does not carry the batch the step "
+            "consumed (OptimizerUpdate.update_batch), so the analyzer cannot tell which "
+            "eval batch's gradient the update is built from"
+        )
+    for name, raw in raw_batches.items():
+        if _same_batch(raw, update.update_batch):
+            return name
+    raise ValueError(
+        f"checkpoint {ckpt_id!r}: none of the eval batches {sorted(raw_batches)} is "
+        "the batch this step consumed, so its gradient — which the update is "
+        "built from — is not among the ones measured. Add the update batch to "
+        "eval_batches (for a checkpoint bundle: source.batch_a_spec()); it is "
+        "matched by its tensors, not by its name."
+    )
+
+
+def _parameter_names(bundle: ModelBundle) -> list[str]:
+    """A display name for each entry of ``bundle.params`` (for error messages)."""
+    by_identity = {id(p): name for name, p in bundle.model.named_parameters()}
+    return [by_identity.get(id(p), f"params[{i}]") for i, p in enumerate(bundle.params)]
+
+
+def _narrow_float_dtypes(params: Sequence[torch.Tensor]) -> list[str]:
+    """The dtypes among ``params`` that are narrower than fp32 (``[]`` if none).
+
+    bf16 and fp16 hold a rounded copy of weights that were trained in fp32.
+    """
+    return sorted(
+        {
+            str(p.dtype).removeprefix("torch.")
+            for p in params
+            if p.dtype not in (torch.float32, torch.float64)
+        }
+    )
+
+
+def _same_batch(a: Any, b: Any) -> bool:
+    """Whether two batches hold the same tensors (same structure, shapes, values).
+
+    Used to find which eval batch is the batch a step consumed. Devices and
+    object identity do not matter; a tensor's dtype does.
+    """
+    if isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor):
+        return (
+            a.dtype == b.dtype
+            and tuple(a.shape) == tuple(b.shape)
+            and bool(torch.equal(a.detach().cpu(), b.detach().cpu()))
+        )
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_same_batch(a[k], b[k]) for k in a)
+    if isinstance(a, (tuple, list)) and isinstance(b, (tuple, list)):
+        return len(a) == len(b) and all(_same_batch(x, y) for x, y in zip(a, b, strict=True))
+    return False
 
 
 def _optional_float(value: torch.Tensor | None) -> float | None:
@@ -1731,6 +2200,7 @@ def analyze(
     eval_batches: dict[str, Any],
     observables: Sequence[str] | None = None,
     preconditioner: PreconditionerLike | None = None,
+    update_response: UpdateResponseFactory | None = None,
     chi_net_method: str | None = None,
     n_hutchinson: int = 32,
     hutchinson_distribution: str = "rademacher",
@@ -1762,6 +2232,7 @@ def analyze(
         eval_batches=eval_batches,
         observables=observables,
         preconditioner=preconditioner,
+        update_response=update_response,
         chi_net_method=chi_net_method,
         n_hutchinson=n_hutchinson,
         hutchinson_distribution=hutchinson_distribution,

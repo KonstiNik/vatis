@@ -28,6 +28,17 @@ What it does, per parametrized architecture:
 Parametrizations: the default tiny transformer (always) and the project Llama
 (tied weights, rotary) when ``/workspace/antonio_code/llama_model`` is present —
 skipped cleanly otherwise.
+
+``test_golden_update_response`` is the same gate for the rows that describe the
+step that was taken: it trains, writes a bundle with **consecutive** checkpoints
+and unrounded (fp32) weight files, analyzes it with
+``update_response=source.update_response()``, and holds the rows against the
+weight files themselves — ``g . (theta_{t+1} - theta_t)`` summed parameter by
+parameter *by name*, with ``g`` from plain autograd, so neither the loader's
+flattening order nor the update formula enters the reference. It then prints
+the per-step comparison the first test could only gesture at: the first-order
+change of the step taken, its three parts, ``-eta * delta_loss_P`` and the
+realized change.
 """
 
 from __future__ import annotations
@@ -46,7 +57,13 @@ from tests.utils.bundle_fixture import (
     token_stream,
     write_training_bundle,
 )
-from vatis.analyzer import ALL_OBSERVABLES, P_OBSERVABLES, Analyzer
+from vatis.analyzer import (
+    ALL_OBSERVABLES,
+    P_OBSERVABLES,
+    REALIZED_CHANGE_OBSERVABLES,
+    UPDATE_RESPONSE_OBSERVABLES,
+    Analyzer,
+)
 from vatis.core.chi_net import build_estimator
 from vatis.core.preconditioner import (
     RAW_DESCRIPTOR,
@@ -430,4 +447,175 @@ def _report_linearization_sum(
         f"is not expected to equal the realized change. The raw rows are the plain-SGD "
         f"counterpart (P = I) and are expected to be far too small, because eta was tuned "
         f"for the preconditioned step."
+    )
+
+
+# ------------------------------------------------- the step that was taken
+
+# Consecutive pairs early, in the middle and at the end of the run, plus two
+# checkpoints without a stored successor (5 and the final one).
+RESPONSE_N_STEPS = 40
+RESPONSE_BUNDLE_STEPS = (0, 1, 2, 3, 5, 20, 21, 39, 40)
+RESPONSE_WITH_SUCCESSOR = (0, 1, 2, 20, 39)
+# fp32 weights, fp32 optimizer state, fp32 gradient vector: measured agreement
+# with the weight files is 1e-8 .. 1e-6 relative on both architectures.
+RESPONSE_RTOL = 1e-4
+
+
+def _named_weights(run_dir: Path, step: int) -> dict[str, torch.Tensor]:
+    from safetensors.torch import load_file
+
+    return load_file(str(run_dir / "checkpoints" / f"step_{step:08d}" / "model.safetensors"))
+
+
+def _plain_loss_and_named_grad(
+    factory: str,
+    metadata: object,
+    weights: dict[str, torch.Tensor],
+    batch: dict[str, torch.Tensor],
+) -> tuple[float, dict[str, torch.Tensor]]:
+    """Loss (fp64 from fp32 logits) and gradient by parameter name, plain torch."""
+    from vatis.models.local_bundle import resolve_model_factory
+
+    model = resolve_model_factory(factory)(metadata)
+    model.load_state_dict(weights, strict=False)
+    model.eval()
+    logits = model(batch["input_ids"])
+    named = dict(model.named_parameters())
+    grads = torch.autograd.grad(lm_loss(logits, batch), list(named.values()))
+    with torch.no_grad():
+        loss = float(lm_loss(logits.to(torch.float64), batch))
+    return loss, dict(zip(named, grads, strict=True))
+
+
+@pytest.mark.golden
+@pytest.mark.parametrize(
+    "architecture",
+    [
+        pytest.param("default", id="default-tiny-transformer"),
+        pytest.param("llama", id="project-llama"),
+    ],
+)
+def test_golden_update_response(tmp_path: Path, architecture: str) -> None:
+    if architecture == "llama":
+        if not llama_factory.llama_available():
+            pytest.skip(
+                "project Llama not available (set VATIS_LLAMA_MODEL_PATH to the directory "
+                "containing llama_model/); the gate stays self-contained without it"
+            )
+        factory = LLAMA_FACTORY
+        model_config_extra = llama_factory.llama_model_config(
+            vocab_size=VOCAB_SIZE, seq_len=SEQ_LEN, tie_head=True
+        )
+    else:
+        factory = DEFAULT_MODEL_FACTORY
+        model_config_extra = None
+
+    run_dir = tmp_path / "run"
+    fixture = write_training_bundle(
+        run_dir,
+        model_factory=factory,
+        n_steps=RESPONSE_N_STEPS,
+        vocab_size=VOCAB_SIZE,
+        seq_len=SEQ_LEN,
+        batch_size=TRAIN_BATCH,
+        lr=LR,
+        eps=EPS,
+        weight_decay=0.1,
+        tie_head=True,
+        model_config_extra=model_config_extra,
+        weight_dtype="fp32",
+        bundle_steps=RESPONSE_BUNDLE_STEPS,
+    )
+    assert fixture.steps == RESPONSE_BUNDLE_STEPS
+    source = load_local_bundle(run_dir, factory, dtype="fp32")
+    batch_b = _held_out(903)
+    analyzer = Analyzer(
+        eval_batches={"update_batch": source.batch_a_spec(), "B": batch_b},
+        preconditioner=source.adamw_preconditioner(),
+        update_response=source.update_response(),
+        chi_net_method="per_sequence_cv",
+        n_hutchinson=N_HUTCHINSON,
+        micro_batch_size=2,
+        cross_pairs=[("update_batch", "B")],
+        sink=None,
+        seed=5,
+        device="cpu",
+        dtype="fp32",
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # the step-0 P skip
+        results = analyzer.run(source.model_specs())
+    assert len(results) == len(RESPONSE_BUNDLE_STEPS)
+
+    worst_formula = worst_weights = 0.0
+    lines = []
+    for step, result in zip(RESPONSE_BUNDLE_STEPS, results, strict=True):
+        rows = {(r.batch_a, r.batch_b, r.observable): r for r in result.rows}
+        for row in result.rows:
+            assert row.value == row.value and abs(row.value) < 1e30, (step, row.observable)
+        has_successor = step in RESPONSE_WITH_SUCCESSOR
+        batches = {"update_batch": fixture.expected_batch(step), "B": batch_b}
+        for name, batch in batches.items():
+            key = ("update_batch", name)
+            for observable in UPDATE_RESPONSE_OBSERVABLES:
+                assert rows[(*key, observable)].preconditioner == "adamw_update"
+            for observable in REALIZED_CHANGE_OBSERVABLES:
+                assert ((*key, observable) in rows) == has_successor, (step, name, observable)
+            total = rows[(*key, "loss_change_first_order")].value
+            parts = sum(
+                rows[(*key, f"loss_change_first_order_{part}")].value
+                for part in ("grad", "hist", "wd")
+            )
+            assert total == pytest.approx(parts, rel=1e-12, abs=1e-18)
+            if step == 0:
+                assert rows[(*key, "loss_change_first_order_hist")].value == 0.0
+            if name == "update_batch":
+                # The step's own facts, recorded with the rows they scale.
+                assert rows[(*key, "update_lr")].value == LR
+                assert rows[(*key, "update_clip_factor")].value == 1.0
+            else:
+                assert (*key, "update_lr") not in rows
+            if not has_successor:
+                continue
+
+            # The reference: the two weight files, by name, and plain autograd.
+            before, after = _named_weights(run_dir, step), _named_weights(run_dir, step + 1)
+            loss_before, grads = _plain_loss_and_named_grad(factory, source.metadata, before, batch)
+            loss_after, _ = _plain_loss_and_named_grad(factory, source.metadata, after, batch)
+            reference = float(
+                sum(
+                    (g.double() * (after[n].double() - before[n].double())).sum()
+                    for n, g in grads.items()
+                )
+            )
+            from_weights = rows[(*key, "loss_change_first_order_weights")].value
+            change = rows[(*key, "loss_change")].value
+            residual = rows[(*key, "loss_change_residual")].value
+            worst_formula = max(worst_formula, abs(total / reference - 1.0))
+            worst_weights = max(worst_weights, abs(from_weights / reference - 1.0))
+            assert total == pytest.approx(reference, rel=RESPONSE_RTOL), (
+                f"step {step}, {name}: grad + hist + wd = {total!r} but the step the run took "
+                f"gives g . dtheta = {reference!r}"
+            )
+            assert from_weights == pytest.approx(reference, rel=RESPONSE_RTOL)
+            assert change == pytest.approx(loss_after - loss_before, rel=1e-3, abs=1e-6)
+            assert residual == change - from_weights
+            p_row = rows.get((*key, "delta_loss_P"))
+            hypothetical = "      n/a" if p_row is None else f"{-LR * p_row.value:+.5f}"
+            lines.append(
+                f"  step {step:>2} on {name:<12}: first order {total:+.5f} = grad "
+                f"{rows[(*key, 'loss_change_first_order_grad')].value:+.5f} + hist "
+                f"{rows[(*key, 'loss_change_first_order_hist')].value:+.5f} + wd "
+                f"{rows[(*key, 'loss_change_first_order_wd')].value:+.5f} | from the weight files "
+                f"{from_weights:+.5f} | -eta*delta_loss_P {hypothetical} | realized "
+                f"{change:+.5f}, residual {residual:+.5f}"
+            )
+    print(
+        f"\n[golden/{architecture}] THE STEP THAT WAS TAKEN (fp32 weight files, steps "
+        f"{RESPONSE_WITH_SUCCESSOR} have a stored successor)\n"
+        + "\n".join(lines)
+        + f"\n  worst relative deviation from g . (theta_t+1 - theta_t) by name: rebuilt "
+        f"update {worst_formula:.2e}, stored weights {worst_weights:.2e} (limit "
+        f"{RESPONSE_RTOL:.0e})"
     )

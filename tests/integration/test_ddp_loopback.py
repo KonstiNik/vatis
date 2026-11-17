@@ -38,6 +38,10 @@ all-reduce of ``chi_net_P_capped`` changed nothing any tier asserts.
 ``test_ddp_shipped_rng_capped_row_equals_the_per_rank_streams`` adds the same row
 under the shipped RNG, against the per-rank streams.
 
+The ``loss_change_first_order*`` and realized-change rows have their own test
+(``test_ddp_update_response_matches_single_process``): they involve no probes,
+so DDP has to reproduce a single process as it is.
+
 The provenance columns and ``value_probe_stderr`` have their own section at the end:
 every rank's rows name the estimator, the world size, the micro-batch size and
 the probe distribution of the run, the rows of an AdamW
@@ -75,12 +79,20 @@ from tests.fixtures.tiny_transformer import (
 from tests.integration._ddp_worker import (
     ADAMW_BETA2,
     ADAMW_EPS,
+    GatedTiny,
     ShapeKeyedProbe,
     adamw_preconditioner,
     adamw_second_moment,
     ceiling_preconditioner,
+    gate_batch,
+    update_response_setup,
 )
 from vatis import analyze
+from vatis.analyzer import (
+    REALIZED_CHANGE_OBSERVABLES,
+    UPDATE_RESPONSE_OBSERVABLES,
+    UPDATE_STEP_OBSERVABLES,
+)
 from vatis.core.chi_net import build_estimator
 from vatis.core.observables import chi_pos
 from vatis.core.preconditioner import Preconditioner
@@ -105,9 +117,12 @@ def _run_ddp_rows(
     preconditioner: bool = False,
     ceiling: bool = False,
     duplicate_half: bool = False,
+    update_response: bool = False,
     adamw: bool = False,
     micro_batch_size: int | None = None,
     distribution: str | None = None,
+    gated: bool = False,
+    timeout: float = 300,
 ) -> list[list[dict[str, Any]]]:
     """Spawn a 2-rank torchrun pinned to CPU, return every rank's rows (as dicts)."""
     env = os.environ.copy()
@@ -139,13 +154,17 @@ def _run_ddp_rows(
         cmd.append("--ceiling")
     if duplicate_half:
         cmd.append("--duplicate-half")
+    if update_response:
+        cmd.append("--update-response")
     if adamw:
         cmd.append("--adamw")
     if micro_batch_size is not None:
         cmd += ["--micro-batch-size", str(micro_batch_size)]
     if distribution is not None:
         cmd += ["--hutchinson-distribution", distribution]
-    result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
+    if gated:
+        cmd.append("--gated")
+    result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(
             "torchrun failed:\n--- stdout ---\n"
@@ -515,6 +534,104 @@ def test_ddp_shipped_rng_capped_row_equals_the_per_rank_streams(
         assert rel < DDP_REL, (method, observable, ddp[observable], want, rel)
 
 
+@pytest.mark.parametrize("batch_size", [4, 5])
+def test_ddp_update_response_matches_single_process(tmp_path: Path, batch_size: int) -> None:
+    """The update-response and realized-change rows under DDP, against one process.
+
+    No probes enter these rows, so no pinning is needed: the three parts are dot
+    products of the all-reduced gradients with an update every rank rebuilds
+    identically, and the realized change is two token-weighted mean losses that
+    have to be all-reduced over the shards. ``batch_size=5`` is the uneven split,
+    and the batches are padded, so the ranks hold different token counts — a
+    plain average of per-rank losses, or a dot product with a rank's partial
+    gradient, would not reproduce the single-process number.
+    """
+    seed = 0
+    ranks = _run_ddp_rows(
+        tmp_path / f"ddp_response_{batch_size}.json",
+        seed=seed,
+        batch_size=batch_size,
+        n_h=2,
+        method="hutchinson",
+        update_response=True,
+    )
+
+    torch.manual_seed(seed)
+    model = TinyTransformer().eval()
+    bundle = ModelBundle(
+        model=model,
+        params=list(model.parameters()),
+        forward_fn=lambda m, b: m(b["input_ids"]),
+        loss_fn=causal_lm_loss,
+        valid_mask_fn=causal_lm_valid_mask,
+        identifier="toy@step0",
+    )
+    batch = make_tiny_lm_batch(batch_size=batch_size, seed=seed, pad_fraction=0.25, device="cpu")
+    other = make_tiny_lm_batch(
+        batch_size=batch_size, seed=seed + 1, pad_fraction=0.25, device="cpu"
+    )
+    update = update_response_setup(bundle, batch)
+    results = analyze(
+        model=bundle,
+        revisions=["step0"],
+        eval_batches={"val": batch, "other": other},
+        update_response=lambda ckpt_id: update,
+        chi_net_method="hutchinson",
+        n_hutchinson=2,
+        micro_batch_size=1,
+        sink=None,
+        device="cpu",
+    )
+    names = UPDATE_RESPONSE_OBSERVABLES + REALIZED_CHANGE_OBSERVABLES
+    base = {
+        (r.batch_a, r.batch_b, r.observable): r.value
+        for r in results[0].rows
+        if r.observable in names
+    }
+    assert set(base) == {("val", b, name) for b in ("val", "other") for name in names}
+    assert all(value != 0.0 for value in base.values())
+
+    for rank, rows in enumerate(ranks):
+        got = {
+            (r["batch_a"], r["batch_b"], r["observable"]): r["value"]
+            for r in rows
+            if r["observable"] in names
+        }
+        assert set(got) == set(base), rank
+        for key, expected in base.items():
+            # The residual is a difference of two numbers of the size of the
+            # first-order term, so its tolerance is set by that size.
+            scale = abs(base[(key[0], key[1], "loss_change_first_order_weights")])
+            tolerance = DDP_REL * (scale if key[2] == "loss_change_residual" else abs(expected))
+            assert abs(got[key] - expected) <= tolerance, (rank, key, got[key], expected)
+        counts = {
+            (r["batch_b"], r["n_valid_a"], r["n_valid_b"]) for r in rows if r["observable"] in names
+        }
+        assert len(counts) == 2, counts
+
+    # The step's learning rate and clip factor: one row each on the update batch's
+    # own pair, the same on every rank. The rule clips, and the factor is below
+    # one, so it was formed from the all-reduced gradient — a rank's partial
+    # gradient has another norm.
+    base_step = {
+        (r.batch_a, r.batch_b, r.observable): r.value
+        for r in results[0].rows
+        if r.observable in UPDATE_STEP_OBSERVABLES
+    }
+    assert set(base_step) == {("val", "val", "update_lr"), ("val", "val", "update_clip_factor")}
+    assert base_step[("val", "val", "update_lr")] == 1e-2
+    assert 0.0 < base_step[("val", "val", "update_clip_factor")] < 1.0
+    for rank, rows in enumerate(ranks):
+        got_step = {
+            (r["batch_a"], r["batch_b"], r["observable"]): r["value"]
+            for r in rows
+            if r["observable"] in UPDATE_STEP_OBSERVABLES
+        }
+        assert set(got_step) == set(base_step), rank
+        for key, expected in base_step.items():
+            assert abs(got_step[key] - expected) <= DDP_REL * abs(expected), (rank, key)
+
+
 # ------------------------------------------------ provenance columns and value_probe_stderr
 
 _P_ROWS = ("delta_loss_P", "chi_net_P", "chi_pos_P", "delta_loss_P_capped", "chi_net_P_capped")
@@ -686,3 +803,148 @@ def test_ddp_stderr_is_the_root_of_the_summed_rank_variances(tmp_path: Path, met
     assert set(other) == set(ddp)
     for observable, row in ddp.items():
         assert other[observable]["value_probe_stderr"] == row["value_probe_stderr"], observable
+
+
+def test_ddp_ranks_agree_on_which_parameters_received_a_gradient(tmp_path: Path) -> None:
+    """A parameter that is in the graph on one rank's shard only.
+
+    ``GatedTiny.gate`` gets a gradient from the one marked sequence of the
+    update batch, which lies in rank 0's shard; on rank 1 autograd returns
+    ``None`` for it. The saved state moves the gate (momentum, weight decay), so
+    a rank that believed it had received no gradient would refuse to rebuild the
+    step. The record of who received a gradient is therefore all-reduced: both
+    ranks must proceed, and write the single-process numbers.
+
+    Without that all-reduce rank 1 raises while rank 0 goes on to the next
+    collective call; the run then fails or hangs, and the timeout turns a hang
+    into a failure.
+    """
+    seed, batch_size = 0, 4
+    ranks = _run_ddp_rows(
+        tmp_path / "ddp_gated.json",
+        seed=seed,
+        batch_size=batch_size,
+        n_h=2,
+        method="hutchinson",
+        update_response=True,
+        gated=True,
+        timeout=180,
+    )
+
+    def single_process(gated_rows: tuple[int, ...]) -> dict[tuple[str, str, str], float]:
+        torch.manual_seed(seed)
+        model = GatedTiny().eval()
+        bundle = ModelBundle(
+            model=model,
+            params=list(model.parameters()),
+            forward_fn=lambda m, b: m(b["input_ids"]),
+            loss_fn=causal_lm_loss,
+            valid_mask_fn=causal_lm_valid_mask,
+            identifier="toy@step0",
+        )
+        batch = gate_batch(
+            make_tiny_lm_batch(batch_size=batch_size, seed=seed, pad_fraction=0.25, device="cpu"),
+            gated_rows,
+        )
+        other = gate_batch(
+            make_tiny_lm_batch(
+                batch_size=batch_size, seed=seed + 1, pad_fraction=0.25, device="cpu"
+            ),
+            (),
+        )
+        update = update_response_setup(bundle, batch)
+        results = analyze(
+            model=bundle,
+            revisions=["step0"],
+            eval_batches={"val": batch, "other": other},
+            update_response=lambda ckpt_id: update,
+            chi_net_method="hutchinson",
+            n_hutchinson=2,
+            micro_batch_size=1,
+            sink=None,
+            device="cpu",
+        )
+        return {
+            (r.batch_a, r.batch_b, r.observable): r.value
+            for r in results[0].rows
+            if r.observable in UPDATE_RESPONSE_OBSERVABLES
+        }
+
+    # The premise: with no marked sequence at all the rule IS refused, because
+    # the saved state moves the gate. So a rank deciding on its own shard would
+    # refuse on rank 1.
+    with pytest.raises(ValueError, match="receives no gradient on the update batch"):
+        single_process(())
+    # ... and the marked sequence is in rank 0's shard only.
+    assert shard_batch({"x": torch.arange(batch_size)}, rank=0, world_size=2)[0]["x"].tolist() == [
+        0,
+        1,
+    ]
+
+    base = single_process((0,))
+    assert len(base) == 2 * len(UPDATE_RESPONSE_OBSERVABLES)
+    for rank, rows in enumerate(ranks):
+        got = {
+            (r["batch_a"], r["batch_b"], r["observable"]): r["value"]
+            for r in rows
+            if r["observable"] in UPDATE_RESPONSE_OBSERVABLES
+        }
+        assert set(got) == set(base), rank
+        for key, expected in base.items():
+            # The momentum part is the gradient dotted with this rule's seeded
+            # random first moment: a sum of terms of random sign, far smaller
+            # than the terms. The fp32 all-reduce of the gradient shows in it at
+            # 1.05e-6 of its own size here (3.4e-9 absolute), so the bound is
+            # taken against the largest part of the pair.
+            scale = max(abs(base[(key[0], key[1], name)]) for name in UPDATE_RESPONSE_OBSERVABLES)
+            assert abs(got[key] - expected) <= DDP_REL * scale, (rank, key, got[key], expected)
+
+
+def test_ddp_rows_of_the_step_taken_follow_the_column_rule(tmp_path: Path) -> None:
+    """The provenance columns on the ``loss_change*`` and step rows, on the real path.
+
+    Two ranks, an AdamW ``P`` and an update rule in the same run, Gaussian probes
+    at micro-batch 2 on the uneven split. On every rank the rows of the step
+    taken carry the run settings like every other row (``n_ranks = 2``), none of
+    the three ``preconditioner_*`` columns and no ``value_probe_stderr``; the
+    rows of the AdamW ``P`` carry its ``eps``, and selecting them by observable
+    name, by the descriptor ``"adamw"`` or by a non-null ``preconditioner_eps``
+    gives the same rows — none of them a row tagged ``adamw_update``.
+    """
+    rank_rows = _run_ddp_rows(
+        tmp_path / "ddp_step_taken_columns.json",
+        seed=0,
+        batch_size=5,
+        n_h=4,
+        method="hutchinson",
+        preconditioner=True,
+        adamw=True,
+        micro_batch_size=2,
+        distribution="gaussian",
+        update_response=True,
+    )
+    mine_names = UPDATE_RESPONSE_OBSERVABLES + UPDATE_STEP_OBSERVABLES + REALIZED_CHANGE_OBSERVABLES
+    assert len(rank_rows) == 2
+    for rank, rows in enumerate(rank_rows):
+        mine = [r for r in rows if r["observable"] in mine_names]
+        assert {r["observable"] for r in mine} == set(mine_names) - {
+            "update_lr_min",
+            "update_lr_max",
+        }, rank
+        for r in mine:
+            assert r["n_ranks"] == 2 and r["chi_net_method"] == "hutchinson", (rank, r)
+            assert r["micro_batch_size"] == 2 and r["n_hutchinson"] == 4, (rank, r)
+            assert r["hutchinson_distribution"] == "gaussian", (rank, r)
+            assert r["hutchinson_seed"] is None and r["wallclock_s"] is None, (rank, r)
+            assert r["preconditioner_eps"] is None, (rank, r)
+            assert r["preconditioner_beta2"] is None, (rank, r)
+            assert r["preconditioner_capped_fraction"] is None, (rank, r)
+            assert r["value_probe_stderr"] is None, (rank, r)
+            tagged = r["observable"] in UPDATE_RESPONSE_OBSERVABLES + UPDATE_STEP_OBSERVABLES
+            assert r["preconditioner"] == ("adamw_update" if tagged else "none"), (rank, r)
+        by_name = [i for i, r in enumerate(rows) if r["observable"] in _P_ROWS]
+        by_descriptor = [i for i, r in enumerate(rows) if r["preconditioner"] == "adamw"]
+        by_eps = [i for i, r in enumerate(rows) if r["preconditioner_eps"] is not None]
+        assert by_name == by_descriptor == by_eps and by_name, rank
+        assert all(rows[i]["preconditioner_eps"] == ADAMW_EPS for i in by_name), rank
+        assert not any(rows[i]["observable"] in mine_names for i in by_name), rank

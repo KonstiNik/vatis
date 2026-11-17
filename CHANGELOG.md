@@ -35,6 +35,53 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   P observable — on held-out tokens, or on an update batch containing a token
   the run has not seen before — and these rows make that visible per value
   instead of clipping `P`.
+- **The response to the update that was taken.** `Analyzer` / `analyze()`
+  gained **`update_response`** (`callable(checkpoint_id)`; for a bundle
+  `source.update_response()`). For every eval batch `B` it adds the first-order
+  loss change under the update the optimizer applied at the checkpoint's step,
+  `∇L^B · (θ_{t+1} − θ_t)`, rebuilt from the pre-step optimizer state and split
+  into three parts: `loss_change_first_order_grad` (the step's own gradient, through
+  the second moment *after* it absorbed that gradient), `loss_change_first_order_hist`
+  (momentum history), `loss_change_first_order_wd` (weight decay), and their sum
+  `loss_change_first_order`. Covered: `torch.optim.AdamW`, `Adam` and `SGD`, with
+  per-group learning rates and weight decays, at every checkpoint including
+  step 0; other optimizers, `amsgrad` and `maximize` are refused. Where a
+  bundle holds consecutive steps with fp32 weight files, three more rows are
+  measured: `loss_change_first_order_weights` (the same dot product from the stored
+  weight difference), `loss_change` (the realized change) and
+  `loss_change_residual`; with bf16 weight files these are skipped with a
+  warning. Gradient clipping is never assumed: it is read from `metadata.json`
+  (`gradient_clip_val`, `gradient_clip_algorithm`) or stated with
+  `update_response(clip_grad_norm=...)`, and a bundle that says neither is
+  refused. Also refused: a parameter that receives no gradient on the update
+  batch while the saved state would move it (torch skips it or not depending on
+  how the loop cleared gradients, which a bundle does not record), and a source
+  opened with `allow_unlisted_params` whose model has unlisted parameters,
+  unless `update_response(unlisted_params_frozen=True)` confirms they were not
+  trained. The realized rows are also skipped when the source loads the weights
+  as bf16 / fp16, and — for a rule built by hand — whenever the model at
+  either end of the step holds its parameters narrower than fp32. An update
+  batch on which no backward pass runs (no valid token) is refused. The
+  learning rate and the clip factor of each step are
+  written as rows too (`update_lr` — or `update_lr_min` / `update_lr_max` when
+  parameter groups have different rates — and `update_clip_factor`).
+  On all of these rows the run-setting columns are filled as on every other
+  row, and `preconditioner_eps` / `_beta2` / `_capped_fraction` and
+  `value_probe_stderr` are null (an `adamw_update` row is not a row of an AdamW
+  `P`, and nothing in it is sampled).
+  No extra backward; no result-file column was added (the rows are new
+  `observable` values, tagged `"adamw_update"` / `"adam_update"` /
+  `"sgd_update"` or `"none"` in the `preconditioner` column).
+- `vatis.core.update_response` (`OptimizerUpdate`, `AdamHyper`, `SGDHyper`):
+  the update rule on its own, usable with any `ModelBundle`.
+- `examples/adamw_vs_sgd_reconstruction.py` (+ `_evaluate.py`): for a few steps
+  of an AdamW bundle, how well the optimizer's rule, the SGD rule applied to
+  the same step and `−η · delta_loss_P` reconstruct the first-order loss change
+  of the step that was taken, with the table and figure of one 11M-parameter
+  run. `examples/benchmark/update_response/`: what those rows cost in
+  wall-clock and peak memory on the CPU and on a GPU (no extra backward pass;
+  two forward passes per micro-batch for the realized rows; one more
+  parameter-sized vector per evaluation batch).
 - Parquet rows carry a **`preconditioner`** column (appended last): `"none"` on
   raw rows, the `P` descriptor on the new rows.
 - **Eight more result columns**, appended after `preconditioner`; null where one
@@ -186,6 +233,13 @@ The default estimator:
 ### Known limitations
 - `delta_loss_P` is **not** the first-order loss change of the AdamW step:
   momentum, weight decay and the step's own second-moment update are excluded.
+  The `loss_change_first_order*` rows measure that change (see "Added").
+- The `loss_change_first_order*` rows rebuild the step from a gradient vatis recomputes
+  on the stored batch. `loss_change` and `loss_change_residual` are resolved
+  only down to the round-off of the fp32 forward pass (measured `1e-8` to
+  `1e-7` on an 11M-parameter model). Gradient clipping must be stated; dropout, mixed
+  precision or any other alteration of the gradient by the training loop is not
+  detectable from a bundle and makes the rows describe a different step.
 - AdamW's `P` can only be built from native checkpoint bundles; optimizer states
   published with hub checkpoints are not read.
 - The unshifted-label guard of `causal_lm_loss` is not exhaustive: a single

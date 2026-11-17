@@ -226,12 +226,12 @@ The exact first-order response of one AdamW step on batch `B` is
             − η λ · ∇L^B · θ_t                                   (weight decay)
 ```
 
-of which vatis currently measures the first dot product, with `P_t` in place of
-`P_{t+1}` and without its prefactor. The other two terms — and a comparison of
-the sum against realized loss changes — are not implemented yet. Until they are,
-treat `chi_pos_P` as a statement about the *geometry* the optimizer imposes.
-`−η · delta_loss_P` is the first-order prediction for the *hypothetical* update
-`−η P_t ∇L^A`. **Do not use it as the loss change of the step that was taken.**
+of which `delta_loss_P` is the first dot product with `P_t` in place of
+`P_{t+1}` and without its prefactor. Treat `chi_pos_P` as a statement about the
+*geometry* the optimizer imposes. `−η · delta_loss_P` is the first-order
+prediction for the *hypothetical* update `−η P_t ∇L^A`. **Do not use it as the
+loss change of the step that was taken** — that is what the `loss_change_first_order*`
+rows measure, term by term (next section).
 
 How far apart the two are was measured on a real bundle (an 11M-parameter
 Llama trained with AdamW, `β = (0.9, 0.95)`, `ε = 1e-8`; `B` = the step's own
@@ -254,7 +254,423 @@ is one bundle: do not read the percentages as constants.
 pre-step `P` exists at step 0 (the optimizer state is empty), so the P rows
 start at the first checkpoint after it. Yet the first update is the most
 non-SGD one: `v̂_1 = g_0²`, so it is essentially sign descent,
-`Δθ ≈ −η · sign(g_0)`.
+`Δθ ≈ −η · sign(g_0)`. The `loss_change_first_order*` rows do cover it.
+
+#### The response to the update that was taken (`loss_change_first_order*` rows)
+
+`Analyzer(update_response=...)` measures what `delta_loss_P` is not: the
+first-order loss change under the update the optimizer applied at the
+checkpoint's step, for the update batch and for every other eval batch `B`,
+
+```
+loss_change_first_order(A, B) = ∇L^B · Δθ          Δθ = θ_{t+1} − θ_t,   A = the batch step t consumed
+```
+
+`Δθ` is rebuilt from what the checkpoint saved **before** the step — the
+weights `θ_t`, the optimizer state, the hyper-parameters of the saved
+`param_groups` — and from `g = ∇L^A`, which the analyzer computes anyway. It is
+a sum of three parts, and each part is a row. For `torch.optim.AdamW`, with `t`
+the number of updates already applied:
+
+```
+v_{t+1} = β2 v_t + (1−β2) g²                    the second moment after it absorbed g
+P_{t+1} = 1 / (√(v_{t+1} / (1−β2^{t+1})) + ε)   the P the step used (not the pre-step P_t)
+
+loss_change_first_order_grad = − η (1−β1)/(1−β1^{t+1}) · ∇L^B · P_{t+1} g      the step's own gradient
+loss_change_first_order_hist = − η  β1   /(1−β1^{t+1}) · ∇L^B · P_{t+1} m_t    the gradient history
+loss_change_first_order_wd   = − η λ · ∇L^B · θ_t                              decoupled weight decay
+loss_change_first_order      = the sum of the three
+```
+
+| observable | value | measured |
+| --- | --- | --- |
+| `loss_change_first_order_grad` | part of `∇L^B · Δθ` carried by the step's own gradient | every checkpoint |
+| `loss_change_first_order_hist` | part carried by the first moment / momentum buffer saved before the step | every checkpoint |
+| `loss_change_first_order_wd` | part carried by weight decay | every checkpoint |
+| `loss_change_first_order` | their sum: the first-order loss change of the step, from the saved state | every checkpoint |
+| `loss_change_first_order_weights` | `∇L^B · (θ_{t+1} − θ_t)` from the two stored weight files | step `t+1` stored, fp32 weight files |
+| `loss_change` | `L_B(θ_{t+1}) − L_B(θ_t)`, the realized change | same |
+| `loss_change_residual` | `loss_change − loss_change_first_order_weights`: what first order leaves over | same |
+| `update_lr` | the learning rate `η` the step applied | every checkpoint, on the update batch's own pair; only if all parameter groups share one rate |
+| `update_lr_min`, `update_lr_max` | the smallest and the largest rate of any parameter group | instead of `update_lr`, when the groups' rates differ |
+| `update_clip_factor` | the factor the gradient was scaled by before the optimizer saw it | every checkpoint, on the update batch's own pair |
+
+```python
+source = load_local_bundle(run_dir, "my_project.models:build_model")
+analyzer = Analyzer(
+    eval_batches={"train": source.batch_a_spec(), "val": val_batch},
+    update_response=source.update_response(),          # the update each step applied
+    preconditioner=source.preconditioner(),            # optional, independent
+    sink="results.parquet",
+)
+analyzer.run(source.model_specs())
+```
+
+- **Units and sign.** These are loss changes: they contain the learning rate
+  and are negative when the step lowers the loss on `B`. `delta_loss` and
+  `delta_loss_P` are gradient products without the learning rate and with the
+  opposite sign convention; the comparable quantity is `−η · delta_loss_P`,
+  which equals `loss_change_first_order_grad` only where `P_t = P_{t+1}`, the
+  prefactor `(1−β1)/(1−β1^{t+1})` is one and the gradient was not clipped. It
+  is a different quantity, not an estimate of this one: where the two are set
+  side by side below, the ratio says how far apart the hypothetical update and
+  the step taken are, not how wrong either is.
+- **Where the rows are.** On the pair `(batch_a, batch_b)` = (update batch,
+  `B`) for every eval batch `B`, the update batch itself included; the response
+  is not symmetric in the two. The update batch must be one of the eval batches
+  (`source.batch_a_spec()`): the analyzer recognises it by comparing the eval
+  batches' tensors with the checkpoint's stored batch, whatever its name, and
+  refuses when none matches — before the checkpoint's first forward pass, not
+  after its `χ_net` estimates. (To make that possible the eval batches of a
+  checkpoint are fetched once, up front, when an update rule is configured.)
+  The four formula rows carry the update
+  rule's descriptor in the `preconditioner` column (`"adamw_update"`,
+  `"adam_update"`, `"sgd_update"`); the three realized-change rows involve no
+  optimizer formula and carry `"none"`.
+- **The step's learning rate and clip factor are rows too**, so that a result
+  file can be read without the bundle: the comparison with `−η · delta_loss_P`
+  needs `η`, and the gradient part contains the clip factor. They are written
+  once per checkpoint, on the update batch's own pair (`batch_a = batch_b =`
+  the update batch), tagged with the update rule's descriptor.
+  - `update_lr` is the rate saved in the optimizer state. It is written **only
+    when every parameter was updated with the same rate**. When parameter
+    groups have different rates there is no "learning rate of the step", and
+    none is made up: `update_lr` is absent and `update_lr_min` /
+    `update_lr_max` give the smallest and the largest rate of any group
+    instead (with more than two groups the ones in between are in the bundle,
+    not in the file).
+  - `update_clip_factor` is `min(1, c / (‖g‖ + 1e-6))` for a run that clipped
+    the global gradient norm at `c`, and **exactly 1 for a run that did not
+    clip**. Either way it is the factor the gradient reached the optimizer
+    with; a value of 1 does not say whether clipping was off or merely did not
+    engage (the threshold is in the bundle's metadata or in the caller's
+    `clip_grad_norm`).
+  - Under DDP both are formed from the all-reduced gradient and the rule every
+    rank rebuilds, so all ranks hold the same values and rank 0 writes them.
+- **All of these rows exist at step 0**, the step rows included. An empty
+  optimizer state is a well-defined starting point for an update
+  (`m_0 = v_0 = 0`, so the first step is `−η g/(|g| + ε)`), unlike for a
+  pre-step `P`; the rate is in the saved param groups before any update, and
+  the clip factor needs only the gradient. The first update is in the rows
+  even though it has no P rows.
+- **Step numbering.** The saved step counter `t` counts the updates already
+  applied; the step being described is update number `t + 1`, and both bias
+  corrections take that exponent. A counter that differs from the checkpoint
+  directory's step is refused as for the P source (`on_step_mismatch="warn"`
+  uses the saved state as it is); so is an empty state at a step other than 0.
+- **The learning rate is the one saved in the optimizer state**, i.e. the
+  scheduled value the step applied (a scheduler that is stepped after every
+  update has already written the next step's rate into the param group when
+  the pre-step checkpoint is saved). When every group has the same rate it is
+  compared with the checkpoint's `meta.json` `lr`; a difference beyond `1e-6`
+  relative is refused, because every row is proportional to it.
+- **Hyper-parameters are taken per parameter**, from the group each parameter
+  belongs to. Weight decay, learning rate, `betas` and `eps` that differ
+  between groups (no decay on biases and norms is common) are therefore exact.
+  This is where the rows differ from the P source, which refuses per-group
+  learning rates: one diagonal `P` without the rate cannot represent them, an
+  update vector can. With several groups, `param_names.json` has to list the
+  parameters in the optimizer's own order — group after group — because that is
+  how a torch `state_dict` numbers them.
+- **Other update rules.** `torch.optim.Adam` (weight decay added to the
+  gradient): `g` is replaced by `g + λθ_t` in `v_{t+1}`, and the decay part is
+  `−η (1−β1)/(1−β1^{t+1}) · ∇L^B · P_{t+1} λθ_t`. `torch.optim.SGD` with
+  momentum `μ`, dampening `τ`, weight decay `λ` (coupled) and buffer `b_t`:
+  `Δθ = −η (c_g (g + λθ_t) + c_b b_t)` with `(c_g, c_b) = (1−τ, μ)`, `(1, 0)` on
+  the first step or without momentum, and `(1 + μ c_g, μ c_b)` under Nesterov;
+  the three parts are the `g`, `b_t` and `λθ_t` terms. Whether an Adam-family
+  group decays decoupled is read from the group's `decoupled_weight_decay`
+  entry; a group without it and with non-zero decay needs the optimizer named
+  in `metadata.json`, and is refused otherwise. Refused outright: every other
+  optimizer (RAdam, NAdam, Adamax, RMSprop, ...), `amsgrad=True`,
+  `maximize=True`, and a parameter that has no state while others have.
+
+**What the saved state cannot show.** The rows describe the step that was
+taken only if `g`, recomputed from `batch_a.npy` at the stored weights, is the
+gradient the optimizer saw. vatis cannot verify that from one checkpoint:
+
+- *Gradient clipping* rescales the gradient before the optimizer sees it and
+  leaves no trace in the state. It is therefore never assumed, in either
+  direction. `source.update_response()` reads `metadata.json`:
+  `gradient_clip_val` null or `0` means "not clipped"; a positive value together
+  with `gradient_clip_algorithm: "norm"` means the global gradient norm was
+  clipped to it, exactly as `torch.nn.utils.clip_grad_norm_` over all
+  parameters does (`g ← g · min(1, c / (‖g‖ + 1e-6))`), and that is applied. A
+  bundle that does not record `gradient_clip_val` at all, or records a value
+  without the algorithm, is **refused** until you state it:
+  `update_response(clip_grad_norm=None)` or `update_response(clip_grad_norm=c)`.
+  A statement that contradicts the recorded value is refused too, and so is
+  clipping by value. The factor applied at each step is written as the
+  `update_clip_factor` row (it also follows from the update batch's own
+  `delta_loss` row, which is `‖g‖²`).
+- *Rounded weights.* A bf16 weight file holds a rounded `θ_t`, so `g` is the
+  gradient at a slightly different point (see "Native checkpoint bundles" for
+  how different). The same holds for unrounded files opened with
+  `load_local_bundle(dtype="bf16")` or `"fp16"`, which rounds them in memory.
+  The formula rows are still reported; the realized rows are not (below).
+- *A parameter that receives no gradient at the step* — it is not in the graph
+  of the update batch (an unused branch, an unused parameter). torch treats
+  the two ways this can look differently: a parameter whose `.grad` is `None`
+  is skipped altogether, with no momentum and no weight decay (the default
+  `zero_grad()` leaves `None`); one whose `.grad` holds zeros
+  (`zero_grad(set_to_none=False)` after an earlier gradient) gets both. The
+  rebuilt update sees a zero gradient and applies both. Which of the two the
+  run did is not in a bundle, but the analyzer does know which parameters got
+  no gradient on the update batch, so it settles the cases it can: if the
+  saved state would not move such a parameter anyway (no weight decay on it
+  and no momentum history), both readings agree and the rows are exact;
+  otherwise the rows are **refused**, naming the parameter. An update batch on
+  which no backward pass runs at all (no valid token) is refused as well: it
+  gives no gradient and no record of who received one. For Adam and AdamW
+  a parameter that was skipped at an earlier step also shows in the state —
+  its step counter lags, or it has no state at all — and that was already
+  refused.
+- *Parameters outside the canonical list* (a source opened with
+  `allow_unlisted_params` whose model has parameters `param_names.json` does
+  not name). They are in no gradient vector and in no saved optimizer state.
+  If the run trained them, their part of the step is missing from every
+  `loss_change_first_order*` row while `loss_change` still contains its effect; if
+  they merely had gradients when the norm was clipped, the clipping factor is
+  wrong. A bundle does not say, so `update_response()` **refuses** such a
+  bundle unless the caller confirms with `unlisted_params_frozen=True` that
+  those parameters received no gradient and no update during the run.
+- *Gradient accumulation.* `batch_a.npy` must be the whole effective batch and
+  the run must have descended its token-weighted mean loss (see the pad
+  convention under "Native checkpoint bundles"); then accumulation changes
+  nothing here.
+- *Everything else the loop did to the gradient or the weights*: dropout or
+  other train-mode randomness (the analyzer evaluates in `eval()` mode), mixed
+  precision (the gradient is recomputed in the loader's dtype, and the formula
+  rows take `θ_t` at that precision too: with `dtype="bf16"` both are those of
+  the rounded model, whatever the files hold), weight
+  averaging, a manual edit of the weights between steps. None of it is
+  detectable from a bundle. The contract a bundle has to meet is: *reloading
+  step `t` and applying one optimizer step on `batch_a.npy` reproduces the
+  run's `θ_{t+1}`*.
+
+Where the bundle holds the next step in fp32, that contract is checkable, and
+the rows check it: `loss_change_first_order` (rebuilt from the saved state) and
+`loss_change_first_order_weights` (the stored weight difference, no formula) are two
+routes to the same number. **If they disagree by more than rounding, one of the
+assumptions above does not hold for that bundle.** "Rounding" includes the
+optimizer's own: the rule is evaluated in fp64, the run stepped in fp32, and a
+step far below the resolution of the weights is partly lost in the run itself.
+On the real bundles below the two rows agree to `1e-8 … 2e-5` relative, except
+at the very first SGD step with a warm-up rate of `1e-5`, where the applied
+fp32 step is 1.6% smaller than the exact one (and `loss_change` follows the
+applied one).
+
+**The realized change** needs `θ_{t+1}`. Where the bundle also holds step
+`t + 1` — whether or not it is among the selected `steps` — both weight
+files are stored as fp32 or wider and the source loads them as fp32
+(`load_local_bundle(dtype="fp32")`, the default), the three realized rows are
+measured:
+`loss_change_first_order_weights`, `loss_change` and `loss_change_residual`. The
+residual is taken against the *stored* weight difference, not against the
+rebuilt update, so it contains the loss surface's higher orders and nothing
+about the optimizer formula. With bf16 (or fp16) weight files, or with a source
+that loads the weights as bf16 or fp16, these rows are
+**skipped with a warning**: the difference of two rounded sets of weights is
+dominated by the rounding early in training (measured below), and a residual
+computed from it would be an artefact. The analyzer applies the same check to
+the two models it is handed, so a rule built by hand (any callable as
+`next_weights`) cannot get realized rows from a model held narrower than fp32
+either. A checkpoint with no stored successor has no such rows, silently. `update_response(realized=False)` switches them off.
+Both losses are evaluated forward-only, as token-weighted means over
+micro-batches and DDP ranks, with the logits upcast to fp64 before the loss, so
+the cross entropy itself adds no fp32 round-off to the difference of two nearly
+equal losses (`test_loss_change_is_the_fp64_loss_of_the_fp32_logits`). The
+forward pass stays in the model's own precision, and that sets a noise floor:
+an fp32 forward perturbs each loss by an amount that does not cancel in the
+difference. `loss_change`, and with it `loss_change_residual`, is therefore
+only resolved down to that floor — measured at about `1e-8` to `1e-7` on the
+real model below — and a residual of that size is noise, whatever its sign.
+The alternative, evaluating both losses on an fp64 copy of the model, was not
+taken: the analyzer does not know the model (casting one wholesale also hits
+complex buffers and fp32 tables, which is why the loader casts parameters
+only), and an fp64 copy of both models doubles the memory of the realized
+rows, which a model near the limit of its device does not have.
+
+**Cost.** In countable terms, per checkpoint, with `E` evaluation batches,
+`M_k` micro-batches of batch `k`, and `S` the number of state vectors the
+optimizer saved (2 for AdamW, 1 for SGD with momentum, 0 for SGD without). One
+"buffer" is one parameter-sized fp32 vector:
+
+| per checkpoint | without the rule | formula rows | + realized rows |
+| --- | --- | --- | --- |
+| backward passes | `n` | `n` | `n` |
+| forward passes | `f` | `f` | `f + 2 · Σ M_k` |
+| models in memory at once | 1 | 1 | 2 |
+| buffers kept while later batches are processed | 0 | `E − 1 + S` | `E − 1 + S` |
+| buffers kept during the realized pass | — | — | `E + S`, and the second model |
+
+These counts are pinned on toy bundles by
+`tests/unit/test_update_response_cost.py` (forward and backward calls counted,
+live tensors summed at fixed moments). In words:
+
+- **No extra backward pass, ever, and no extra forward pass for the formula
+  rows**: they are dot products of gradients the self pairs already built.
+- **The realized rows cost two forward passes per micro-batch and a second
+  model** — only when asked for: `θ_{t+1}` is loaded only if one of the three
+  rows is among `observables`, and the forward passes run only for
+  `loss_change` / `loss_change_residual`.
+- **Memory grows with the number of evaluation batches.** The gradient of
+  *every* evaluation batch is kept until the end of the checkpoint (placed as
+  `cross_grad_storage` says), where the analysis without the rule keeps none
+  (unless `cross_pairs` asks for them). That is one buffer more per evaluation
+  batch, on top of the `S` state vectors, which stay on the CPU. At 11M
+  parameters a buffer is 42 MB; it scales with the model, so at a billion
+  parameters it is 4 GB per evaluation batch — arithmetic, not a measurement.
+- The fp64 reductions are chunked, so their temporaries are bounded by the
+  chunk and not by the model. A chunk is one parameter tensor, or `2²⁵`
+  elements of it if it is larger; the clip norm runs over the flat gradient in
+  chunks of `2²⁵` elements. No single fp64 allocation exceeds one chunk and
+  fewer than 20 chunks are allocated at any moment (14 measured for the AdamW
+  rule; `test_the_reductions_the_analyzer_calls_allocate_per_chunk_not_per_model`
+  watches the allocations of the calls the analyzer makes, on a model of 64
+  chunks). Two consequences: a chunk of `2²⁵` elements is 268 MB in fp64
+  (arithmetic), and for a model below `2²⁵` parameters the clip norm's chunk
+  is the whole gradient, which is then upcast to fp64 once.
+- Under DDP every rank rebuilds the same update from the all-reduced
+  gradients; only the two loss evaluations (and the record of which parameters
+  received no gradient) are all-reduced. Every rank holds the buffers above.
+
+**Measured cost** on two 11M-parameter Llama bundles (AdamW and SGD with
+momentum; fp32; four checkpoints per run; eval batches: the update batch of
+32 × 512 tokens and one held-out batch of 8 × 512 tokens; `hutchinson`,
+`n_hutchinson = 2`, `micro_batch_size = 8`; every run in its own process;
+median over five runs with the range in brackets). Script, full tables and what
+exactly each column is: `examples/benchmark/update_response/`.
+
+| device | bundle | without the rule | formula rows | + realized rows |
+| --- | --- | --- | --- | --- |
+| CPU, wall-clock per checkpoint, s | AdamW | 7.4 (7.4 – 11.5) | 7.6 (7.5 – 12.1) | 9.6 (8.9 – 14.2) |
+| | SGD | 7.6 (7.4 – 11.9) | 7.6 (7.4 – 11.9) | 9.0 (8.8 – 14.2) |
+| CPU, peak resident memory, MB | AdamW | 2551 | 2656 (+105) | 2645 (+94) |
+| | SGD | 2535 | 2626 (+90) | 2634 (+99) |
+| GPU, wall-clock per checkpoint, s | AdamW | 0.8 (0.7 – 1.0) | 1.0 (0.7 – 4.2) | 1.2 (0.9 – 1.2) |
+| | SGD | 0.6 (0.6 – 0.6) | 0.7 (0.7 – 0.8) | 0.8 (0.8 – 0.9) |
+| GPU, peak allocated memory, MB | AdamW | 1173 | 1213 (+40) | 1214 (+40) |
+| | SGD | 1173 | 1213 (+40) | 1214 (+40) |
+
+- The CPU is a shared 16-core machine (8 threads used). The first two of the
+  five repeats were slower than the last three (the upper ends of the ranges);
+  the recorded load average does not clearly say why. In the last three the
+  formula rows add 0 to 0.2 s per checkpoint (AdamW +0.12 to +0.18 s, SGD
+  −0.02 to +0.09 s) and the realized rows 1.4 to 2.2 s (×1.2 to ×1.3). On the
+  GPU (one RTX 3090
+  Ti) the formula rows add 0.1 to 0.2 s and the realized rows 0.2 to 0.4 s per
+  checkpoint; relative to a 0.6 to 0.8 s checkpoint that is ×1.1 to ×1.5,
+  because at this size the fixed costs of a checkpoint dominate. With
+  `n_hutchinson = 8` the GPU analysis without the rule takes 1.5 s per
+  checkpoint and the additions stay about the same in seconds (1.6 s, 1.8 s).
+- **AdamW rule against SGD rule:** no difference in wall-clock that these
+  measurements resolve, and the same GPU memory. The AdamW rule holds two state
+  vectors on the host and the SGD rule one.
+- **Memory grows with the number of evaluation batches, as counted:** with four
+  evaluation batches instead of two the rule adds 127 MB of GPU memory instead
+  of 40 MB (three kept gradients of 42 MB instead of one), and 188 MB of
+  resident memory on the CPU instead of 105 MB.
+- The realized rows do not raise the *peak* GPU memory beyond the formula rows
+  here: the second model is on the card only during the forward-only realized
+  pass, and the peak is reached during a backward pass.
+- Peak resident memory is a coarse instrument (the expected +126 MB and +84 MB
+  for three and two buffers show as +105 MB and +90 MB). GPU memory is
+  `torch.cuda.max_memory_allocated` of the process, reset per run.
+- **Not measured:** models larger than 11M parameters, more than one GPU, DDP,
+  bf16 forward passes. The ratios above should not be carried over to a large
+  model; the counts do carry over.
+
+**Precision.** The rule itself is exact: on an fp64 model the rebuilt update
+equals the one `torch.optim` applied element by element to `1e-10` of its
+largest entry, for AdamW, Adam and SGD (`tests/unit/test_update_response_vs_torch.py`).
+Through a bundle everything is fp32 — weights, optimizer state, and the
+analyzer's gradient vector — and the rows agree with the run to about `1e-7`
+relative on the test bundles (`tests/unit/test_update_response_bundle.py`,
+asserted at `1e-5`). The device changes the fp32 gradient at the `1e-5` level
+and the rows accordingly: on a real 11M-parameter fp32 bundle (thirteen steps,
+two batches) every `loss_change*` row computed on a GPU agreed with the CPU
+value to within `1.1e-7` in absolute terms, `2e-5` to `3e-4` relative on the
+first-order rows (more only for values below `1e-6`); `update_lr` was
+identical and `update_clip_factor` agreed to `3e-7`. A GPU-only test compares
+all new rows between the two devices on a toy bundle, with the gradients on the
+card and offloaded to the host.
+
+**Measured on real bundles** (an 11M-parameter Llama, CPU, fp32 analysis,
+`micro_batch_size=8`; `B` = the step's own update batch of 32 × 512 tokens
+unless stated). These are single runs of single bundles: read them as what the
+rows look like, not as constants.
+
+*A bundle with bf16 weight files* (AdamW, `β = (0.9, 0.95)`, `ε = 1e-8`,
+`λ = 0.01`, warm-up, no clipping, unmasked loss). There is no usable
+`θ_{t+1}`, so the reference is the update the optimizer applied, rebuilt from
+the state saved *after* the step (`m_{t+1}`, `v_{t+1}`), which involves no
+recomputed gradient:
+
+| step | `loss_change_first_order` | `_grad` | `_hist` | `_wd` | applied update (post-step state) | two bf16 weight files | `−η · delta_loss_P` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | −0.07932 | −0.07932 | 0 | −9.6e−8 | −0.07932 (differs by 5e−6) | −0.07922 (0.13%) | no `P` at step 0 |
+| 1 | −1.09819 | −0.57660 | −0.52158 | −8.2e−7 | −1.09818 (4e−6) | −1.09736 (0.07%) | −1.27180 (16% larger) |
+| 2 | −1.91379 | −0.75004 | −1.16376 | +1.3e−5 | −1.91377 (1e−5) | −1.91177 (0.11%) | −2.69596 (41% larger) |
+| 3 | −1.39350 | −0.42945 | −0.96408 | +3.0e−5 | −1.39346 (3e−5) | −1.39230 (0.09%) | −1.84469 (32% larger) |
+
+The gradient recomputed at the bf16-rounded weights differed from the one the
+optimizer saw (reconstructed from consecutive first moments) by 0.24–0.25%
+relative, cosine 0.999997; the three terms nevertheless reproduce the applied
+first-order change to a few parts in `1e5`. Element by element, the difference
+of the two bf16 weight files was off from the applied update by 5.7, 1.4, 0.97
+and 0.88 times its norm at steps 0–3 — which is why no realized row is
+computed from such files. On a held-out batch of 8 × 512 tokens the same four
+steps gave the same agreement (4e−6 … 5e−5), with `−η · delta_loss_P` 2%, 37%
+and 25% larger at steps 1–3. Later in the same run `−η · delta_loss_P` on the
+update batch was 38%, 92% and 189% larger at steps 4, 6 and 8, and about 65,
+15, 11.5 and 9.5 times `loss_change_first_order` at steps 20, 49, 122 and 299 (how
+much of that the coordinates at the `1/ε` ceiling carry was not examined).
+
+*Bundles with fp32 weight files* (the same model; pad-masked loss; gradient
+norm clipped at 1.0, stated with `clip_grad_norm=1.0` because the bundles record
+the value but not the algorithm; AdamW with peak rate 2e-3, SGD with momentum
+0.9 and peak rate 1.0, both with a warm-up from 1e-5):
+
+| run | step | `η` | clip factor | `loss_change_first_order` | `_grad` | `_hist` | `loss_change_first_order_weights` (rel. diff.) | `loss_change` | `loss_change_residual` | `−η · delta_loss_P` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| AdamW | 0 | 1.0e−5 | 1 | −0.010192 | −0.010192 | 0 | −0.010192 (1.4e−5) | −0.010194 | −2.1e−6 | no `P` at step 0 |
+| AdamW | 1 | 3.0e−5 | 1 | −0.026263 | −0.016011 | −0.010252 | −0.026263 (3e−7) | −0.026279 | −1.7e−5 | −0.156016 (5.9×) |
+| AdamW | 9 | 1.9e−4 | 0.837 | −0.166286 | −0.038766 | −0.127525 | −0.166286 (2e−7) | −0.164681 | +1.6e−3 | −0.358982 (2.2×) |
+| AdamW | 661 | 2.0e−3 | 1 | −0.138667 | −0.146740 | +0.008074 | −0.138667 (2e−7) | −0.120782 | +1.8e−2 | −1.583337 (11.4×) |
+| AdamW | 66105 | 2.0e−3 | 1 | −0.059246 | −0.061295 | +0.002052 | −0.059246 (4e−7) | −0.057270 | +2.0e−3 | −0.713140 (12.0×) |
+| SGD | 0 | 1.0e−5 | 1 | −6.556e−6 | −6.556e−6 | 0 | −6.454e−6 (1.6e−2) | −6.454e−6 | below the noise floor (reported: +2.9e−10) | −6.556e−6 (equal) |
+| SGD | 1 | 1.0e−2 | 1 | −0.010984 | −0.006045 | −0.004940 | −0.010984 (5e−7) | −0.010991 | −6.4e−6 | −0.006045 (0.55×) |
+| SGD | 661 | 1.0 | 1 | −0.134733 | −0.153860 | +0.019127 | −0.134733 (2e−7) | −0.110690 | +2.4e−2 | −0.153860 (1.14×) |
+
+Here the recomputed gradient matched the one the optimizer saw to `4e-7 … 3e-5`
+relative, also at the step where the clip engaged, and also on a run that
+accumulated gradients over 4 micro-batches with token weighting (`4e-7`; rows
+within `2e-7` of the stored weight difference at step 1). Late in the AdamW run
+`−η · delta_loss_P` is about `1/(1−β1) = 10` times the gradient part and more
+than that against the whole step: the current gradient enters the update with
+weight `1−β1`, and on its own batch the history is nearly orthogonal to it. For
+SGD `delta_loss_P` is `delta_loss`, so `−η · delta_loss_P` is the gradient part
+— exactly so only for a step that was not clipped, has no dampening and is not
+Nesterov, which holds for the three SGD rows above (the gradient part carries
+the factors `clip`, `1−τ` and, under Nesterov, `1 + μ(1−τ)`) — and the rest is
+momentum. On the held-out batch the first-order change
+late in training is small (−0.008 at AdamW step 661) against a residual of
++0.012: there the realized change (+0.003) has the opposite sign.
+A worked use of these rows — the AdamW rule, the SGD rule applied to the same
+step and `−η · delta_loss_P` against the stored weight difference, at thirteen
+steps of one AdamW run — is in `examples/adamw_vs_sgd_reconstruction/`.
+
+**The noise floor of `loss_change`**, measured on this model: computed with the
+whole model in fp64, `loss_change` differed from the fp32-forward value by at
+most `1.3e-8` on the update batch (32 × 512 tokens) and by at most `8.3e-8` on
+the held-out batch (8 × 512 tokens), over steps 0, 9 and 661 of the AdamW run
+and steps 0, 1 and 661 of the SGD run (twelve comparisons; the same with 2 and
+with 8 threads). Residuals of `1e-6` and larger in the table are therefore not
+round-off. The residual of the first SGD step is: the analyzer reported
+`+2.9e-10` on the update batch where the fp64 model gives `+2.1e-10`, and
+`−9.3e-9` on the held-out batch where the fp64 model gives `+1.2e-9` — numbers
+of that size are not reproducible and should be read as "below `1e-7`".
 
 #### Reading the P rows
 
@@ -468,8 +884,9 @@ number of valid (non-pad, non-ignored) tokens.
   parallelism. `OpacusEstimator` (stub only). Custom non-CE losses for
   `chi_loss`. Per-sample variance observables beyond the cross-sample alignment
   matrix. Models that don't fit on one GPU. Non-diagonal `P`. Momentum and
-  weight decay in the optimizer-aware response (see "What `delta_loss_P` is
-  not"). **Optimizer states in third-party formats**: only the native bundle
+  weight decay in `P` (they are in the `loss_change_first_order*` rows instead, see
+  "The response to the update that was taken"); update rules other than
+  AdamW, Adam and SGD there. **Optimizer states in third-party formats**: only the native bundle
   schema is read — there is no loader for the optimizer states published with
   Pythia, OLMo or other hub checkpoints, so `adamw` is available for bundles
   only (an `explicit` `P` works with any model if you build and align the
@@ -494,6 +911,7 @@ vatis/
 │   ├── probes.py          # Rademacher / Gaussian probe vector generation, masking
 │   ├── param_layout.py    # ParameterLayout: the canonical parameter flattening order
 │   ├── preconditioner.py  # Preconditioner (diagonal P) + elementwise-weighted reductions
+│   ├── update_response.py # OptimizerUpdate: the update a step applied, in three parts
 │   └── normalization.py   # valid-token counting, √(N_A·N_B) factors
 ├── models/
 │   ├── __init__.py        # exports load_hf_model + load_local_bundle
@@ -531,8 +949,13 @@ examples/
     ├── _build_eval_batch.py       # builds the fixed eval batch fixture
     ├── single_gpu/                # single-GPU (method, n_h, B) sweep + plots
     ├── ddp_scaling/               # multi-GPU strong/weak scaling worker + results
-    └── accuracy/                  # estimator-variance vs n_hutchinson sweep + plots
+    ├── accuracy/                  # estimator-variance vs n_hutchinson sweep + plots
+    └── update_response/           # cost of the rows of the step taken (CPU + GPU, 11M Llama)
 ```
+
+`examples/adamw_vs_sgd_reconstruction.py` (+ `_evaluate.py`, and their committed
+output under `examples/adamw_vs_sgd_reconstruction/`) is a small worked use of
+the `loss_change_first_order*` rows on a real AdamW bundle.
 
 The deployment example (`examples/pythia_sweep.py`) is the canonical "does vatis
 work end-to-end on real weights" check. Running the example/benchmark scripts
@@ -554,6 +977,7 @@ results = analyze(
     },
     observables=None,                           # None = all raw (+ all P if a preconditioner is set)
     preconditioner=None,                        # None | "identity" | Preconditioner | fn(ckpt_id) -> P | None
+    update_response=None,                       # None | fn(ckpt_id) -> OptimizerUpdate | None
     chi_net_method=None,                        # None = hutchinson
     n_hutchinson=32,                            # interpretation depends on method
     hutchinson_distribution="rademacher",       # or "gaussian"
@@ -659,7 +1083,8 @@ update batch next to the weights.
 <run_dir>/
   metadata.json                # model config, optimizer type + hparams, lr schedule,
                                # seed, B_train, seq_len, dataset id, git hashes;
-                               # optional: mask_pad_in_loss, loss_ignore_index
+                               # optional: mask_pad_in_loss, loss_ignore_index,
+                               # gradient_clip_val, gradient_clip_algorithm
   param_names.json             # ordered [ [name, shape], ... ] — the canonical flattening
                                # order; index-aligned with the optimizer state_dict indices
   checkpoints/step_00000123/
@@ -864,6 +1289,20 @@ for ckpt in source:                                    # or drive the loop yours
   `betas` / `eps` (unless both are passed explicitly) and a parameter that never
   received a gradient. An `eps` / `beta2` override is written into the descriptor, e.g.
   `adamw(eps=0.001)`.
+- **`source.update_response()` rebuilds the step each checkpoint took** from
+  the same saved state, for the `loss_change_first_order*` rows ("The response to the
+  update that was taken"). It reads two more optional run-level fields of
+  `metadata.json`:
+
+  | field | type | meaning |
+  | --- | --- | --- |
+  | `gradient_clip_val` | number or `null` | the gradient was clipped to this threshold before the optimizer step; `null` or `0`: not clipped |
+  | `gradient_clip_algorithm` | `"norm"` or `"value"` | how: the global L2 norm over all parameters (`torch.nn.utils.clip_grad_norm_`), or each entry by value |
+
+  Unlike the pad fields, these have no default: a bundle that does not record
+  `gradient_clip_val`, or records a value without the algorithm, is refused by
+  `update_response()` until the caller states the clipping. Only `"norm"` is
+  implemented. Nothing else in the loader reads the two fields.
 - **Lazy per checkpoint.** Opening a bundle reads the two JSON files and stats
   the checkpoint directories; tensors load on first access, and iterating the
   source releases checkpoint `i−1` before yielding `i`. Building `P` needs the
@@ -889,7 +1328,7 @@ n_valid_a          int64
 n_valid_b          int64
 observable         str           # "chi_loss" | "chi_loss_normalized" | "chi_net" | ...
 value              float64
-n_hutchinson       int32         # null if not applicable
+n_hutchinson       int32         # the n_hutchinson the run was made with, on every row
 hutchinson_seed    int64         # null if not applicable
 wallclock_s        float64
 preconditioner     str           # "none" on raw rows; the P descriptor on P rows
@@ -917,6 +1356,19 @@ which `P` a row's value was computed with: `"none"` on the raw rows — includin
 descriptor (`"adamw"`, `"sgd"`, ...) on the P rows. A run without a
 preconditioner emits exactly the rows it always did.
 
+The rows of the step that was taken extend it the same way and add no column:
+seven more `observable` values on the pair `(batch_a, batch_b)` = (update batch,
+evaluated batch), with `hutchinson_seed` and `wallclock_s` null (no probe
+stream and no timing belongs to them),
+plus the step's learning rate and clip factor (`update_lr` — or `update_lr_min`
+and `update_lr_max` — and `update_clip_factor`) on the update batch's own pair.
+The rows rebuilt from the optimizer state (`loss_change_first_order` and its
+three parts, and the step rows) carry the update rule's descriptor in the
+`preconditioner` column (`"adamw_update"`, `"adam_update"`, `"sgd_update"`);
+`loss_change_first_order_weights`, `loss_change` and `loss_change_residual` carry
+`"none"`. A pair that has only these rows (the update batch against an eval
+batch that is not in `cross_pairs`) pivots to a line with empty `chi_*` cells.
+
 The observable names already tell the raw and the preconditioned values apart,
 so the usual way to read a file is one pivot, which puts everything measured for
 a checkpoint and batch pair on one line:
@@ -927,13 +1379,15 @@ import pandas as pd
 df = pd.read_parquet("results.parquet")
 key = ["checkpoint_id", "batch_a", "batch_b"]
 wide = df.pivot(index=key, columns="observable", values="value")
-wide["preconditioner"] = df[df.preconditioner != "none"].groupby(key).preconditioner.first()
+wide["preconditioner"] = df[df.observable.str.endswith("_P")].groupby(key).preconditioner.first()
 # columns: chi_loss, chi_net, delta_loss, chi_pos, ..., chi_net_P, delta_loss_P, chi_pos_P, ...
 err = df.pivot(index=key, columns="observable", values="value_probe_stderr")   # same shape, the standard errors
 ```
 
 Do not select the preconditioned values by filtering on `preconditioner`: that
-drops `chi_loss`, which they share with the raw ones. A checkpoint without P
+drops `chi_loss`, which they share with the raw ones — and `preconditioner !=
+"none"` also holds for the rows tagged with an update rule (`"adamw_update"`,
+...), which is why the line above picks the `P` descriptor from the `_P` rows. A checkpoint without P
 rows (an AdamW step-0 checkpoint) shows up as empty cells in the `_P` columns.
 There is no `chi_net_P_normalized` row: it is `chi_net_P / √(n_valid_a ·
 n_valid_b)` from the same row's own columns, and `chi_pos_P` — like `chi_pos` —
@@ -994,6 +1448,39 @@ size and the distribution are settings of the whole run and therefore the same
 for both (only the estimator can differ between the batches of a pair, see
 above). The three `preconditioner_*` columns are on the `_P` / `_P_capped` rows
 only, and `value_probe_stderr` on the sampled rows only.
+
+**The rows of the step that was taken** (`loss_change_first_order` and its
+`_grad` / `_hist` / `_wd` / `_weights`, `loss_change`, `loss_change_residual`,
+and the step rows `update_lr`, `update_lr_min`, `update_lr_max`,
+`update_clip_factor`) follow the same rule, column by column:
+
+| column | on these rows |
+| --- | --- |
+| `chi_net_method`, `n_ranks`, `micro_batch_size`, `hutchinson_distribution`, `n_hutchinson` | the settings of the run, as on every other row. A row on the pair (update batch, `B`) records them the way a cross pair does — for its two batches, `"<a>+<b>"` should their estimators differ; a step row, which sits on the update batch's own pair, records that batch's |
+| `preconditioner_eps`, `preconditioner_beta2`, `preconditioner_capped_fraction` | **null** |
+| `value_probe_stderr` | **null** — nothing in these rows is sampled |
+| `hutchinson_seed`, `wallclock_s` | null |
+
+- No probe enters these rows, and the run settings are written on them all the
+  same, for the reason they are written on `chi_loss` and `delta_loss` rows: a
+  subset of a file must still say which run it came from. Two of them do bear
+  on the values: `micro_batch_size` and `n_ranks` fix how the fp32 gradients
+  and the two losses of `loss_change` were assembled.
+- **A row tagged `adamw_update` is not a row of an AdamW `P`.** The
+  `preconditioner` column of the formula rows and the step rows names the
+  *update rule* the step was rebuilt with (`"adamw_update"`, `"adam_update"`,
+  `"sgd_update"`); the `P` inside that rule is the step's own `P_{t+1}`, per
+  parameter group, and is not the `P` of the `_P` rows. Its `ε` and `β2` are
+  therefore **not** written into `preconditioner_eps` / `preconditioner_beta2`
+  — they may differ between parameter groups, and a reader filtering on those
+  columns would otherwise take these rows for P rows. The three
+  `preconditioner_*` columns are null on every row of the step that was taken.
+- **Selecting the rows of a `P`.** By observable name (`_P`, `_P_capped`), by
+  the exact descriptor (`preconditioner == "adamw"`), or by a non-null
+  `preconditioner_eps`: on a file that holds both kinds of rows the three give
+  the same rows, and none of them is a row of the step that was taken.
+  `preconditioner != "none"` alone does **not** select P rows any more: it is
+  also true for rows tagged with an update rule.
 
 The bias-correction step `t` of an AdamW `P` and the number of sequences in a
 batch are not recorded in the file.
@@ -1353,10 +1840,15 @@ cross-validation test tier (gated, skipped in CI).
     bug with the code: the update `torch.optim.AdamW` actually applies, an
     explicit eigendecomposition of `Θ_P`, and closed forms (`P = I`,
     `P = (JᵀJ)⁺`). The bundle loader is checked against bundles written by a
-    fixture that imports none of the loader's code.
+    fixture that imports none of the loader's code. The update-response rule is
+    checked against real `torch.optim` steps in fp64 — the whole update element
+    by element, and each of its three parts against an ablation of the real
+    optimizer — and through bundles written by real training runs.
   - `tests/golden/` — marked `@pytest.mark.golden`; runs only when the `-m`
     expression names `golden`. Trains a tiny transformer for ~100 AdamW steps,
     writes a bundle, and runs the raw and preconditioned observables over it end to end.
+    A second gate does the same for the `loss_change_first_order*` rows on a bundle
+    with consecutive fp32 checkpoints, against the weight files themselves.
   - `tests/integration/` — gated behind `pytest -m integration`, skipped in CI.
     Verifies HF loading on a small hub checkpoint and the DDP path — including
     the preconditioned observables — with a 2-rank CPU loopback.
@@ -1383,6 +1875,9 @@ cross-validation test tier (gated, skipped in CI).
 | `δL^P` | `delta_loss_P` | `∇_θL^B · P ∇_θL^A` |
 | `χ_pos^P` | `chi_pos_P` | `δL^P / (χ_loss · χ_net^P)` — spectral position on the preconditioned kernel |
 | — | `delta_loss_P_capped`, `chi_net_P_capped` | the same two quantities with `P` restricted to the coordinates at its ceiling (`1/ε`) |
+| `∇L^B · Δθ` | `loss_change_first_order`, `loss_change_first_order_grad` / `_hist` / `_wd` | first-order loss change on `B` under the step that was taken, rebuilt from the pre-step optimizer state, and its three parts |
+| `∇L^B · (θ_{t+1} − θ_t)` | `loss_change_first_order_weights` | the same from two stored weight files |
+| — | `loss_change`, `loss_change_residual` | `L_B(θ_{t+1}) − L_B(θ_t)`, and that minus `loss_change_first_order_weights`: the realized change, and what the first-order term from the stored weight difference leaves over |
 | `Θ` | (not stored) | empirical NTK; never materialized |
 | `N_A`, `N_B` | `n_valid_a`, `n_valid_b` | valid (non-pad) token counts |
 | `n` | `n_hutchinson` | number of Hutchinson probe vectors |
@@ -1406,7 +1901,16 @@ cross-validation test tier (gated, skipped in CI).
 - **`OpacusEstimator` is a stub**, and has no `chi_net_P` path.
 - **`delta_loss_P` is not AdamW's first-order loss change** — momentum, weight
   decay and the step's own second-moment update are not included (see "What
-  `delta_loss_P` is not").
+  `delta_loss_P` is not"). The `loss_change_first_order*` rows measure that change
+  ("The response to the update that was taken").
+- **The `loss_change_first_order*` rows rest on a recomputed gradient.** They describe
+  the step that was taken only if one optimizer step on the stored update batch
+  at the stored weights is what the run did. Gradient clipping has to be
+  stated; dropout, mixed precision, a gradient accumulation that is not
+  token-weighted, or bf16-rounded weights make the recomputed gradient differ
+  from the one the optimizer saw, and only the comparison with
+  `loss_change_first_order_weights` — available for consecutive fp32 checkpoints —
+  shows it. The realized-change rows need fp32 weight files.
 - **Optimizer state is read from native checkpoint bundles only**, and the
   loader cannot detect a same-shape parameter permutation between
   `param_names.json` and the optimizer state (see "Native checkpoint bundles").

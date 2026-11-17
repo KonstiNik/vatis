@@ -50,8 +50,10 @@ path producing it.
 
 from __future__ import annotations
 
+import dataclasses
 import importlib
 import json
+import math
 import re
 import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -64,6 +66,13 @@ import torch.nn as nn
 
 from vatis.core.param_layout import LayoutMismatchError, ParameterLayout
 from vatis.core.preconditioner import Preconditioner, resolve_adamw_hparams
+from vatis.core.update_response import (
+    ADAM_FAMILY,
+    SGD_FAMILY,
+    AdamHyper,
+    OptimizerUpdate,
+    SGDHyper,
+)
 from vatis.data.batches import EvalBatchSpec
 from vatis.models.hf import (
     ForwardFn,
@@ -119,6 +128,18 @@ _PAD_KEYS_REMEDY = (
 _STEP_MISMATCH_POLICIES = ("raise", "warn")
 CHECKPOINT_BATCH_A_FILE = "batch_a.npy"
 CHECKPOINT_META_FILE = "meta.json"
+
+# ``update_response(clip_grad_norm=...)``: read the clipping from metadata.json.
+CLIP_FROM_METADATA = "metadata"
+# safetensors dtype tags of weight files that hold ``theta_t`` itself when the
+# run trained in fp32 or fp64. Anything narrower (BF16, F16) holds a rounded
+# ``theta_t``, and the difference of two such files is not the step.
+_EXACT_WEIGHT_DTYPES = frozenset({"F32", "F64"})
+# ... and the loader dtypes that keep such a file's values as they are.
+_EXACT_LOADER_DTYPES = frozenset({torch.float32, torch.float64})
+# Relative tolerance of the cross-check between a checkpoint's ``meta.json``
+# ``lr`` and the learning rate saved in its optimizer state.
+_LR_RTOL = 1e-6
 
 
 class BundleSchemaError(ValueError):
@@ -602,6 +623,45 @@ class OptimizerStateView:
             )
         return self._layout.flatten_named(tensors, dtype=dtype, device=device)
 
+    def parameter_states(self, key: str) -> list[torch.Tensor | None]:
+        """The state ``key`` per parameter, canonical order, without copying.
+
+        Entry ``i`` is the stored tensor of parameter ``layout.names[i]`` (its
+        own dtype and device), or ``None`` when that parameter has no such
+        state — no entry at all, or an explicit ``None`` (``torch.optim.SGD``
+        stores ``momentum_buffer: None`` for a group without momentum).
+        :meth:`flat_state` concatenates the same tensors into one vector and
+        refuses a missing one; this accessor is for a consumer that walks the
+        parameters one by one and has its own rule for a missing entry.
+        """
+        out: list[torch.Tensor | None] = []
+        for index, name in enumerate(self._layout.names):
+            value = self._state.get(index, {}).get(key)
+            if value is None:
+                out.append(None)
+                continue
+            if not isinstance(value, torch.Tensor) or (
+                value.ndim == 0 and self._layout.shape_of(name) != ()
+            ):
+                raise BundleSchemaError(
+                    f"{self._source}: state[{index}][{key!r}] is not a per-element tensor "
+                    f"({value!r})"
+                )
+            out.append(value)
+        return out
+
+    def group_of_parameter(self) -> list[dict[str, Any]]:
+        """The saved param group of each parameter, canonical order.
+
+        Entry ``i`` is (a copy of) the ``param_groups`` entry whose ``params``
+        list contains index ``i``; construction already checked that the lists
+        cover ``0 .. n-1`` exactly once.
+        """
+        out: list[dict[str, Any]] = []
+        for group in self._param_groups:
+            out.extend(dict(group) for _ in group["params"])
+        return out
+
     def scalar_state(self, key: str) -> list[float]:
         """Return a per-parameter scalar state (e.g. ``"step"``), canonical order.
 
@@ -997,6 +1057,10 @@ class LocalBundleSource:
             found[step] = child
         if not found:
             raise BundleSchemaError(f"{root}: contains no step_<n> checkpoint directories")
+        # Every step on disk, also the ones a ``steps=`` selection leaves out:
+        # the realized loss change at step t needs the weights of step t + 1
+        # whether or not that checkpoint is analyzed itself.
+        self._step_dirs: dict[int, Path] = dict(found)
         if steps is None:
             selected = sorted(found)
         else:
@@ -1315,6 +1379,200 @@ class LocalBundleSource:
             )
 
         return build
+
+    def update_response(
+        self,
+        *,
+        clip_grad_norm: float | str | None = CLIP_FROM_METADATA,
+        realized: bool = True,
+        on_step_mismatch: str = "raise",
+        unlisted_params_frozen: bool = False,
+    ) -> Callable[[str], OptimizerUpdate | None]:
+        """The update each step applied, as a per-checkpoint factory for the analyzer.
+
+        Pass the result as ``Analyzer(update_response=...)`` together with
+        :meth:`batch_a_spec` among the eval batches. For every checkpoint the
+        analyzer then measures the first-order loss change under the update
+        the optimizer took at that step, ``grad L^B . (theta_{t+1} - theta_t)``,
+        split into the parts carried by the step's own gradient, by the
+        gradient history and by weight decay (the ``loss_change_first_order*`` rows;
+        definitions in :mod:`vatis.core.update_response` and ``docs/SPEC.md``
+        §"The response to the update that was taken").
+
+        The update is rebuilt from what the checkpoint saved **before** the
+        step: the weights, the optimizer state (``exp_avg`` / ``exp_avg_sq`` /
+        the step counter, or the momentum buffer) and the hyper-parameters of
+        the saved ``param_groups`` — per parameter, so groups with different
+        learning rates or weight decays are handled exactly. The learning rate
+        is the saved group's ``lr``, i.e. the scheduled value the step applied;
+        it is cross-checked against ``meta.json``'s ``lr`` when the groups share
+        one rate. Unlike the P rows these rows exist at step 0 too: an empty
+        optimizer state is a well-defined starting point for an update.
+
+        Covered: ``torch.optim.AdamW``, ``Adam`` (coupled L2 decay) and ``SGD``
+        (momentum, dampening, Nesterov, coupled decay). Refused: any other
+        optimizer, ``amsgrad=True``, ``maximize=True``, a parameter that has no
+        state while others have.
+
+        **What the saved state cannot show, and what is done about it.** The
+        gradient ``grad L^A`` is recomputed by the analyzer from ``batch_a.npy``
+        at the stored weights; the rows are the response to the step the
+        optimizer took only if that is the gradient it saw.
+
+        - *Gradient clipping* changes it and leaves no trace in the state. With
+          ``clip_grad_norm="metadata"`` (default) ``metadata.json`` must say what
+          happened: ``gradient_clip_val`` null or 0 (not clipped), or a positive
+          value together with ``gradient_clip_algorithm: "norm"``. A bundle that
+          does not record the key at all, or records a value without the
+          algorithm, is refused; state it yourself with ``clip_grad_norm=None``
+          (not clipped) or ``clip_grad_norm=<max norm>`` (global-norm clipping as
+          ``torch.nn.utils.clip_grad_norm_`` over all parameters does it). A
+          stated value that contradicts the recorded one is refused as well.
+          The norm is taken over the bundle's canonical parameters.
+        - *Parameters outside the canonical list* (a source opened with
+          ``allow_unlisted_params`` whose model has parameters that
+          ``param_names.json`` does not name). They are in no gradient vector
+          and in no saved optimizer state. If the run trained them, their part
+          of the update is missing from every row while ``loss_change`` still
+          contains its effect; if they merely had gradients when the norm was
+          clipped, the clipping factor is wrong. Nothing in a bundle says
+          either way, so such a bundle is **refused** unless you confirm with
+          ``unlisted_params_frozen=True`` that those parameters received no
+          gradient and no update during the run.
+        - *A parameter that is not in the graph of the update batch* gets no
+          gradient at all. torch then skips it entirely if its ``.grad`` is
+          ``None`` (the default ``zero_grad()``), and applies momentum and
+          weight decay to it if its ``.grad`` holds zeros
+          (``zero_grad(set_to_none=False)``). The analyzer knows which
+          parameters these are; the rows are refused when the saved state
+          would move such a parameter, and are exact when it would not.
+        - *Gradient accumulation, dropout, mixed precision, anything else the
+          loop did to the gradient*: not detectable. The bundle contract is that
+          one optimizer step on ``batch_a.npy`` at the stored weights reproduces
+          the run's ``theta_{t+1}``; see the SPEC section for what that requires
+          of a writer.
+
+        **The realized loss change** (``realized=True``, default). Where the
+        bundle also holds step ``t + 1`` (whether or not it is among the
+        selected ``steps``), both weight files are stored as fp32 or wider and
+        the source itself was opened with ``dtype="fp32"``,
+        the factory hands the analyzer ``theta_{t+1}``, and three more rows are
+        measured: ``loss_change_first_order_weights = grad L^B . (theta_{t+1} -
+        theta_t)`` from the two weight files, ``loss_change = L_B(theta_{t+1}) -
+        L_B(theta_t)`` and their difference ``loss_change_residual``. With bf16
+        (or fp16) weight files — or with a source that loads the weights as
+        bf16 / fp16, which rounds them in memory just the same — those rows are
+        **skipped with a warning**: the
+        difference of two rounded sets of weights is dominated by the rounding
+        early in training, and a residual computed from it would be an
+        artefact. A checkpoint without a stored successor has no such rows and
+        no warning.
+
+        Args:
+            clip_grad_norm: ``"metadata"`` (default), ``None`` or a positive
+                max norm; see above.
+            realized: measure the realized loss change where the bundle allows.
+            on_step_mismatch: as for :meth:`adamw_preconditioner` — what to do
+                when the optimizer state's own step counter differs from the
+                checkpoint directory's step (``"raise"`` or ``"warn"``).
+            unlisted_params_frozen: only matters for a source opened with
+                ``allow_unlisted_params``: confirms that the model's parameters
+                outside ``param_names.json`` received no gradient and no update
+                during the run. Without it such a bundle is refused.
+
+        Returns:
+            ``fn(checkpoint_id) -> OptimizerUpdate``.
+        """
+        _check_step_mismatch_policy(on_step_mismatch)
+        clip = _resolve_clip_grad_norm(self.metadata, clip_grad_norm)
+
+        def build(checkpoint_id: str) -> OptimizerUpdate | None:
+            checkpoint = self.checkpoint_for(checkpoint_id)
+            if self.allow_unlisted_params and not unlisted_params_frozen:
+                bundle = checkpoint.model_bundle
+                listed = {id(p) for p in bundle.params}
+                unlisted = [
+                    name for name, p in bundle.model.named_parameters() if id(p) not in listed
+                ]
+                if unlisted:
+                    raise ValueError(
+                        f"{checkpoint.identifier}: the model has parameters outside "
+                        f"param_names.json ({_abbrev(unlisted)}; the source was opened with "
+                        "allow_unlisted_params). They are in no gradient vector and in no "
+                        "saved optimizer state: if the run trained them, their part of the "
+                        "update is missing from every loss_change_first_order* row while loss_change "
+                        "still contains its effect, and if they had gradients when the norm "
+                        "was clipped, the clipping factor is wrong. The bundle does not say. "
+                        "Pass unlisted_params_frozen=True to confirm that they received no "
+                        "gradient and no update during the run."
+                    )
+            update = optimizer_update_from_state(
+                checkpoint.optimizer_state,
+                checkpoint_step=checkpoint.step,
+                metadata=self.metadata,
+                recorded_lr=checkpoint.meta.lr,
+                clip_grad_norm=clip,
+                on_step_mismatch=on_step_mismatch,
+                context=checkpoint.identifier,
+            )
+            return dataclasses.replace(
+                update,
+                update_batch=checkpoint.batch_a,
+                next_weights=self._next_weights(checkpoint) if realized else None,
+            )
+
+        return build
+
+    def _next_weights(self, checkpoint: LocalBundleCheckpoint) -> Callable[[], ModelBundle] | None:
+        """A loader for ``theta_{t+1}``, or ``None`` when it must not be used.
+
+        ``None`` without a word when the bundle holds no step ``t + 1``; ``None``
+        with a ``UserWarning`` when it does but the two sets of weights the
+        analyzer would compare are rounded: one of the weight files is stored
+        narrower than fp32, or this source loads the weights narrower than fp32
+        (``dtype="bf16"`` / ``"fp16"``), which rounds unrounded files in memory.
+        """
+        step = checkpoint.step + 1
+        path = self._step_dirs.get(step)
+        if path is None or not (path / CHECKPOINT_WEIGHTS_FILE).is_file():
+            return None
+        narrow = {
+            f"step {c_step}": sorted(dtypes - _EXACT_WEIGHT_DTYPES)
+            for c_step, c_path in ((checkpoint.step, checkpoint.path), (step, path))
+            if (
+                dtypes := _stored_weight_dtypes(c_path / CHECKPOINT_WEIGHTS_FILE, self.layout.names)
+            )
+            - _EXACT_WEIGHT_DTYPES
+        }
+        reasons = []
+        if narrow:
+            reasons.append(f"the weight files are stored as {narrow}")
+        if self.torch_dtype not in _EXACT_LOADER_DTYPES:
+            reasons.append(
+                f'the source was opened with dtype="{self.dtype}", which rounds the weights '
+                "when they are loaded"
+            )
+        if reasons:
+            warnings.warn(
+                f"{checkpoint.identifier}: the bundle holds step {step} as well, but "
+                f"{' and '.join(reasons)}. The analyzer would then compare two rounded "
+                "thetas, and the difference of two rounded thetas is dominated by the "
+                "rounding early in training, so the realized loss change and its residual "
+                "(loss_change_first_order_weights, loss_change, loss_change_residual) are SKIPPED "
+                "for this checkpoint. They need fp32 weight files, loaded with "
+                'dtype="fp32". The loss_change_first_order* rows built from the optimizer state '
+                "are still reported.",
+                UserWarning,
+                stacklevel=3,
+            )
+            return None
+        if step in self.steps:
+            successor = self.checkpoint_for(step)
+        else:
+            # Not among the selected steps: a handle of its own, dropped with the
+            # closure once the analyzer is done with this checkpoint.
+            successor = LocalBundleCheckpoint(self, path, step)
+        return lambda: successor.model_bundle
 
     def build_model(self) -> nn.Module:
         """Instantiate a fresh, un-initialized-by-us model via the factory."""
@@ -1671,6 +1929,370 @@ def _cross_check_adamw_hparams(
             UserWarning,
             stacklevel=3,
         )
+
+
+# ------------------------------------------------------------ update response
+
+
+def _resolve_clip_grad_norm(
+    metadata: BundleMetadata, clip_grad_norm: float | str | None
+) -> float | None:
+    """The global-norm clipping threshold of the run, or ``None`` for "not clipped".
+
+    Clipping rescales the gradient before the optimizer sees it and leaves no
+    trace in the optimizer state, so it has to be *stated* — by the bundle's
+    ``metadata.json`` or by the caller — and is never assumed either way.
+    See :meth:`LocalBundleSource.update_response`.
+    """
+    where = f"{metadata.path}: " if metadata.path is not None else ""
+    has_key = "gradient_clip_val" in metadata
+    recorded = metadata.get("gradient_clip_val")
+    algorithm = metadata.get("gradient_clip_algorithm")
+    if recorded is not None and (
+        isinstance(recorded, bool) or not isinstance(recorded, (int, float))
+    ):
+        raise BundleSchemaError(
+            f"{where}'gradient_clip_val' must be a number or null, got {recorded!r}"
+        )
+    if recorded is not None and not (math.isfinite(recorded) and recorded >= 0):
+        raise BundleSchemaError(
+            f"{where}'gradient_clip_val' must be a finite number >= 0 or null, got {recorded!r}"
+        )
+    if algorithm is not None and algorithm not in ("norm", "value"):
+        raise BundleSchemaError(
+            f"{where}'gradient_clip_algorithm' must be 'norm', 'value' or absent, got {algorithm!r}"
+        )
+    recorded_norm = float(recorded) if recorded else None  # null and 0 both mean "off"
+
+    if isinstance(clip_grad_norm, str):
+        if clip_grad_norm != CLIP_FROM_METADATA:
+            raise ValueError(
+                f"clip_grad_norm must be {CLIP_FROM_METADATA!r}, None or a positive number, "
+                f"got {clip_grad_norm!r}"
+            )
+        if not has_key:
+            raise BundleSchemaError(
+                f"{where}no 'gradient_clip_val' is recorded, so the bundle does not say "
+                "whether the gradient was clipped before the optimizer saw it. Clipping "
+                "leaves no trace in the saved optimizer state and changes every "
+                "loss_change_first_order* row, so it is not assumed either way: pass "
+                "clip_grad_norm=None if the run did not clip, or clip_grad_norm=<max norm> "
+                "if it clipped the global gradient norm (torch.nn.utils.clip_grad_norm_ "
+                "over all parameters)."
+            )
+        if recorded_norm is None:
+            return None
+        if algorithm == "norm":
+            return recorded_norm
+        if algorithm == "value":
+            raise BundleSchemaError(
+                f"{where}the run clipped gradients by value (gradient_clip_algorithm = "
+                f"'value', gradient_clip_val = {recorded}). Only global-norm clipping is "
+                "implemented for the update response."
+            )
+        raise BundleSchemaError(
+            f"{where}'gradient_clip_val' is {recorded} but no 'gradient_clip_algorithm' is "
+            "recorded, so the bundle does not say HOW the gradient was clipped. If it was "
+            "the global gradient norm (torch.nn.utils.clip_grad_norm_ over all parameters, "
+            f"also Lightning's default), pass clip_grad_norm={recorded}; clipping by value "
+            "is not implemented."
+        )
+
+    if clip_grad_norm is None:
+        if recorded_norm is not None:
+            raise ValueError(
+                f"{where}clip_grad_norm=None says the run did not clip, but metadata.json "
+                f"records gradient_clip_val = {recorded}. Pass clip_grad_norm={recorded} "
+                "(global-norm clipping) or correct the metadata."
+            )
+        return None
+    if isinstance(clip_grad_norm, bool) or not isinstance(clip_grad_norm, (int, float)):
+        raise ValueError(
+            f"clip_grad_norm must be {CLIP_FROM_METADATA!r}, None or a positive number, got "
+            f"{clip_grad_norm!r}"
+        )
+    stated = float(clip_grad_norm)
+    if not (math.isfinite(stated) and stated > 0.0):
+        raise ValueError(f"clip_grad_norm must be a finite positive number, got {clip_grad_norm}")
+    if has_key and recorded_norm is None:
+        raise ValueError(
+            f"{where}clip_grad_norm={stated} says the run clipped, but metadata.json "
+            f"records gradient_clip_val = {recorded!r} (not clipped)."
+        )
+    if recorded_norm is not None and recorded_norm != stated:
+        raise ValueError(
+            f"{where}clip_grad_norm={stated} contradicts the recorded gradient_clip_val = "
+            f"{recorded}."
+        )
+    if algorithm == "value":
+        raise ValueError(
+            f"{where}clip_grad_norm={stated} states global-norm clipping, but metadata.json "
+            "records gradient_clip_algorithm = 'value'."
+        )
+    return stated
+
+
+def optimizer_update_from_state(
+    state: OptimizerStateView,
+    *,
+    checkpoint_step: int | None = None,
+    metadata: BundleMetadata | None = None,
+    recorded_lr: float | None = None,
+    clip_grad_norm: float | None = None,
+    on_step_mismatch: str = "raise",
+    context: str = "optimizer state",
+) -> OptimizerUpdate:
+    """Turn one saved (pre-step) optimizer state into the update rule of that step.
+
+    The plumbing half of the ``loss_change_first_order*`` rows; the math is
+    :class:`vatis.core.update_response.OptimizerUpdate`. Hyper-parameters are
+    read per parameter from the saved ``param_groups`` (what the optimizer ran
+    with), never from ``metadata.json``; the metadata's optimizer name is only a
+    cross-check, and the tie-breaker for one question the groups of an old
+    torch cannot answer (see below).
+
+    Args:
+        state: the saved optimizer state.
+        checkpoint_step: the checkpoint directory's step, compared with the
+            state's own notion of how many updates were applied.
+        metadata: the bundle's ``metadata.json``.
+        recorded_lr: the checkpoint's ``meta.json`` ``lr``; when every group has
+            the same saved ``lr`` the two must agree.
+        clip_grad_norm: global-norm clipping threshold, already resolved
+            (``None`` = not clipped).
+        on_step_mismatch: ``"raise"`` or ``"warn"``.
+        context: prefix of every message (the checkpoint identifier).
+
+    Raises:
+        BundleSchemaError: an optimizer other than Adam / AdamW / SGD (judged by
+            the saved groups, and by ``metadata.json``'s name when there is
+            one), a state that has moments for some parameters only, a state
+            without a step counter, a step or learning-rate mismatch.
+        ValueError: ``amsgrad=True`` or ``maximize=True`` in any group, a group
+            that lacks a hyper-parameter, or an Adam-family group with non-zero
+            weight decay for which neither the group (its
+            ``decoupled_weight_decay`` entry) nor ``metadata.json`` says whether
+            the decay was decoupled.
+    """
+    _check_step_mismatch_policy(on_step_mismatch)
+    family = _optimizer_family(state)
+    recorded_name = None if metadata is None else metadata.optimizer_name
+    if family is None:
+        group_keys = sorted({key for group in state.param_groups for key in group} - {"params"})
+        raise BundleSchemaError(
+            f"{context}: the update response is implemented for torch.optim.Adam, AdamW "
+            f"and SGD, and the saved param_groups are none of these (metadata.json names "
+            f"{recorded_name!r}; hyper-parameter keys: {group_keys}). RAdam, NAdam, Adamax, "
+            "RMSprop and the others apply a different update; no rows rather than rows "
+            "from the wrong formula."
+        )
+    allowed = _ADAM_FAMILY if family == "adam" else frozenset({"sgd"})
+    if recorded_name is not None and recorded_name.lower() not in allowed:
+        raise BundleSchemaError(
+            f"{context}: the saved param_groups are those of "
+            f"{'Adam / AdamW' if family == 'adam' else 'SGD'} but metadata.json names the "
+            f"optimizer {recorded_name!r}; the bundle's metadata and its optimizer state do "
+            "not belong together."
+        )
+    groups = state.group_of_parameter()
+    for flag, why in (
+        ("amsgrad", "AMSGrad divides by max_exp_avg_sq, which the Adam formula does not use"),
+        ("maximize", "the step ascends the gradient; that sign convention is not implemented"),
+    ):
+        flagged = [i for i, g in enumerate(state.param_groups) if bool(g.get(flag, False))]
+        if flagged:
+            raise ValueError(
+                f"{context}: saved param_groups {flagged} have {flag}=True ({why}). "
+                "Refusing rather than reporting a plausible wrong number."
+            )
+
+    def hyper(group: Mapping[str, Any], key: str) -> Any:
+        if group.get(key) is None:
+            raise ValueError(
+                f"{context}: a saved param_group has no {key!r}; the update cannot be "
+                "rebuilt without it"
+            )
+        return group[key]
+
+    rates = {_rate_key(g.get("lr")) for g in state.param_groups}
+    if recorded_lr is not None and len(rates) == 1:
+        saved_lr = float(hyper(state.param_groups[0], "lr"))
+        if abs(saved_lr - recorded_lr) > _LR_RTOL * max(abs(saved_lr), abs(recorded_lr)):
+            raise BundleSchemaError(
+                f"{context}: the saved optimizer state holds lr = {saved_lr!r} but the "
+                f"checkpoint's meta.json records lr = {recorded_lr!r}. Under pre-step "
+                "semantics both are the learning rate this step applies; a difference "
+                "means one of them is not (a scheduler stepped between the two writes, or "
+                "the state and the checkpoint do not belong together), and every "
+                "loss_change_first_order* row is proportional to it."
+            )
+
+    hypers: list[AdamHyper] | list[SGDHyper]
+    first: list[torch.Tensor | None] | None
+    second: list[torch.Tensor] | None = None
+    if family == "adam":
+        adam_hypers: list[AdamHyper] = []
+        decoupled_flags: set[bool] = set()
+        for group in groups:
+            betas = hyper(group, "betas")
+            if isinstance(betas, (str, bytes)) or not isinstance(betas, Sequence) or len(betas) < 2:
+                raise ValueError(f"{context}: 'betas' is not a (beta1, beta2) pair: {betas!r}")
+            weight_decay = float(hyper(group, "weight_decay"))
+            decoupled = _decoupled_weight_decay(group, weight_decay, recorded_name, context)
+            if weight_decay != 0.0:
+                decoupled_flags.add(decoupled)
+            adam_hypers.append(
+                AdamHyper(
+                    lr=float(hyper(group, "lr")),
+                    beta1=float(betas[0]),
+                    beta2=float(betas[1]),
+                    eps=float(hyper(group, "eps")),
+                    weight_decay=weight_decay,
+                    decoupled_weight_decay=decoupled,
+                )
+            )
+        hypers = adam_hypers
+        has_first, has_second = state.has_state("exp_avg"), state.has_state("exp_avg_sq")
+        if state.is_empty:
+            step = 0
+            first = None
+        elif not (has_first and has_second):
+            raise BundleSchemaError(
+                f"{context}: the saved optimizer state has 'exp_avg' / 'exp_avg_sq' for some "
+                "parameters but not for all (present keys: "
+                f"{state.state_keys()}). torch keeps no state for a parameter that never "
+                "received a gradient, and whether it receives one at this step — and is "
+                "then decayed — cannot be told from the bundle. Exclude it from the "
+                "bundle's parameter list."
+            )
+        else:
+            counter = state.step_count
+            if counter is None:
+                raise BundleSchemaError(
+                    f"{context}: the saved optimizer state has no 'step' counter, so the "
+                    "bias corrections of the step cannot be formed. Refusing to guess."
+                )
+            step = counter
+            first = state.parameter_states("exp_avg")
+            second = [t for t in state.parameter_states("exp_avg_sq") if t is not None]
+        applied = f"has applied {step} update(s)"
+        mismatch = checkpoint_step is not None and step != checkpoint_step
+        # "adam" when the decay is coupled, or when there is none and the bundle
+        # names Adam; "adamw" otherwise (with zero decay the two rules coincide).
+        named_adam = not decoupled_flags and (recorded_name or "").lower() == "adam"
+        descriptor = "adam_update" if decoupled_flags == {False} or named_adam else "adamw_update"
+    else:
+        sgd_hypers = [
+            SGDHyper(
+                lr=float(hyper(group, "lr")),
+                momentum=float(hyper(group, "momentum")),
+                dampening=float(hyper(group, "dampening")),
+                weight_decay=float(hyper(group, "weight_decay")),
+                nesterov=bool(hyper(group, "nesterov")),
+            )
+            for group in groups
+        ]
+        hypers = sgd_hypers
+        buffers = state.parameter_states("momentum_buffer")
+        with_momentum = [i for i, h in enumerate(sgd_hypers) if h.momentum != 0.0]
+        have = [i for i in with_momentum if buffers[i] is not None]
+        if have and len(have) != len(with_momentum):
+            raise BundleSchemaError(
+                f"{context}: {len(have)} of the {len(with_momentum)} parameters updated "
+                "with momentum have a momentum buffer and the others have none. torch "
+                "creates the buffer at a parameter's first gradient, so some parameter "
+                "never received one, and whether it does at this step cannot be told from "
+                "the bundle. Exclude it from the bundle's parameter list."
+            )
+        first = buffers if have else None
+        step = 0
+        applied = (
+            "holds momentum buffers, so at least one update was applied"
+            if have
+            else "holds no momentum buffer, so no update was applied yet"
+        )
+        mismatch = (
+            checkpoint_step is not None
+            and bool(with_momentum)
+            and (bool(have) != (checkpoint_step > 0))
+        )
+        descriptor = "sgd_update"
+
+    if mismatch:
+        message = (
+            f"{context}: the saved optimizer state {applied}, but the checkpoint "
+            f"directory says step {checkpoint_step}. Under pre-step semantics the two "
+            "must agree; a mismatch means the optimizer state and the weights may not "
+            "belong together."
+        )
+        if on_step_mismatch == "raise":
+            raise BundleSchemaError(
+                f"{message} Refusing to rebuild the update from it. If only the step was "
+                'stored wrongly, pass on_step_mismatch="warn" to use the saved state as it is.'
+            )
+        warnings.warn(f"{message} The saved state is used as it is.", UserWarning, stacklevel=2)
+
+    return OptimizerUpdate(
+        family=ADAM_FAMILY if family == "adam" else SGD_FAMILY,
+        hypers=hypers,
+        step=step,
+        first_moment=first,
+        second_moment=second,
+        clip_grad_norm=clip_grad_norm,
+        descriptor=descriptor,
+    )
+
+
+def _decoupled_weight_decay(
+    group: Mapping[str, Any],
+    weight_decay: float,
+    recorded_name: str | None,
+    context: str,
+) -> bool:
+    """Whether an Adam-family group applies its weight decay decoupled (AdamW).
+
+    Recent torch saves the answer in the group (``decoupled_weight_decay``;
+    present in the groups written by torch 2.9 and 2.10). A group without that
+    entry does not say whether it belonged to ``Adam`` or ``AdamW``; then
+    ``metadata.json``'s optimizer name decides, and without one a non-zero
+    decay is refused. With zero decay the two coincide and the answer is moot.
+    """
+    flag = group.get("decoupled_weight_decay")
+    if flag is not None:
+        return bool(flag)
+    if weight_decay == 0.0:
+        return True
+    name = (recorded_name or "").lower()
+    if name == "adamw":
+        return True
+    if name == "adam":
+        return False
+    raise ValueError(
+        f"{context}: a saved param_group has weight_decay = {weight_decay} but neither the "
+        "group (no 'decoupled_weight_decay' entry; older torch versions do not save one) nor "
+        "metadata.json (no optimizer name) says whether the optimizer was Adam (decay "
+        "added to the gradient) or AdamW (decoupled decay). The two give different "
+        "updates; record the optimizer name in metadata.json."
+    )
+
+
+def _stored_weight_dtypes(path: Path, names: Sequence[str]) -> set[str]:
+    """The safetensors dtype tags (``"F32"``, ``"BF16"``, ...) of ``names`` in ``path``.
+
+    Read from the file header only, so no tensor is loaded.
+    """
+    with path.open("rb") as handle:
+        size = int.from_bytes(handle.read(8), "little")
+        try:
+            header = json.loads(handle.read(size))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise BundleSchemaError(f"{path}: not a safetensors file ({exc})") from exc
+    missing = [name for name in names if name not in header]
+    if missing:
+        raise LayoutMismatchError(
+            f"{path}: no weights for canonical parameter(s) {_abbrev(missing)}"
+        )
+    return {str(header[name]["dtype"]) for name in names}
 
 
 def resolve_model_factory(spec: ModelFactorySpec) -> ModelFactory:
