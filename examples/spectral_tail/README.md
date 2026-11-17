@@ -45,6 +45,13 @@ Doing (2) first is the more cautious path: if a simpler feature doesn't produce 
 
 Code: `examples/spectral_tail_experiment.py` (compute), `examples/spectral_tail_evaluate.py` (plots).
 Results: `examples/spectral_tail/results_pythia-{14m,31m,70m,160m,410m}.parquet`.
+These files and the figures are from April 2026 and were not regenerated since:
+they have the original eleven result columns only, and their `chi_net` /
+`chi_pos` values come from the Hutchinson probe draw of that time, so a re-run
+with the current code gives a different draw of those two (same estimator, same
+expectation), while `chi_loss` and `delta_loss` would agree up to floating-point
+rounding. A faithful re-run means downloading 13 checkpoints of each of the five
+models, about 34 GB.
 Figures: `examples/spectral_tail/figures/`.
 Key plots: `figures/chi_pos_signal_vs_controls_pythia-410m.png`, `figures/chi_pos_cross_scale_python_x_cpp.png`.
 

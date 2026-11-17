@@ -93,6 +93,14 @@ model fit a single ~93 GiB GPU; the rationale is what you adapt for your own mod
 
 ## Resources (measured: 1× H100, ~93 GiB)
 
+The figures and numbers below are from a June 2026 run with the code of that
+time and have not been re-run since (a 7B model on an H100 is out of reach
+here). With the current code, `chi_net` and `chi_pos` for the same seed would be
+a different Hutchinson draw (the probes are drawn on the CPU now, see
+`CHANGELOG.md`), `chi_loss` and `delta_loss` should be unchanged (the changelog
+says so for unchanged inputs; not checked on this example), and drawing the
+probes on the CPU may add time that the wall-clock figures below do not include.
+
 From `resources.json` / `gpu_activity.png` for the shipped config (code +
 English self-pairs **plus** the cross pair, `seq_len=1024`):
 

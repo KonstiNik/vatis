@@ -65,6 +65,14 @@ subdirectory (CPU-only; needs `vatis[examples]` for matplotlib).
   variate gives lower variance than plain `hutchinson` at the same
   `n_hutchinson`, most visibly in the high-`χ_pos` regime.
 
+> The `single_gpu/` and `ddp_scaling/` results were measured in June 2026 with
+> the code of that time and have not been re-run since (no A100s here). Today
+> `chi_net` and `chi_pos` for the same seed are a different Hutchinson draw (the
+> probes are drawn on the CPU now, and every DDP rank beyond the first has its
+> own probe stream; see `CHANGELOG.md`), while `chi_loss` and `delta_loss` are
+> unchanged; the timings may differ as well, since drawing the probes on the
+> CPU may cost time that the June runs did not spend.
+>
 > Numbers are hardware-specific and meant as orientation, not guarantees. For a
 > consumer-GPU smoke check and the end-to-end deployment-example findings, see
 > [`../BENCHMARK.md`](../BENCHMARK.md).
