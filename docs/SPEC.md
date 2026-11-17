@@ -323,7 +323,7 @@ Cost: `n_h` backwards per micro-batch. Variance is `~B×` higher per draw than t
 per-sequence path. **When to use:** large `B` (≥ 32), or when other methods don't
 apply. This is the always-works fallback.
 
-#### Method 2: `PerSequenceControlVariateEstimator` (default for small `B`)
+#### Method 2: `PerSequenceControlVariateEstimator` (opt-in)
 
 For each sequence `b`, do **one extra backward** of `L_b` (per-sequence loss)
 w.r.t. `θ`. This gives `g_b = J_bᵀ u_b` where `u_b = ∇_f L_b` is known in closed
@@ -338,12 +338,14 @@ form. From `(g_b, u_b)`:
 These are used as a **control variate** for the Hutchinson estimate of
 `Tr(M_b)`: the loss-direction projection is correlated with the trace, known
 exactly, has zero variance; subtracting its noisy Hutchinson counterpart and
-adding back the exact value reduces total variance — substantially in the
-high-`χ_pos` regime.
+adding back the exact value is meant to reduce the total variance when the loss
+direction overlaps the top eigenmodes of `M_b` (the high-`χ_pos` regime).
+
+In the measurements made so far it has not lowered the variance: in the committed accuracy sweep (`examples/benchmark/accuracy/accuracy_pythia-14m.json`: Pythia-14m, `B = 8`, 100 seeds per setting) the two estimators have the same spread at every `n_hutchinson` from 1 to 64, and the comparisons on the small test models agree. `χ_pos` is tiny in that sweep; the high-`χ_pos` regime, where the control variate is expected to help, has not been measured.
 
 Cost per `(ckpt, batch)`: `n_h + B` backwards. Linear in `B`, so unattractive
-for `B > ~64`. **When to use:** moderate `B` (≤ 32), or when the per-sample
-alignment matrix is wanted.
+for `B > ~64`. **When to use:** when the per-sample alignment matrix is wanted.
+It is not selected by default (see "Default estimator").
 
 #### Method 3: `OpacusEstimator` (opt-in fast path)
 
@@ -353,18 +355,20 @@ packing `B` samples per pass. Falls back with a clear error on tied embeddings
 (Pythia!), unsupported layers, or in-place ops.
 
 **Status:** stub only — `vatis/core/chi_net/opacus.py` raises
-`NotImplementedError`. Not yet implemented; never auto-selected.
+`NotImplementedError`. Not yet implemented; never selected by default.
 
-#### Auto-selection rule
+#### Default estimator
 
 ```python
 def select_chi_net_method(B_total: int, requested: str | None) -> str:
     if requested is not None:
         return requested  # user override always wins
-    if B_total <= 32:
-        return "per_sequence_cv"
     return "hutchinson"
 ```
+
+Through 0.2.x a batch of at most 32 sequences selected `per_sequence_cv`. It
+costs `B` extra backwards and has not shown a lower variance (see Method 2), so
+the default is `hutchinson` at every batch size.
 
 #### `micro_batch_size` is a noise setting, not only a memory setting
 
@@ -460,7 +464,7 @@ vatis/
 │   ├── chi_net/
 │   │   ├── base.py        # ChiNetEstimator ABC
 │   │   ├── hutchinson.py  # HutchinsonEstimator (always-works fallback)
-│   │   ├── per_seq_cv.py  # PerSequenceControlVariateEstimator (default for small B)
+│   │   ├── per_seq_cv.py  # PerSequenceControlVariateEstimator (opt-in)
 │   │   └── opacus.py      # OpacusEstimator (stub)
 │   ├── probes.py          # Rademacher / Gaussian probe vector generation, masking
 │   ├── param_layout.py    # ParameterLayout: the canonical parameter flattening order
@@ -525,7 +529,7 @@ results = analyze(
     },
     observables=None,                           # None = all raw (+ all P if a preconditioner is set)
     preconditioner=None,                        # None | "identity" | Preconditioner | fn(ckpt_id) -> P | None
-    chi_net_method=None,                        # None = auto: per_seq_cv if B≤32 else hutchinson
+    chi_net_method=None,                        # None = hutchinson
     n_hutchinson=32,                            # interpretation depends on method
     hutchinson_distribution="rademacher",       # or "gaussian"
     micro_batch_size=1,                         # least memory AND least noise; raising it raises χ_net variance

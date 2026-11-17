@@ -78,7 +78,7 @@ Total fixed cost per `(checkpoint, eval-batch-pair)`: **2 backwards** (or 1 for 
 
 ### `χ_net` estimation: three methods
 
-`χ_net = Σ_b Tr(M_b)` where `M_b = J_b J_bᵀ` and `J_b = ∇_θ f(x_b)` is the per-sequence Jacobian. This is **the only expensive observable**, and the reason vatis exists. We support three methods, selected by the user (or auto-picked based on batch size and model compatibility). They share the same outer loop and produce the same observable; they differ only in *how* `Tr(M_b)` is estimated.
+`χ_net = Σ_b Tr(M_b)` where `M_b = J_b J_bᵀ` and `J_b = ∇_θ f(x_b)` is the per-sequence Jacobian. This is **the only expensive observable**, and the reason vatis exists. We support three methods, selected by the user (default: `hutchinson`). They share the same outer loop and produce the same observable; they differ only in *how* `Tr(M_b)` is estimated.
 
 Both live methods also produce `chi_net_P` when `compute(..., preconditioner=P)` is given, in the **same pass and from the same probes** (`ChiNetResult.chi_net_p`) — the P estimate needs no extra backward, because everywhere the raw path takes `‖g‖²` of a VJP or a per-sample gradient the P path takes `‖P^{1/2} g‖²`. Raw values are bit-identical with and without a `P`. `opacus` stays a stub and has no P path.
 
@@ -101,14 +101,14 @@ Preconditioned: `Tr(J P Jᵀ) = E_z ‖P^{1/2}(Jᵀz)‖²`, so the accumulator 
 
 **When to use:** large `B` (≥ 32), or when other methods don't apply. This is the always-works fallback.
 
-#### Method 2: `PerSequenceControlVariateEstimator` (default for small `B`)
+#### Method 2: `PerSequenceControlVariateEstimator` (opt-in)
 
 For each sequence `b`, do **one extra backward** of `L_b` (per-sequence loss) w.r.t. `θ`. This gives `g_b = J_bᵀ u_b` where `u_b = ∇_f L_b` is known in closed form. From `(g_b, u_b)` we get exactly:
 
 - `‖g_b‖²` — a Rayleigh quotient of `M_b` along the loss direction (free, deterministic).
 - `⟨g_b, g_{b'}⟩` for all `b, b'` — the cross-sample alignment matrix, a bonus observable.
 
-These are used as a **control variate** for the Hutchinson estimate of `Tr(M_b)`: the loss-direction projection is correlated with the trace, known exactly, has zero variance, and subtracting its noisy Hutchinson counterpart and adding back the exact value reduces total variance — substantially when the loss direction overlaps the top eigenmodes of `M_b`, which is exactly the high-`χ_pos` regime we care about.
+These are used as a **control variate** for the Hutchinson estimate of `Tr(M_b)`: the loss-direction projection is correlated with the trace, known exactly, has zero variance, and subtracting its noisy Hutchinson counterpart and adding back the exact value is meant to reduce the total variance when the loss direction overlaps the top eigenmodes of `M_b`, which is the high-`χ_pos` regime we care about. In the measurements made so far it has not lowered the variance: in the committed accuracy sweep (`examples/benchmark/accuracy/accuracy_pythia-14m.json`: Pythia-14m, `B = 8`, 100 seeds per setting) the two estimators have the same spread at every `n_hutchinson` from 1 to 64, and the comparisons on the small test models agree. `χ_pos` is tiny in that sweep; the high-`χ_pos` regime, where the control variate is expected to help, has not been measured. Do not describe it as lower-variance without a measurement that shows it.
 
 Cost per (ckpt, batch): `n_h + B` backwards. Linear in `B`, so this method becomes unattractive for `B > ~64`.
 
@@ -116,7 +116,7 @@ Preconditioned: the decomposition carries over term by term — `Tr(Π J P Jᵀ)
 
 **Bonus output:** the cross-sample alignment matrix `C_{bb'} = ⟨g_b, g_{b'}⟩` is available opt-in via `compute_alignment_matrix=True` (returned in `ChiNetResult.extras`; the analyzer does **not** enable it or write it to the sink by default). It's exactly the eNTK projected onto the loss direction, sample-resolved. Useful for sample-level variance / interference analysis (the negative-`χ_pos` regime; see the paper, arXiv:2605.31244 §A.2).
 
-**When to use:** moderate `B` (≤ 32), or when the user wants the per-sample alignment matrix.
+**When to use:** when the user wants the per-sample alignment matrix. It is opt-in; the default is `hutchinson` (owner decision 2026-11-17).
 
 #### Method 3: `OpacusEstimator` (opt-in fast path, deferred to v1.2)
 
@@ -126,18 +126,16 @@ Cost: `~n_h` backwards, where `n_h` is `~10–32`. Requires layer-compatibility 
 
 **Status:** stub only in v1 and v1.1 — `vatis/core/chi_net/opacus.py` raises `NotImplementedError`. Originally listed as "v1.1 work" but the v1.1 hardening pass focused on trust and demonstrability instead of features. Full implementation is not yet done. When implemented, follow the pattern from `perspic/calculator/samplewise_opacus.py`.
 
-#### Auto-selection rule
+#### Default estimator
 
 ```python
 def select_chi_net_method(B_total: int, requested: str | None) -> str:
     if requested is not None:
         return requested  # user override always wins
-    if B_total <= 32:
-        return "per_sequence_cv"
     return "hutchinson"
 ```
 
-`opacus` is never auto-selected in v1.
+Through 0.2.x a batch of at most 32 sequences selected `per_sequence_cv`; the default is now `hutchinson` at every batch size (owner decision 2026-11-17), because the control variate costs `B` extra backwards and has not shown a lower variance. `opacus` and `per_sequence_cv` are used only when requested.
 
 ### Compute scaling
 
@@ -176,7 +174,7 @@ Reference point from the v1.1 deployment example. All numbers use fp32 forward, 
 | hutchinson        | 128 |  4 |  0.96 |     567 | n_h plateau on this fixture           |
 | per_sequence_cv   |  32 |  4 |  0.22 |    1194 | matches hutchinson at this B          |
 | hutchinson        |  32 |  8 |  0.32 |     885 |                                       |
-| per_sequence_cv   |  32 |  8 |  0.35 |    1875 | the example's auto-pick (B≤32)        |
+| per_sequence_cv   |  32 |  8 |  0.35 |    1875 | what the deployment example requests  |
 | hutchinson        |  32 | 16 |  0.38 |    1529 |                                       |
 | per_sequence_cv   |  32 | 16 |  0.64 |    3280 | per-sample grad cache visible here    |
 
@@ -199,7 +197,7 @@ There is **one** observable, computed at token granularity, normalized by the nu
 
 ## Scope (v1 / v1.1, current)
 
-- **In:** HuggingFace causal-LM checkpoints (Pythia, OLMo, GPT-NeoX class). Native **checkpoint bundles** written by our own training runs (`load_local_bundle`, see "Native checkpoint bundles" below). Tokenized data already in model-ready form. DDP across user-specified `num_gpus`. Two `χ_net` estimators (`hutchinson`, `per_sequence_cv`) with auto-selection. The **preconditioned observables** (`chi_pos_P`) (diagonal `P`; `none`/`identity`/`explicit`/`adamw` sources) alongside the raw one. Parquet result sink (canonical) plus optional W&B and TensorBoard. CLI via `python -m vatis run …` that wraps `torchrun`. End-to-end deployment example on `pythia-14m` with cross-pair observables (added in v1.1).
+- **In:** HuggingFace causal-LM checkpoints (Pythia, OLMo, GPT-NeoX class). Native **checkpoint bundles** written by our own training runs (`load_local_bundle`, see "Native checkpoint bundles" below). Tokenized data already in model-ready form. DDP across user-specified `num_gpus`. Two `χ_net` estimators (`hutchinson`, the default, and the opt-in `per_sequence_cv`). The **preconditioned observables** (`chi_pos_P`) (diagonal `P`; `none`/`identity`/`explicit`/`adamw` sources) alongside the raw one. Parquet result sink (canonical) plus optional W&B and TensorBoard. CLI via `python -m vatis run …` that wraps `torchrun`. End-to-end deployment example on `pythia-14m` with cross-pair observables (added in v1.1).
 - **Out (current):** Tokenization (the example tokenizes inline; vatis core does not provide a tokenizer). Checkpoint discovery / sweep scheduling. FSDP. Tensor / pipeline parallelism. `OpacusEstimator` (stub only — full implementation deferred to v1.2). Custom non-CE losses for `chi_loss` (deferred to v1.2). Per-sample variance observables beyond the cross-sample alignment matrix. Models that don't fit on one GPU. **Non-diagonal `P`** (Muon's orthogonalization) — out of scope for WP0 and deliberately not designed for; momentum inclusion in `P`.
 
 Adding any of these later should be straightforward because the core (`vatis/core/`) is decoupled from model loading, data plumbing, and parallelism. Those items are tracked as future work.
@@ -214,7 +212,7 @@ vatis/
 │   ├── chi_net/
 │   │   ├── base.py        # ChiNetEstimator ABC
 │   │   ├── hutchinson.py  # HutchinsonEstimator (always-works fallback)
-│   │   ├── per_seq_cv.py  # PerSequenceControlVariateEstimator (default for small B)
+│   │   ├── per_seq_cv.py  # PerSequenceControlVariateEstimator (opt-in)
 │   │   └── opacus.py      # OpacusEstimator (stub in v1; full impl deferred to v1.2)
 │   ├── probes.py          # Rademacher / Gaussian probe vector generation, masking
 │   ├── param_layout.py    # ParameterLayout: THE canonical parameter flattening order
@@ -288,7 +286,7 @@ results = analyze(
     },
     observables=None,                           # None = all raw (+ all P if a preconditioner is set)
     preconditioner=None,                        # None | "identity" | Preconditioner | fn(ckpt_id)->P|None
-    chi_net_method=None,                        # None = auto: per_seq_cv if B≤32 else hutchinson
+    chi_net_method=None,                        # None = hutchinson
     n_hutchinson=32,                            # interpretation depends on method
     hutchinson_distribution="rademacher",       # or "gaussian"
     micro_batch_size=1,                         # safe default; user can grow it
@@ -395,7 +393,7 @@ There is deliberately no `chi_net_P_normalized` row: it is `chi_net_P / sqrt(n_v
 
 ### Probe vector details
 
-- Default `n_hutchinson=32`, Rademacher distribution. Variance scales as `1/n`. For `HutchinsonEstimator` the effective variance is `~B×` higher per draw, so the auto-selection uses `per_sequence_cv` for small `B`.
+- Default `n_hutchinson=32`, Rademacher distribution. Variance scales as `1/n`. `hutchinson` is the default estimator at every batch size; `per_sequence_cv` is opt-in (see "Default estimator").
 - **Probes are drawn on the CPU and copied to the target device**, so a seed identifies one probe set on every device. This matters: `torch.Generator("cpu")` and `torch.Generator("cuda")` yield *different* sequences from the same seed, and while probes were drawn on-device a CPU reference run and a GPU production run of the same `analyze()` call agreed on `chi_net` only to within the Hutchinson noise floor (~4e-2 relative at `n_h = 400`, growing as `1/√n_h`) even though every deterministic observable agreed to ~5e-08 — and the `hutchinson_seed` column could not tell the two apart. `make_probe` therefore **refuses a CUDA generator** rather than ignoring it.
 - **The Rademacher draw is bit-packed, and it has to be.** A Rademacher entry needs one random bit; a uniform `uint8` supplies eight. `make_probe` draws `ceil(N/8)` bytes on the CPU, ships 1/8 as many bytes, and unpacks on the device. Measured on the WP0 example's probe shape `(8, 512, 4096)` (16.8M entries, RTX 3090 Ti): on-device draw 0.69 ms/probe, naive CPU `int64`→fp32→H2D **125 ms**, CPU `uint8`→H2D→expand 44 ms, **packed 11.85 ms**. The naive CPU draw cost 3.5× end-to-end on the example (4.13 s → 14.55 s mean analysis per checkpoint) and would have made the 8B production target infeasible; packed it is ~26% (≈1.1 s per checkpoint against ≈4.1 s of backwards). Bit `k` of a uniform byte is an independent fair coin, so the distribution is exactly Rademacher — `tests/unit/test_probes.py` asserts no per-bit-position bias, which is the failure a packing/shift bug would produce while leaving the overall mean looking fine. `gaussian` probes cannot be packed and take the plain CPU draw; they are not the default.
 - Probe streams are **per rank** within one `(checkpoint, batch)` call, and different across calls. The per-call seed (`_per_call_seed`: SHA-256 of `seed`, the checkpoint id and the batch name, reduced modulo `2³¹ − 1` — the `hutchinson_seed` column, on every rank) seeds rank 0, and therefore every single-process run, directly; rank `r > 0` seeds its generator with `_rank_probe_seed` = `sha256("{hutchinson_seed}|rank={r}")`, reduced the same way. So `seed`, checkpoint id, batch name, rank and world size determine every probe (a run is reproducible), and each rank still draws a *full* probe for **its own shard** — ranks do not partition one global probe, so the multi-rank `chi_net` / `chi_pos` / `_P` values are a different unbiased estimate from the single-process ones and **depend on the number of ranks** as well as on the seed. **The variance depends on the micro-batch cut, not only on the probe count.** One probe spans a whole micro-batch, so its error also contains the cross-sequence blocks of the Gram matrix, and the variance of both estimators grows roughly linearly with `micro_batch_size`, with a model-dependent slope — measured in a single process (`B = 8`, `n_h = 4`, 400 seeds; 200 for the hub model; identical for `hutchinson` and `per_sequence_cv`): ×2.3 / ×5.2 / ×10.6 at micro-batch 2 / 4 / 8 on the untrained toy transformer (exact prediction from the Gram matrices: 2.2 / 4.8 / 9.9), ×1.7 / ×3.4 / ×6.5 on a trained one (1.7 / 3.1 / 6.2), ×1.1 / ×1.6 / ×1.9 on the pretrained `SimpleStories-1.25M`. Sharding cuts the batch *before* micro-batching, so a multi-rank run has the single-process variance only at `micro_batch_size = 1`; with larger micro-batches its micro-batches are no larger than a shard and it is typically *less* noisy (0.47× / 0.49× / 0.62× on those three models at 4 ranks, micro-batch 4, `B = 8`). **Do not go back to one seed for all ranks** (the behaviour through 0.2.1): the same Rademacher `v` on two samples errs with covariance `2⟨offdiag M_a, offdiag M_b⟩_F` (`M = J Jᵀ`, output-space Gram; Gaussian: `2⟨M_a, M_b⟩_F`, diagonals included), and the Gram matrices of different inputs are not orthogonal — measured exactly on tiny transformers, cosine of `offdiag M` 0.47 untrained and 0.27 trained (0.38 and 0.19 with every bias and LayerNorm parameter removed from `J`, so it is not just a bias/LayerNorm artefact). The per-rank errors are then positively correlated, and the variance of the all-reduced `chi_net` is between 1× and world-size× that of **independent rank streams on the same shards** (that is the reference — not a single process; the two coincide only at `micro_batch_size = 1`). Where in that range is model- and distribution-dependent, and it has been measured **only on CPU test models of at most 1.25M parameters, nothing larger**: on the 2-rank / 4-rank CPU loopback at `micro_batch_size = 1` (`B = 8`, `n_h = 4`, 400 seeds; 200 for the hub model), with the default Rademacher probes 1.30× / 2.47× on the untrained toy transformer, 1.26× / 2.10× on a trained one and 1.32× / 2.59× on `SimpleStories-1.25M`; with Gaussian probes 1.86× / 3.26×, 1.53× / 2.65× and 1.44× / 2.59× (Gaussian is hit harder on the toys, where the Gram diagonal carries about half of `‖M‖²_F`; not on the hub model). `chi_pos` inherits the factor; `chi_net_P` under an explicit random `P` went 1.26× / 1.66×, 1.13× / 1.37× and 1.33× / 2.53×. With per-rank streams the same runs give 0.81–1.18×, every 95% interval containing 1. Single-process results are unchanged bit for bit by the per-rank streams. `tests/unit/test_ddp_probe_streams.py` pins both halves and the `hutchinson_seed` column (the rank emulation there patches `get_rank`/`get_world_size`); `tests/integration/test_ddp_loopback.py` pins them on the real `torchrun` path — with the shipped RNG, DDP `chi_net` equals the sum over ranks of the estimator on each rank's documented stream to 1e-6, and every rank's rows carry the per-call seed — and still pins DDP against single-process with the probe sequence replaced by a shape-keyed constant, which makes that comparison exact.

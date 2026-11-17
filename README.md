@@ -215,8 +215,10 @@ seeded all ranks identically. `chi_loss` and `delta_loss` depend on neither.
 
 ## Choosing the χ_net estimator
 
-Auto by default: `per_sequence_cv` for B ≤ 32 (lower variance), `hutchinson` otherwise 
-(always works). Override with `chi_net_method=`.
+The default is `hutchinson` at every batch size. `per_sequence_cv` adds one
+backward per sequence and a control variate; select it with
+`chi_net_method="per_sequence_cv"`. In the measurements made so far it has not lowered the variance: in the committed accuracy sweep (`examples/benchmark/accuracy/accuracy_pythia-14m.json`: Pythia-14m, `B = 8`, 100 seeds per setting) the two estimators have the same spread at every `n_hutchinson` from 1 to 64, and the comparisons on the small test models agree. `chi_pos` is tiny in that sweep; the high-`chi_pos` regime, where the control variate is expected to help, has not been measured.
+Through 0.2.x `per_sequence_cv` was selected automatically for B ≤ 32.
 
 ## `micro_batch_size` is not only a memory setting
 

@@ -56,6 +56,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `LocalBundleSource.loss_ignore_index`.
 
 ### Changed (breaking)
+- **The default `chi_net` estimator is `hutchinson` at every batch size.** Without an explicit `chi_net_method`, a batch of at most 32 sequences used to select `per_sequence_cv`; `chi_net` and `chi_pos` (and their `_P` rows) of such runs are now a different draw of the same quantity, and the run does `B` fewer backwards. The control variate has not shown a lower variance in the measurements made so far (README, "Choosing the χ_net estimator"). *To do:* pass `chi_net_method="per_sequence_cv"` (CLI: `--chi-net-method per_sequence_cv`) to keep the previous estimator.
+
 The labels are the single source of truth for what enters the loss
 (`docs/SPEC.md`: "Batch format and the label convention", "Loss handling",
 "Native checkpoint bundles"). For code that ran before:
