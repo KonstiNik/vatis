@@ -1425,6 +1425,9 @@ class LocalBundleSource:
           (not clipped) or ``clip_grad_norm=<max norm>`` (global-norm clipping as
           ``torch.nn.utils.clip_grad_norm_`` over all parameters does it). A
           stated value that contradicts the recorded one is refused as well.
+          The norm is taken over the bundle's canonical parameters, i.e. over
+          every parameter unless the source was opened with
+          ``allow_unlisted_params``.
         - *Gradient accumulation, dropout, mixed precision, anything else the
           loop did to the gradient*: not detectable. The bundle contract is that
           one optimizer step on ``batch_a.npy`` at the stored weights reproduces

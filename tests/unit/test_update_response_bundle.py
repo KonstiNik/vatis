@@ -583,6 +583,39 @@ def test_pad_masked_training_loss(tmp_path: Path) -> None:
     assert min(counted) < 60
 
 
+def test_realized_change_is_a_token_weighted_mean_over_micro_batches(
+    adamw_run: tuple[Path, TrainingRecord],
+) -> None:
+    """Micro-batches with different numbers of counted targets.
+
+    The loss of the batch is the mean over its counted targets, so the
+    micro-batch means have to be weighted by their counts. With equal counts
+    (every other batch in this file) a plain average of the micro-batch means
+    gives the same number.
+    """
+    run_dir, record = adamw_run
+    batch = held_out_batch()
+    labels = batch["labels"].clone()
+    labels[0, 3:] = -100  # 3 counted targets in row 0, 15 in the others
+    labels[5, 9:] = -100
+    uneven = {"input_ids": batch["input_ids"], "labels": labels}
+    source = _source(run_dir, steps=[1])
+    rows = _run(
+        source,
+        eval_batches={"train": source.batch_a_spec(), "uneven": uneven},
+        micro_batch_size=1,
+    )[1]
+    recorded = record.steps[1]
+    reference = _loss_fp64(record, recorded.params_after, uneven) - _loss_fp64(
+        record, recorded.params_before, uneven
+    )
+    assert _value(rows, "uneven", "loss_change") == pytest.approx(reference, rel=1e-4, abs=1e-7)
+    _loss, grad = record.loss_and_grad(recorded.params_before, uneven)
+    assert _value(rows, "uneven", "update_response") == pytest.approx(
+        float(grad @ recorded.delta), rel=RTOL
+    )
+
+
 def test_other_optimizers_are_refused_through_the_bundle(tmp_path: Path) -> None:
     run_dir, _record = _write(
         tmp_path,
