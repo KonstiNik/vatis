@@ -1,46 +1,25 @@
-"""Which update rule reconstructs the step an AdamW run took? Phase 1: compute.
+"""Which update rule reproduces the step an AdamW run took? Step 1 of 2: compute.
 
-A small check, not a study. For a few checkpoints of a native bundle whose
-optimizer was AdamW, and for the step's own update batch and one held-out
-batch ``B``, it measures the first-order loss change of the step that was
-actually taken,
-
-    truth = grad L^B . (theta_{t+1} - theta_t)      from the two stored weight files,
-
-and three predictions of it that use only what was known *before* the step:
-
-    optimizer's rule   the update rebuilt from the saved optimizer state
-                       (``loss_change_first_order``: for AdamW the sum of the
-                       gradient, momentum-history and weight-decay parts)
-    SGD rule           the same step as plain SGD would have taken it: no
-                       momentum, no weight decay, the same learning rate, the
-                       gradient the optimizer was handed,
-                       ``-lr * clip_factor * grad L^B . grad L^A``
-                       (and the same without the clip factor)
-    -lr * delta_loss_P the hypothetical update ``-lr * P_t grad L^A`` with the
-                       pre-step AdamW preconditioner, for reference
-
-plus the realized loss change ``L_B(theta_{t+1}) - L_B(theta_t)``, so that what
-first order itself misses is visible next to them.
-
-This script is the expensive half: it runs vatis over the bundle and writes
-
-- ``<out>/results.parquet``  the long-format rows (everything the comparison
-  needs is a row: the learning rate and the clip factor of each step included)
-- ``<out>/run_summary.json`` the settings of the run
-
-``examples/adamw_vs_sgd_reconstruction/evaluate.py`` turns those into the table
-and the figure and imports no vatis code.
+Runs vatis over a few checkpoints of a checkpoint bundle and writes
+``results.parquet`` (the rows) and ``run_summary.json`` (the settings) into
+``--out`` (default: this folder); ``evaluate.py`` turns them into the table and
+the figures and imports no vatis code. The question, the three predictions
+compared and the answer are in ``README.md`` next to this script.
 
     python examples/adamw_vs_sgd_reconstruction/run.py --bundle <run>/bundle \\
         --eval-batches <run>/eval_batches --clip-grad-norm 1.0 --device cuda
+
+The three calls a user needs are numbered in ``main``: load the bundle, ask
+the analyzer for the rows of the step that was taken
+(``update_response=source.update_response(...)``), run it.
 
 What the bundle has to provide: fp32 weight files, and for every step used the
 *next* step as well — the truth is a difference of two stored weight vectors.
 With ``--steps auto`` (default) the script takes the steps whose successor is
 stored and thins them evenly to ``--max-steps``; it prints which it used.
 Gradient clipping has to be stated (``--clip-grad-norm``) unless the bundle's
-``metadata.json`` records both the value and the algorithm.
+``metadata.json`` records both the value and the algorithm. The held-out batch
+is the last ``eval_batch_*.npy`` of ``--eval-batches``.
 
 The model comes from ``--model-factory`` (``"module:function"``, as for
 ``load_local_bundle``); the default builds the project Llama from the directory
@@ -70,8 +49,106 @@ from vatis.sinks.parquet import ParquetSink  # noqa: E402
 
 DEFAULT_OUT = Path(__file__).parent
 DEFAULT_LLAMA_PATH = "/workspace/antonio_code"
-UPDATE_BATCH = "update_batch"
+UPDATE_BATCH = "update_batch"  # the batch the optimizer step was computed on
 HELD_OUT = "held_out"
+
+
+def main() -> int:
+    args = parse_args()
+    torch.manual_seed(0)
+    factory = args.model_factory or llama_factory
+    device = torch.device(args.device)
+
+    # Which steps: each needs its successor in the bundle (the truth is θ_{t+1} − θ_t).
+    everything = load_local_bundle(args.bundle, factory)
+    usable = steps_with_successor(everything.steps)
+    steps = choose_steps(args.steps, usable, args.max_steps)
+    print(
+        f"bundle {args.bundle}: {len(everything.steps)} checkpoints, {len(usable)} with a "
+        f"stored successor: {usable}"
+    )
+    print(f"measuring steps {steps}")
+    clip = clip_setting(args.clip_grad_norm)
+
+    # 1. Load the bundle: weights, saved optimizer state and update batch per step.
+    source = load_local_bundle(args.bundle, factory, steps=steps, dtype="fp32", device=device)
+    # One held-out batch, scored with the pad convention of the run.
+    held_out, held_out_path = load_held_out_batch(
+        Path(args.eval_batches), source.loss_ignore_index, device
+    )
+
+    # 2. The analyzer, asked for the rows of the step that was taken.
+    args.out.mkdir(parents=True, exist_ok=True)
+    analyzer = Analyzer(
+        eval_batches={UPDATE_BATCH: source.batch_a_spec(), HELD_OUT: held_out},
+        # delta_loss_P, with the preconditioner the optimizer had before the step.
+        preconditioner=source.preconditioner(),
+        # The step that was taken: the loss_change* rows, update_lr, update_clip_factor.
+        update_response=source.update_response(clip_grad_norm=clip),
+        # delta_loss(update batch, held-out batch): the SGD rule on the held-out batch.
+        cross_pairs=[(UPDATE_BATCH, HELD_OUT)],
+        chi_net_method="hutchinson",
+        n_hutchinson=args.n_hutchinson,
+        micro_batch_size=args.micro_batch_size,
+        sink=ParquetSink(str(args.out / "results.parquet")),
+        seed=0,
+        device=device,
+        dtype="fp32",
+    )
+
+    # 3. Run it: one set of rows per checkpoint, written to results.parquet.
+    started = time.perf_counter()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        results = analyzer.run(source.model_specs())
+    wall = time.perf_counter() - started
+    skipped = sorted({str(w.message) for w in caught if "SKIPPED" in str(w.message)})
+    for message in skipped:
+        print("WARNING:", message)
+
+    observables = {row.observable for result in results for row in result.rows}
+    if "loss_change_first_order_weights" not in observables:
+        raise SystemExit(
+            "no realized rows were measured, so there is no truth to compare with: the "
+            "weight files have to be stored as fp32 (see the warnings above)"
+        )
+    descriptors = sorted(
+        {
+            row.preconditioner
+            for result in results
+            for row in result.rows
+            if row.observable == "loss_change_first_order"
+        }
+    )
+    summary = {
+        "bundle": Path(args.bundle).resolve().parent.name,
+        "optimizer": source.metadata.optimizer_name,
+        "update_rule": descriptors,
+        "steps": steps,
+        "steps_with_stored_successor": usable,
+        "n_checkpoints_in_bundle": len(everything.steps),
+        "clip_grad_norm": args.clip_grad_norm,
+        "loss_ignore_index": source.loss_ignore_index,
+        "n_parameters": source.layout.total_numel,
+        "update_batch_shape": list(source.checkpoints[0].batch_a_tokens.shape),
+        "held_out_batch": held_out_path.name,
+        "held_out_shape": list(held_out["input_ids"].shape),
+        "device": str(device),
+        "device_name": torch.cuda.get_device_name(device) if device.type == "cuda" else "cpu",
+        "dtype": "fp32",
+        "micro_batch_size": args.micro_batch_size,
+        "n_hutchinson": args.n_hutchinson,
+        "torch": torch.__version__,
+        "wall_s": wall,
+    }
+    (args.out / "run_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    print(f"{len(steps)} checkpoints in {wall:.1f} s on {summary['device_name']}")
+    print(f"wrote {args.out / 'results.parquet'} and {args.out / 'run_summary.json'}")
+    print(f"next: python examples/adamw_vs_sgd_reconstruction/evaluate.py --dir {args.out}")
+    return 0
+
+
+# ------------------------------------------------------------------ helpers
 
 
 class WrappedLlama(torch.nn.Module):
@@ -115,7 +192,52 @@ def thin(steps: list[int], limit: int) -> list[int]:
     return [steps[i] for i in sorted(picks)]
 
 
-def main() -> int:
+def choose_steps(requested: list[str], usable: list[int], max_steps: int) -> list[int]:
+    """``--steps``: ``auto`` (``usable`` thinned to ``max_steps``) or explicit steps."""
+    if requested == ["auto"]:
+        steps = thin(usable, max_steps)
+    else:
+        steps = sorted({int(step) for step in requested})
+        missing = [step for step in steps if step not in usable]
+        if missing:
+            raise SystemExit(
+                f"step(s) {missing} have no stored successor (or are not in the bundle); the "
+                f"truth needs theta_t and theta_(t+1). Steps with a stored successor: {usable}"
+            )
+    if not steps:
+        raise SystemExit("the bundle holds no two consecutive steps; nothing to compare")
+    return steps
+
+
+def clip_setting(choice: str) -> float | str | None:
+    """``--clip-grad-norm`` as ``update_response`` takes it."""
+    clip: float | str | None
+    if choice == "metadata":
+        clip = "metadata"
+    elif choice == "none":
+        clip = None
+    else:
+        clip = float(choice)
+    return clip
+
+
+def load_held_out_batch(
+    directory: Path, loss_ignore_index: int | None, device: torch.device
+) -> tuple[dict[str, torch.Tensor], Path]:
+    """The last ``eval_batch_*.npy`` of ``directory`` as an LM batch, and its path."""
+    paths = sorted(directory.glob("eval_batch_*.npy"))
+    if not paths:
+        raise SystemExit(f"{directory}: no eval_batch_*.npy")
+    ids = torch.from_numpy(np.ascontiguousarray(np.load(paths[-1]))).to(torch.int64).to(device)
+    labels = shifted_lm_targets(ids)
+    if loss_ignore_index is not None:
+        # Score the held-out batch with the pad convention of the run, as the
+        # loader does for the update batch.
+        labels = labels.masked_fill(labels == loss_ignore_index, -100)
+    return {"input_ids": ids, "labels": labels}, paths[-1]
+
+
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--bundle", required=True, help="bundle run directory")
     parser.add_argument(
@@ -145,115 +267,7 @@ def main() -> int:
     )
     parser.add_argument("--model-factory", default=None, help="'module:function'")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
-    args = parser.parse_args()
-
-    torch.manual_seed(0)
-    factory = args.model_factory or llama_factory
-    device = torch.device(args.device)
-
-    everything = load_local_bundle(args.bundle, factory)
-    usable = steps_with_successor(everything.steps)
-    if args.steps == ["auto"]:
-        steps = thin(usable, args.max_steps)
-    else:
-        steps = sorted({int(step) for step in args.steps})
-        missing = [step for step in steps if step not in usable]
-        if missing:
-            raise SystemExit(
-                f"step(s) {missing} have no stored successor (or are not in the bundle); the "
-                f"truth needs theta_t and theta_(t+1). Steps with a stored successor: {usable}"
-            )
-    if not steps:
-        raise SystemExit("the bundle holds no two consecutive steps; nothing to compare")
-    print(
-        f"bundle {args.bundle}: {len(everything.steps)} checkpoints, {len(usable)} with a "
-        f"stored successor: {usable}"
-    )
-    print(f"measuring steps {steps}")
-
-    clip: float | str | None
-    if args.clip_grad_norm == "metadata":
-        clip = "metadata"
-    elif args.clip_grad_norm == "none":
-        clip = None
-    else:
-        clip = float(args.clip_grad_norm)
-
-    source = load_local_bundle(args.bundle, factory, steps=steps, dtype="fp32", device=device)
-    paths = sorted(Path(args.eval_batches).glob("eval_batch_*.npy"))
-    if not paths:
-        raise SystemExit(f"{args.eval_batches}: no eval_batch_*.npy")
-    ids = torch.from_numpy(np.ascontiguousarray(np.load(paths[-1]))).to(torch.int64).to(device)
-    labels = shifted_lm_targets(ids)
-    if source.loss_ignore_index is not None:
-        # Score the held-out batch with the pad convention of the run, as the
-        # loader does for the update batch.
-        labels = labels.masked_fill(labels == source.loss_ignore_index, -100)
-    held_out = {"input_ids": ids, "labels": labels}
-
-    args.out.mkdir(parents=True, exist_ok=True)
-    analyzer = Analyzer(
-        eval_batches={UPDATE_BATCH: source.batch_a_spec(), HELD_OUT: held_out},
-        preconditioner=source.preconditioner(),
-        update_response=source.update_response(clip_grad_norm=clip),
-        cross_pairs=[(UPDATE_BATCH, HELD_OUT)],
-        chi_net_method="hutchinson",
-        n_hutchinson=args.n_hutchinson,
-        micro_batch_size=args.micro_batch_size,
-        sink=ParquetSink(str(args.out / "results.parquet")),
-        seed=0,
-        device=device,
-        dtype="fp32",
-    )
-    started = time.perf_counter()
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        results = analyzer.run(source.model_specs())
-    wall = time.perf_counter() - started
-    skipped = sorted({str(w.message) for w in caught if "SKIPPED" in str(w.message)})
-    for message in skipped:
-        print("WARNING:", message)
-
-    observables = {row.observable for result in results for row in result.rows}
-    if "loss_change_first_order_weights" not in observables:
-        raise SystemExit(
-            "no realized rows were measured, so there is no truth to compare with: the "
-            "weight files have to be stored as fp32 (see the warnings above)"
-        )
-    descriptors = sorted(
-        {
-            row.preconditioner
-            for result in results
-            for row in result.rows
-            if row.observable == "loss_change_first_order"
-        }
-    )
-    summary = {
-        "bundle": Path(args.bundle).resolve().parent.name,
-        "optimizer": source.metadata.optimizer_name,
-        "update_rule": descriptors,
-        "steps": steps,
-        "steps_with_stored_successor": usable,
-        "n_checkpoints_in_bundle": len(everything.steps),
-        "clip_grad_norm": args.clip_grad_norm,
-        "loss_ignore_index": source.loss_ignore_index,
-        "n_parameters": source.layout.total_numel,
-        "update_batch_shape": list(source.checkpoints[0].batch_a_tokens.shape),
-        "held_out_batch": paths[-1].name,
-        "held_out_shape": list(ids.shape),
-        "device": str(device),
-        "device_name": torch.cuda.get_device_name(device) if device.type == "cuda" else "cpu",
-        "dtype": "fp32",
-        "micro_batch_size": args.micro_batch_size,
-        "n_hutchinson": args.n_hutchinson,
-        "torch": torch.__version__,
-        "wall_s": wall,
-    }
-    (args.out / "run_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-    print(f"{len(steps)} checkpoints in {wall:.1f} s on {summary['device_name']}")
-    print(f"wrote {args.out / 'results.parquet'} and {args.out / 'run_summary.json'}")
-    print(f"next: python examples/adamw_vs_sgd_reconstruction/evaluate.py --dir {args.out}")
-    return 0
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
