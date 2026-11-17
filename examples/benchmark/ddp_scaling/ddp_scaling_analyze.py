@@ -11,9 +11,11 @@ Reads every ``*.json`` written by ``ddp_scaling_worker.py`` and emits:
 
 No GPU, no vatis import — just reads the JSON contract (like pythia_sweep/evaluate.py).
 
-    .venv/bin/python examples/benchmark/ddp_scaling_analyze.py \\
-        --in-dir examples/benchmark/ddp_scaling_out \\
-        --out examples/benchmark/DDP_SCALING_RESULTS.md
+    python examples/benchmark/ddp_scaling/ddp_scaling_analyze.py \\
+        --in-dir examples/benchmark/ddp_scaling/out \\
+        --out examples/benchmark/ddp_scaling/DDP_SCALING_RESULTS.md
+
+(``ddp_scaling.sbatch`` runs it with these paths at the end of the sweep.)
 """
 
 from __future__ import annotations

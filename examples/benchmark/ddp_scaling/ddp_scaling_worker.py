@@ -3,7 +3,7 @@
 Launched once per (config, world_size) by ``ddp_scaling.sbatch`` as::
 
     torchrun --nproc_per_node=W --nnodes=1 --standalone \\
-        examples/benchmark/ddp_scaling_worker.py --batch-file ... --batch-size B ...
+        examples/benchmark/ddp_scaling/ddp_scaling_worker.py --batch-file ... --batch-size B ...
 
 Each rank loads the full model on ``cuda:LOCAL_RANK`` (vatis DDP replicates the
 model and shards the *eval batch* along its first dim — it parallelizes over

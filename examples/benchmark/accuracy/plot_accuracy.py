@@ -9,10 +9,10 @@ Two panels:
           shows the estimates are unbiased (means hit the reference) while the
           error bars shrink with n_h.
 
-No GPU, no vatis import — consumes accuracy.json.
+No GPU, no vatis import — consumes the JSON written by ``accuracy_sweep.py``.
 
-    .venv/bin/python examples/benchmark/plot_accuracy.py \\
-        --in examples/benchmark/accuracy.json
+    python examples/benchmark/accuracy/plot_accuracy.py \\
+        --in examples/benchmark/accuracy/accuracy_pythia-14m.json
 """
 
 from __future__ import annotations
