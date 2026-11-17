@@ -75,6 +75,12 @@ class Preconditioner:
             ceiling. When set, the analyzer additionally reports how much of
             ``delta_loss_P`` / ``chi_net_P`` comes from the entries sitting at it
             (the ``*_capped`` rows; see :meth:`capped_weight_floor`).
+        eps: the ``eps`` this ``P`` was built with, for a ``P`` of the form
+            ``1 / (sqrt(v_hat) + eps)`` (set by :meth:`adamw`); ``None``
+            otherwise. Provenance only -- it is written to the result rows
+            (``preconditioner_eps``) and never enters a computation.
+        beta2: the second-moment decay behind ``v_hat``, likewise (set by
+            :meth:`adamw`, written as ``preconditioner_beta2``).
 
     Instances are immutable; :meth:`to` returns a new one.
     """
@@ -82,6 +88,8 @@ class Preconditioner:
     diag: torch.Tensor
     descriptor: str
     ceiling: float | None = None
+    eps: float | None = None
+    beta2: float | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.diag, torch.Tensor):
@@ -121,6 +129,12 @@ class Preconditioner:
             raise ValueError(
                 f"Preconditioner.ceiling must be a finite positive number, got {self.ceiling}"
             )
+        if self.eps is not None and not 0.0 <= self.eps < float("inf"):
+            raise ValueError(
+                f"Preconditioner.eps must be a finite non-negative number, got {self.eps}"
+            )
+        if self.beta2 is not None and not 0.0 < self.beta2 < 1.0:
+            raise ValueError(f"Preconditioner.beta2 must be in (0, 1), got {self.beta2}")
 
     # -------------------------------------------------------------- accessors
 
@@ -164,6 +178,26 @@ class Preconditioner:
             return 0
         return int((self.diag >= floor).sum().item())
 
+    def capped_fraction(self) -> float | None:
+        """Fraction of the entries at the ceiling; ``None`` without a ceiling.
+
+        ``count_capped() / n_params`` -- for the ``adamw`` source the share of
+        parameter coordinates whose second moment is still zero, so that
+        ``P = 1/eps`` there. This is a property of ``P`` alone (how many
+        coordinates), not of a measurement: how much of a value those
+        coordinates carry is what the ``*_capped`` rows report. The count is
+        one pass over ``P``; it is taken once and remembered on the instance
+        (which is immutable), because the analyzer asks for every row it emits.
+        """
+        if self.ceiling is None:
+            return None
+        cached = self.__dict__.get("_capped_fraction")
+        if cached is None:
+            cached = self.count_capped() / self.n_params
+            # A frozen dataclass: write the memo past the frozen ``__setattr__``.
+            object.__setattr__(self, "_capped_fraction", cached)
+        return float(cached)
+
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return (
             f"Preconditioner(descriptor={self.descriptor!r}, n_params={self.n_params}, "
@@ -188,7 +222,13 @@ class Preconditioner:
             diag = diag.to(dtype=dtype)
         if diag is self.diag:
             return self
-        return Preconditioner(diag=diag, descriptor=self.descriptor, ceiling=self.ceiling)
+        return Preconditioner(
+            diag=diag,
+            descriptor=self.descriptor,
+            ceiling=self.ceiling,
+            eps=self.eps,
+            beta2=self.beta2,
+        )
 
     # ------------------------------------------------------------ validation
 
@@ -416,7 +456,13 @@ class Preconditioner:
         # eps == 0 has no finite ceiling (and a zero second moment would already
         # have been refused as a non-finite P).
         ceiling = 1.0 / float(eps) if float(eps) > 0.0 else None
-        return cls(diag=diag, descriptor=descriptor, ceiling=ceiling)
+        return cls(
+            diag=diag,
+            descriptor=descriptor,
+            ceiling=ceiling,
+            eps=float(eps),
+            beta2=float(beta2),
+        )
 
 
 def epsilon_cap_mask(
