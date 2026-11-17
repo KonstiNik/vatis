@@ -4,6 +4,9 @@ Reads what ``examples/adamw_vs_sgd_reconstruction/run.py`` wrote and produces
 
 - ``<dir>/table.md``            every prediction as a ratio to the truth, per step and
                                 batch; the spread between the two batches; the parts
+- ``<dir>/table_full.md``       the wide table: every prediction as ratio (4–7 digits)
+                                and difference to the truth, the unclipped SGD rule,
+                                the realized change, and the spread of every rule
 - ``<dir>/reconstruction.png``  the ratio prediction / truth, one panel per batch
 - ``<dir>/update_parts.png``    the optimizer's rule split into its gradient,
                                 momentum and weight-decay parts, one panel per batch
@@ -212,6 +215,81 @@ def parts_table(records: list[dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+# ------------------------------------------------- table_full.md (the wide table)
+
+
+def cell(prediction: float | None, truth: float) -> str:
+    if prediction is None:
+        return "—"
+    ratio = prediction / truth
+    # Seven decimals near one, where four significant digits would print "1".
+    shown = f"{ratio:.7f}" if abs(ratio - 1.0) < 1e-3 else f"{ratio:.4g}"
+    return f"{shown} ({prediction - truth:+.2e})"
+
+
+def make_full_table(records: list[dict[str, Any]], summary: dict[str, Any]) -> str:
+    """``table_full.md``: the wide table, every prediction with 4–7 digits and its difference."""
+    clipped = any(r["clip"] < 1.0 for r in records)
+    head = (
+        "| step | batch | lr | clip factor | truth | optimizer's rule | SGD rule |"
+        + (" SGD rule, unclipped |" if clipped else "")
+        + " −lr · delta_loss_P | realized loss change | realized − truth |"
+    )
+    lines = [head, "|" + "---|" * (head.count("|") - 1)]
+    for r in records:
+        lines.append(
+            f"| {r['step']} | {r['batch']} | {r['lr']:.3g} | {r['clip']:.3f} | "
+            f"{r['truth']:+.4e} | {cell(r['rule'], r['truth'])} | {cell(r['sgd'], r['truth'])} |"
+            + (f" {cell(r['sgd_unclipped'], r['truth'])} |" if clipped else "")
+            + f" {cell(r['dlp'], r['truth'])} | {r['realized']:+.4e} | "
+            f"{r['realized'] - r['truth']:+.2e} |"
+        )
+    header = (
+        f"Bundle `{summary['bundle']}` ({summary['optimizer']}, rows tagged "
+        f"`{', '.join(summary['update_rule'])}`), {summary['n_parameters']:,} parameters, "
+        f"clipping stated as `{summary['clip_grad_norm']}`, fp32 on {summary['device_name']}. "
+        f"Update batch {summary['update_batch_shape']} tokens, held-out batch "
+        f"`{summary['held_out_batch']}` {summary['held_out_shape']} tokens. Steps "
+        f"{summary['steps']} of the {len(summary['steps_with_stored_successor'])} that have "
+        f"their successor stored.\n\n"
+        "Predictions are `ratio to the truth (prediction − truth)`; the truth is "
+        "`loss_change_first_order_weights`.\n\n"
+    )
+    return header + "\n".join(lines) + "\n\n" + full_scale_table(records)
+
+
+def full_scale_table(records: list[dict[str, Any]]) -> str:
+    """Is a prediction off by one factor, or by a different one on each batch?
+
+    A prediction that had the right direction and the wrong size would be off
+    by the same factor on every batch, and a rescaled learning rate would repair
+    it. The table gives, per step, the ratio to the truth on the held-out batch
+    divided by the ratio on the update batch: 1 means "one factor".
+    """
+    by_step: dict[int, dict[str, dict[str, Any]]] = {}
+    for r in records:
+        by_step.setdefault(r["step"], {})[r["batch"]] = r
+    lines = [
+        "Ratio on the held-out batch divided by the ratio on the update batch "
+        "(1 = off by the same factor on both, i.e. repairable by rescaling the step):",
+        "",
+        "| step | optimizer's rule | SGD rule | −lr · delta_loss_P |",
+        "|---|---|---|---|",
+    ]
+    for step, pair in sorted(by_step.items()):
+        if len(pair) < 2:
+            continue
+        own, other = pair[UPDATE_BATCH], pair[next(b for b in pair if b != UPDATE_BATCH)]
+
+        def spread(key: str, own: dict[str, Any] = own, other: dict[str, Any] = other) -> str:
+            if own[key] is None or other[key] is None:
+                return "—"
+            return f"{(other[key] / other['truth']) / (own[key] / own['truth']):.4g}"
+
+        lines.append(f"| {step} | {spread('rule')} | {spread('sgd')} | {spread('dlp')} |")
+    return "\n".join(lines) + "\n"
+
+
 def make_figure(records: list[dict[str, Any]], summary: dict[str, Any], path: Path) -> None:
     steps = sorted({r["step"] for r in records})
     position = {step: index for index, step in enumerate(steps)}
@@ -342,11 +420,13 @@ def main() -> int:
         raise SystemExit("no step with realized rows in the results")
     table = make_table(records, summary)
     (args.dir / "table.md").write_text(table)
+    (args.dir / "table_full.md").write_text(make_full_table(records, summary))
     make_figure(records, summary, args.dir / "reconstruction.png")
     make_parts_figure(records, summary, args.dir / "update_parts.png")
     print(table)
     print(
-        f"wrote {args.dir / 'table.md'}, {args.dir / 'reconstruction.png'} and "
+        f"wrote {args.dir / 'table.md'}, {args.dir / 'table_full.md'}, "
+        f"{args.dir / 'reconstruction.png'} and "
         f"{args.dir / 'update_parts.png'}"
     )
     return 0

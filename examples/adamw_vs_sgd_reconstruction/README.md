@@ -39,7 +39,7 @@ step's own batch and on one held-out batch. One run, one seed, 11M parameters,
 python examples/adamw_vs_sgd_reconstruction/run.py --bundle <run>/bundle \
     --eval-batches <run>/eval_batches --clip-grad-norm 1.0 --device cuda \
     --steps 0 1 2 5 9 661 665 6611 6615 33057 33062 66105 66110
-python examples/adamw_vs_sgd_reconstruction/evaluate.py   # table.md + reconstruction.png + update_parts.png
+python examples/adamw_vs_sgd_reconstruction/evaluate.py   # tables + reconstruction.png + update_parts.png
 ```
 
 ## What it shows
@@ -86,10 +86,12 @@ often comparable in size to the gradient part (at step 33062: 17.2 and
 −16.2). The weight-decay part is below 0.2% of the sum everywhere except at step 33062 on
 the held-out batch, where it is 2%.
 
-Every number per step and batch: [table.md](table.md) — the ratios of the
+The numbers per step and batch: [table.md](table.md) — the ratios of the
 figure above, the learning rate and clip factor c of each step (the SGD rule
 without the clip factor is its ratio divided by c), the ratio on the held-out
 batch divided by the ratio on the update batch, and the parts as fractions.
+The same with more digits and the differences from the truth:
+[table_full.md](table_full.md).
 
 ## What it does not show
 
@@ -105,7 +107,9 @@ batch divided by the ratio on the update batch, and the parts as fractions.
 ## About the committed outputs
 
 - Files: `results.parquet`, `run_summary.json`, `table.md`, `reconstruction.png`,
-  `update_parts.png`. The last three are drawn by `evaluate.py` from the first two.
+  `update_parts.png`, `table_full.md` (the wide table: 4–7 digits, differences,
+  the unclipped SGD rule). All but the first two are drawn by `evaluate.py`
+  from the first two.
 - The run: bundle `adamw_s0`, an 11M-parameter Llama trained with AdamW;
   details of the run and of the 13 steps used are in
   [details.md](details.md#the-run).
@@ -116,4 +120,5 @@ batch divided by the ratio on the update batch, and the parts as fractions.
   ([details.md](details.md#reproducibility)).
 - Committed on 17 November 2026 in `2d6b92f` (#14). `table.md` was made
   narrower and `update_parts.png` added later, both drawn from the same
-  committed `results.parquet`.
+  committed `results.parquet`; the earlier wide `table.md` is kept, unchanged,
+  as `table_full.md`.
