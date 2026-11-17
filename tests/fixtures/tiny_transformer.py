@@ -164,8 +164,10 @@ def make_tiny_lm_batch(
             n_pad_b = max(n_pad - b, 0)
             if n_pad_b > 0:
                 attention_mask[b, -n_pad_b:] = 0
-    # HF causal-LM convention: labels = next-token; -100 at positions that
-    # should be ignored. We mark padded tokens AND the very last position.
+    # vatis's pre-shifted labels: labels[i] = next token, -100 at positions that
+    # should be ignored (NOT the HuggingFace collation, where labels are aligned
+    # with input_ids and the model shifts). We mark padded tokens AND the very
+    # last position.
     labels = torch.full_like(input_ids, fill_value=-100)
     labels[:, :-1] = input_ids[:, 1:]
     labels[attention_mask == 0] = -100
@@ -197,11 +199,12 @@ def make_tiny_mlp_batch(
 
 
 def causal_lm_loss(logits: torch.Tensor, batch: dict[str, torch.Tensor]) -> torch.Tensor:
-    """Mean-reduced cross entropy over valid label positions, HF convention.
+    """Mean-reduced cross entropy over valid label positions.
 
     Args:
         logits: ``(B, S, V)``.
-        batch: dict containing ``"labels"`` of shape ``(B, S)`` with -100 at
+        batch: dict containing ``"labels"`` of shape ``(B, S)``: pre-shifted
+            (``labels[:, i]`` is the target of ``logits[:, i]``), with -100 at
             invalid positions.
     """
     labels = batch["labels"]
