@@ -17,7 +17,7 @@ def pytest_collection_modifyitems(config, items):
     - ``gpu``: keeps GPU-only tests from failing on CPU-only machines and CI
       runners while still running them locally on a GPU box. The import of torch
       is deferred into this hook so plain collection stays cheap.
-    - ``golden``: the WP0 acceptance gate writes a whole checkpoint bundle (a
+    - ``golden``: the acceptance gate of the preconditioned observables writes a whole checkpoint bundle (a
       ~100-step training run) and analyzes it three times, so it does not belong
       in the unit tier. Unlike ``integration`` / ``cross_validation`` — which
       callers deselect by passing ``-m "not integration and not

@@ -185,6 +185,12 @@ The default estimator:
   `output/`; the figure is now `chi_pos_raw_vs_adamw.png`),
   `adamw_vs_sgd_reconstruction/` and `spectral_tail/`. Files were moved, not
   changed, apart from the paths inside them.
+- **The examples have one kind of write-up.** `examples/README.md` is a new
+  index of the examples and benchmarks. Every example README has the same
+  sections: what you need, how to run, what it shows, what it does not show,
+  and where its committed outputs come from. `examples/BENCHMARK.md` is split
+  into `pythia_sweep/README.md` and `optimizer_aware_llama/README.md`, each with
+  a `details.md` holding the longer material; nothing was dropped.
 
 ### Fixed
 - **DDP ranks no longer replay one Hutchinson probe stream.** Every rank seeded

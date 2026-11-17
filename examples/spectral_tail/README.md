@@ -1,75 +1,87 @@
-# Spectral tail overlap hypothesis
+# Does `chi_pos` show a transient bump when training reaches what two texts share?
 
-Detecting when training resolves shared semantic structure between two eval batches via a chi_pos bump in the LNA decomposition.
+A research note with a negative result. The hypothesis: if two eval batches
+share structure only in the "tail" of the NTK spectrum (deeper, later-learned
+features), the cross `chi_pos(A, B)` — computed from the gradients of the
+two batches — should be near zero early in training,
+bump up when training reaches that spectral band, and subside afterwards. The
+probes are Python and C++ code implementing the same matrix operations, with
+English prose and an unrelated C++ program as controls, across five Pythia
+sizes (14m–410m). The predicted bump does not appear. The hypothesis and the
+probe design in full are in [details.md](details.md).
 
-## Core idea
+## What you need
 
-If two eval batches A and B share similarity only in the "tail" of the NTK spectrum (i.e. deeper/later-learned features), then:
+- vatis with the `examples` extra (matplotlib).
+- Internet access and disk space: the five models at 13 checkpoints each are
+  about 34 GB of downloads. Set `HF_HOME` (shell or the repo-root `.env`) to
+  choose where they go.
+- A GPU is used when one is present; otherwise the script runs on the CPU.
+  The result files record the analysis time of each measurement (column
+  `wallclock_s`), not the download time or the time of a whole run.
 
-- **Early training**: gradients are orthogonal (chi_pos near zero) because the model hasn't resolved that spectral band yet.
-- **Mid training**: when the optimizer's "frontier" reaches the shared band, chi_pos should bump up — the cross coupling becomes visible.
-- **Late training**: the shared band is resolved and the bump subsides, or the model specializes further and the coupling is consumed.
+## How to run
 
-This would appear as a transient bump in `chi_pos(A, B)` at the checkpoint where training "arrives at" the spectral band where A and B overlap.
+```bash
+python examples/spectral_tail/run.py                                  # pythia-14m
+python examples/spectral_tail/run.py --model EleutherAI/pythia-70m    # one other size
+python examples/spectral_tail/run.py --all                            # all five sizes in turn
+python examples/spectral_tail/evaluate.py                             # figures, x axis = training step
+python examples/spectral_tail/evaluate.py --compute                   # x axis = estimated compute (6ND FLOPs)
+```
 
-## Probe design
+## What it shows
 
-Model of what LMs learn in order:
-1. Token combinations into words (surface statistics)
-2. Words into sentences (syntax)
-3. Semantic content (what the code *does*)
+![chi_pos of the signal pair and the controls, pythia-410m](figures/chi_pos_signal_vs_controls_pythia-410m.png)
 
-Good probes should **differ at stages 1-2 but share stage 3**. This is why Python vs C++ implementing the same algorithm is a better probe than two Python styles — Python vs C++ eliminates almost all syntactic overlap, isolating the semantic layer.
+Findings of 2026-04-16:
 
-Key design principles:
-- **Repetition is signal, not redundancy.** Multiple implementations of the same algorithm within one text creates within-context pressure for the model to build abstract representations.
-- **Parallel structure matters.** Both texts should implement the same operations in the same order (matmul, transpose, dot, trace, Frobenius) — not divergent operations.
-- **B=1 with long S is optimal.** Longer sequences give the model more context to build semantic representations. B=1, S=1024 maximizes context per position.
+- **At 14m–410m scale the predicted spectral-tail bump is not observed.** All
+  cross `chi_pos` trajectories decline after early training, apart from some
+  scale-dependent late-training structure (secondary rises at 70m and 410m)
+  that is not clearly separated from the controls.
+- **The signal is above its control, but modestly.** In the late-training
+  window the signal `python × cpp` (same algorithm) runs 2–4× above the
+  cross-language control `python × cpp_str` (different algorithm) — not the
+  transient bump the hypothesis predicts, but a hint of partial algorithm
+  specificity. (The pair list in [details.md](details.md) calls
+  `python × cpp_str` the secondary control; the negative control proper is
+  `cpp × cpp_str`.)
+- **The early decline is set by compute, not by scale.** Plotted over
+  estimated compute (6ND FLOPs) instead of training steps, the initial
+  `chi_pos` decline of all five sizes falls onto one curve (`evaluate.py
+  --compute`, the `_compute` figures). This early phase reflects generic token-statistics learning.
 
-## Findings (2026-04-16)
+The across-sizes view of the signal pair is
+[figures/chi_pos_cross_scale_python_x_cpp.png](figures/chi_pos_cross_scale_python_x_cpp.png);
+all figures are in [figures/](figures/).
 
-**At 14m–410m scale, we do not observe the predicted spectral tail bump.** All cross chi_pos trajectories show a monotonic decline after early training, with some scale-dependent late-training structure (secondary rises at 70m and 410m) that is not clearly separated from the negative control. The positive signal (python x cpp, shared algorithm) runs 2–4x above the negative control (python x cpp_str, different algorithm) in the late-training window, but the effect is modest and not the transient bump the hypothesis predicts.
+## What it does not show
 
-The most likely explanation is that models at this scale do not develop cross-domain abstract representations of "matrix multiplication" that bridge programming languages. The feature we are probing for may require larger models.
+- Whether the model size or the method is the reason. The most likely
+  explanation is that models at this scale do not build cross-language
+  representations of "matrix multiplication"; the feature probed for may need
+  larger models.
+- Anything above 410m, or for a simpler shared feature. Two follow-ups:
+  1. **Larger models (1B+)**, where cross-language code understanding may
+     emerge and build the shared representations probed for here.
+  2. **A simpler semantic overlap** that models of this size plausibly learn —
+     repeated structural patterns, the same topic in different registers — to
+     test whether the method works at all before scaling up.
 
-One additional observation: when plotted over estimated compute (6ND FLOPs) instead of training steps, the initial chi_pos decline collapses across all model scales onto a single curve (`--compute` flag). This early phase reflects generic token-statistics learning and is compute-determined, not scale-dependent.
+  Doing (2) first is the more cautious path: if a simpler feature does not
+  produce a bump even at 410m, the method itself needs rethinking, not just the
+  scale.
 
-### Follow-ups
+## About the committed outputs
 
-1. **Larger models (1B+).** Cross-lingual code understanding is a capability that emerges at scale. These models may actually build the shared representations we are probing for.
-2. **Simpler semantic overlap.** Instead of probing for a highly abstract feature (cross-lingual algorithm equivalence), probe for something these models plausibly do learn — e.g. repeated structural patterns, same topic in different registers. This tests whether the method works at all before scaling up.
-
-Doing (2) first is the more cautious path: if a simpler feature doesn't produce a bump even at 410m, the method itself needs rethinking, not just the scale.
-
-## Experiment setup
-
-Code: `examples/spectral_tail/run.py` (compute), `examples/spectral_tail/evaluate.py` (plots).
-Results: `examples/spectral_tail/results_pythia-{14m,31m,70m,160m,410m}.parquet`.
-These files and the figures are from April 2026 and were not re-run (that would
-mean downloading about 34 GB of checkpoints). They have the original 11 result
-columns. With the current code, `chi_net` and `chi_pos` would be a different
-random probe draw for the same seed; `chi_loss` and `delta_loss` would not change.
-Figures: `examples/spectral_tail/figures/`.
-Key plots: `figures/chi_pos_signal_vs_controls_pythia-410m.png`, `figures/chi_pos_cross_scale_python_x_cpp.png`.
-
-Current probes (4 eval batches, all describing 7 aligned operations):
-- **python**: Python matmul code (verbose, type-hinted, docstrings)
-- **cpp**: C++ matmul code (raw pointers, C-style)
-- **prose**: English prose describing matmul (no code syntax)
-- **cpp_str**: C++ string-processing code (negative control — same language as cpp, different algorithm)
-
-Cross pairs measured:
-- `python x cpp` — positive signal (cross-language, same algorithm)
-- `python x prose` — positive control (cross-genre, same algorithm)
-- `cpp x cpp_str` — negative control (same language, different algorithm)
-- `python x cpp_str` — secondary control (cross-language, different algorithm)
-
-B=1, S=1024, n_hutchinson=32. Models: pythia-14m, 31m, 70m, 160m, 410m across 13 training checkpoints. Plots available in step-based and compute-scaled (6ND FLOPs, `--compute` flag) versions.
-
-### Probe design iterations
-
-1. Python verbose vs Python terse — too much syntactic overlap, couldn't isolate semantic layer
-2. Python vs C++ with divergent operations — cleaner separation but misaligned operations added noise
-3. Python vs C++ with aligned operations — tightest probe, same ops in same order
-4. Added prose probe as positive control — tracks python x cpp but weaker, confirms signal is robust to surface form
-5. Added cpp_str negative control — shows code-structure baseline; python x cpp signal is 2-4x above python x cpp_str in the late-training window, suggesting partial algorithm specificity
+- Files: `results_pythia-{14m,31m,70m,160m,410m}.parquet` and `figures/`
+  (step-based and `_compute` variants of every plot).
+- Settings: B = 1, S = 1024, `n_hutchinson=32`, 13 checkpoints per model
+  (steps 1 to 143000), seed 0 (in `run.py`). `run.py` uses `per_sequence_cv`
+  up to 160m and `hutchinson` for 410m. The hardware is not recorded.
+- From April 2026, committed in `13b6f97` (16 April 2026), and not re-run since
+  (that would mean downloading about 34 GB of checkpoints). The parquet files
+  have the original 11 result columns. With the current code, `chi_net` and
+  `chi_pos` would be a different random probe draw for the same seed;
+  `chi_loss` and `delta_loss` would not change.

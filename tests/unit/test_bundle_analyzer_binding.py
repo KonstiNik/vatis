@@ -1,4 +1,4 @@
-"""What the review of the preconditioned-ruler PR showed the suite could not see.
+"""What the review of the preconditioned-observables PR showed the suite could not see.
 
 Each test here corresponds to a mutant that survived the unit and golden tiers,
 or to an input the bundle path mishandled:
@@ -257,7 +257,7 @@ def test_cross_pair_p_rows_are_the_p_weighted_quantities(trained_bundle: dict[st
         geo_raw = math.sqrt(self_("train", "chi_net") * self_("val", "chi_net"))
         assert cross("chi_net_P") == pytest.approx(geo_p, rel=1e-6)
         assert cross("chi_net") == pytest.approx(geo_raw, rel=1e-6)
-        # ... and the published chi_pos rows divide by their own ruler's chi_net.
+        # ... and the published chi_pos rows divide by their own kernel's chi_net.
         assert cross("chi_pos_P") == pytest.approx(
             cross("delta_loss_P") / (cross("chi_loss") * geo_p), rel=1e-6
         )

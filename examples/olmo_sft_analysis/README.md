@@ -27,6 +27,15 @@ On-distribution data matters: `chi_net` is the Jacobian norm *evaluated at the
 input*, so evaluate on data the model actually trained on (here, its own SFT
 mixture) — off-distribution tokens make the value meaningless.
 
+## What you need
+
+- A GPU with about 93 GiB (the committed run used one H100) and about 210 s
+  for the shipped config — see [Resources](#resources-measured-1-h100-93-gib).
+- The model `Olmo-3-7B-Think-SFT` and its `Dolci-Think-SFT` data, fetched once
+  by `prefetch.py` on a machine with internet access.
+- A SLURM cluster for the provided job script (`run.sbatch`), the `examples`
+  extra for matplotlib, and `datasets` for the prefetch only (below).
+
 ## How to run
 
 The compute nodes here are offline (`HF_HUB_OFFLINE=1` in the repo `.env`), so
@@ -64,6 +73,39 @@ imports) → `spectral_position.png`, `lnp_components.png`, `gpu_activity.png`:
 
 > Optional pre-flight: `mem_profile.sbatch` measures peak GPU memory for your
 > model/config before a long run — useful when adapting to a new checkpoint.
+
+## What it shows
+
+The three committed figures are the result of this example; the run's result
+file (`results.parquet`) and resource log (`resources.json`) are not committed.
+`analyze_results.py` draws the figures from those two files:
+
+- [`spectral_position.png`](spectral_position.png) — `chi_pos` for the code and
+  English self-pairs plus the cross pair `chi_pos(english, code)`.
+- [`lnp_components.png`](lnp_components.png) — `chi_loss_normalized`,
+  `chi_net_normalized`, `delta_loss` and `chi_pos` as small multiples.
+- [`gpu_activity.png`](gpu_activity.png) — the GPU activity timeline, with the
+  load and analyze phases shaded.
+
+The measured cost of the run is in [Resources](#resources-measured-1-h100-93-gib).
+
+## What it does not show
+
+- Anything about how `chi_pos` changes over training: it is one checkpoint.
+- More than a small sample: 10 code and 10 English samples, cut to
+  `seq_len=1024` (the full code traces are about 16k tokens).
+- Values from the current code: the figures were not re-run since June 2026
+  (see [Resources](#resources-measured-1-h100-93-gib)).
+
+## About the committed outputs
+
+The three figures are from June 2026, from a run on 1× H100 with the shipped
+config, and were committed in `a09c62b` (16 June 2026). The shipped config, as
+`run.sbatch` and `olmo_sft_analyze.py` set it today: `chi_net_method="hutchinson"`,
+`n_hutchinson=32`, `micro_batch_size=1`, bf16, `seq_len=1024`,
+`cross_grad_storage="auto"`, seed 0. The run's `results.parquet` and
+`resources.json` were committed with the figures and stopped being tracked in
+`153bd3b`.
 
 ## The analyzer config, and why
 

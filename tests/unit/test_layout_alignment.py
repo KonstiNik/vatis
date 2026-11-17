@@ -235,7 +235,7 @@ def test_same_shape_permutation_between_json_and_optimizer_is_undetectable(
     every loader check passes, the flat ``P`` vector is **bit-identical** (the
     constants live at *indices*), and only the parameter each segment is applied
     to changes — so a P observable moves silently. The guarantee rests entirely on
-    the bundle writer (WP0 component 01).
+    the bundle writer (project spec component 01).
 
     This test exists so the risk is on record and measured; if a future version
     gains a cross-check that rejects this bundle, the test will fail and should be

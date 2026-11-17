@@ -1,1 +1,1 @@
-"""The WP0 acceptance gate. Marked ``golden``; run with ``pytest -m golden``."""
+"""The acceptance gate of the preconditioned observables. Marked ``golden``; run with ``pytest -m golden``."""

@@ -1,4 +1,4 @@
-"""Pipeline-level tests for the preconditioned ruler (WP0 component 03).
+"""Pipeline-level tests for the preconditioned observables (``03_estimator.md``).
 
 Where ``test_chi_pos_p.py`` tests the math against closed-form answers on fp64
 toys, this file tests the *plumbing*: what the analyzer emits, what the parquet
@@ -84,7 +84,7 @@ def test_no_preconditioner_emits_only_raw_rows_tagged_none() -> None:
 
 
 def test_preconditioner_does_not_move_any_raw_row() -> None:
-    """Every raw row must be bit-identical with and without the P ruler."""
+    """Every raw row must be bit-identical with and without the P observables."""
     batch = make_tiny_mlp_batch(batch_size=6, seed=0)
 
     def run(precond: object | None) -> dict[str, float]:
@@ -280,8 +280,8 @@ def test_adamw_preconditioner_through_the_pipeline(tmp_path: Path) -> None:
     assert set(p_rows) == set(P_OBSERVABLES) | set(P_CAPPED_OBSERVABLES)
     for value in p_rows.values():
         assert value == value and abs(value) < 1e30
-    # exp_avg_sq is 0.1*(i+1) here, so P is far from I and the two rulers must
-    # give visibly different numbers.
+    # exp_avg_sq is 0.1*(i+1) here, so P is far from I and the raw and P values
+    # must differ visibly.
     assert abs(p_rows["chi_net_P"] - raw["chi_net"]) > 1e-6 * abs(raw["chi_net"])
     assert abs(p_rows["delta_loss_P"] - raw["delta_loss"]) > 1e-9
 

@@ -1,8 +1,8 @@
 """Does ``chi_pos`` equal ``sum_k gamma_k^2 p_k`` from an explicit eigendecomposition?
 
 ``test_chi_net.py`` already checks the *raw* self-pair triple against an explicit
-Jacobian. This file extends the same ground truth to the two cases WP0 added and
-that were never covered: the **preconditioned** ruler (``eigh(Theta_P)``, not
+Jacobian. This file extends the same ground truth to the two cases the preconditioned
+observables added and that were never covered: the **preconditioned** values (``eigh(Theta_P)``, not
 ``eigh(Theta)``) and the **cross** pair, both on a batch with *asymmetric*
 padding and unequal batch sizes — and it goes through the whole ``Analyzer``
 rather than the estimator alone, so the normalisation and the combinator are in
@@ -248,9 +248,9 @@ def test_the_spectral_reference_is_discriminating() -> None:
         mixed = float((gamma * (ev_p / ev_p.sum())).sum())
         # (a) the mistake this file rules out: gamma from Theta, p from Theta_P.
         assert abs(right - mixed) > 0.2 * abs(right), (name, right, mixed, "mixed basis")
-        # (b) the P ruler is a different number from the raw one, so a P assertion
+        # (b) the P value is a different number from the raw one, so a P assertion
         # cannot pass by accidentally measuring raw. The margin is smaller than (a)
-        # because `right` and `raw` are both genuine rulers on the same kernel
+        # because `right` and `raw` are both genuine measurements on the same kernel
         # family; 5% is comfortably above the ~1% Hutchinson noise these tests run at.
         assert abs(right - raw) > 0.05 * abs(raw), (name, right, raw, "P vs raw")
 

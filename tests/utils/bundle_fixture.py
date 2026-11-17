@@ -1,6 +1,6 @@
 """Write a real checkpoint bundle by running a tiny AdamW training loop.
 
-This is the *writer* half of the WP0 golden acceptance gate (``03_estimator.md``
+This is the *writer* half of the golden acceptance gate (``03_estimator.md``
 §Golden step 1). It runs ~100 CPU AdamW steps on a tiny model over a synthetic
 but *learnable* token stream, bundling every ~10 steps in the frozen schema of
 ``00_context.md``, and hands the caller back everything needed to check the
