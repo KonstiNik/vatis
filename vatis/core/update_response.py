@@ -64,7 +64,9 @@ from typing import Any
 
 import torch
 
-# Chunk size of the fp64 reductions, as in :mod:`vatis.core.preconditioner`.
+# Chunk size of the fp64 reductions, as in :mod:`vatis.core.preconditioner`. It is
+# read when a reduction runs (a ``chunk`` argument of ``None`` means "this
+# value"), so a test can lower it and watch the very calls the analyzer makes.
 _CHUNK = 1 << 25
 
 # ``torch.nn.utils.clip_grad_norm_`` divides by ``total_norm + 1e-6``.
@@ -287,7 +289,7 @@ class OptimizerUpdate:
         grad_update: torch.Tensor,
         params: Sequence[torch.Tensor],
         *,
-        chunk: int = _CHUNK,
+        chunk: int | None = None,
         no_gradient: Mapping[int, str] | None = None,
     ) -> Iterator[tuple[int, int, torch.Tensor, torch.Tensor, torch.Tensor]]:
         """Yield the update, chunk by chunk, split into its three parts.
@@ -302,7 +304,7 @@ class OptimizerUpdate:
                 order, **before clipping** (clipping is applied here).
             params: ``theta_t``, one tensor per parameter in the same order.
             chunk: maximal number of elements per item; bounds the fp64
-                temporaries.
+                temporaries. ``None``: the module's ``_CHUNK``.
             no_gradient: parameter index -> display name, for the parameters
                 that received **no gradient at all** on the update batch (not a
                 zero one: none). torch skips such a parameter entirely when its
@@ -344,6 +346,7 @@ class OptimizerUpdate:
                         f"has {p.numel()}"
                     )
         device = grad_update.device
+        chunk = _CHUNK if chunk is None else chunk
         clip = self.clip_coefficient(grad_update)
         offset = 0
         for index, p in enumerate(params):
@@ -525,7 +528,7 @@ def weight_delta_dot_fp64(
     params_after: Sequence[torch.Tensor],
     params_before: Sequence[torch.Tensor],
     *,
-    chunk: int = _CHUNK,
+    chunk: int | None = None,
 ) -> torch.Tensor:
     """``grad . (theta_after - theta_before)`` accumulated in fp64, chunked.
 
@@ -537,6 +540,7 @@ def weight_delta_dot_fp64(
         raise ValueError(
             f"the two checkpoints have {len(params_after)} and {len(params_before)} parameters"
         )
+    chunk = _CHUNK if chunk is None else chunk
     total = torch.zeros((), dtype=torch.float64, device=grad.device)
     offset = 0
     for after, before in zip(params_after, params_before, strict=True):
@@ -560,7 +564,8 @@ def weight_delta_dot_fp64(
     return total
 
 
-def _sum_sq_fp64(flat: torch.Tensor, chunk: int = _CHUNK) -> torch.Tensor:
+def _sum_sq_fp64(flat: torch.Tensor, chunk: int | None = None) -> torch.Tensor:
+    chunk = _CHUNK if chunk is None else chunk
     total = torch.zeros((), dtype=torch.float64, device=flat.device)
     for i in range(0, flat.numel(), chunk):
         c = flat[i : i + chunk].to(dtype=torch.float64)

@@ -417,3 +417,92 @@ def test_the_reduction_never_holds_a_parameter_sized_fp64_vector() -> None:
         del parts
     # g, theta, m, v and the three parts for AdamW; no v for SGD.
     assert most == {"adamw": 7, "sgd": 6}
+
+
+# ------------------------------------- allocations of the calls the analyzer makes
+
+
+def _allocations(call: Callable[[], Any]) -> tuple[int, int]:
+    """What ``call`` allocates on the CPU, in bytes, as torch's profiler records it.
+
+    Returns ``(largest, peak)``: the largest amount a single operator allocated,
+    and the highest net amount allocated at any moment. An allocation is seen
+    whether or not the tensor is kept, so a temporary that is dropped at once
+    counts like one that is held.
+    """
+    with torch.autograd.profiler.profile(profile_memory=True) as prof:
+        call()
+    events = sorted(prof.function_events, key=lambda event: event.time_range.start)
+    largest = net = peak = 0
+    for event in events:
+        largest = max(largest, event.self_cpu_memory_usage)
+        net += event.self_cpu_memory_usage
+        peak = max(peak, net)
+    return largest, peak
+
+
+@pytest.mark.parametrize("rule_name", ["adamw", "sgd"])
+def test_the_reductions_the_analyzer_calls_allocate_per_chunk_not_per_model(
+    monkeypatch: pytest.MonkeyPatch, rule_name: str
+) -> None:
+    """``response``, ``clip_coefficient`` and ``weight_delta_dot_fp64``, called as
+    the analyzer calls them (without a ``chunk`` argument), on a model of 64
+    chunks.
+
+    The module's chunk size is lowered for the test, so that the calls
+    themselves are watched and not a re-implementation of their loops. Pinned:
+
+    - no operator allocates as much as two fp64 chunks (8 bytes per element;
+      measured: one chunk, plus a scalar). A copy of the gradient in fp64, kept
+      or not, would be 64 chunks; one in fp32, 32;
+    - the net amount allocated never exceeds 20 fp64 chunks (measured: 14 in
+      ``response`` for AdamW and 10 for SGD, 2 for the clip factor, 4 for the
+      weight difference), under a third of one parameter-sized fp64 vector.
+    """
+    import vatis.core.update_response as update_response_module
+    from vatis.core.update_response import weight_delta_dot_fp64
+
+    chunk, sizes = 1000, (40_000, 24_000)
+    n_params = sum(sizes)
+    fp64_chunk = 8 * chunk
+    monkeypatch.setattr(update_response_module, "_CHUNK", chunk)
+    torch.manual_seed(0)
+    params = [torch.randn(n) for n in sizes]
+    params_after = [p + 1e-3 * torch.randn_like(p) for p in params]
+    grad = torch.randn(n_params)
+    grads_eval = {"update": grad, "held_out": torch.randn(n_params)}
+    if rule_name == "adamw":
+        rule = OptimizerUpdate(
+            family="adam",
+            hypers=[AdamHyper(lr=1e-3, beta1=0.9, beta2=0.99, eps=1e-8, weight_decay=0.1)] * 2,
+            step=3,
+            first_moment=[torch.randn(n) for n in sizes],
+            second_moment=[torch.rand(n) for n in sizes],
+            clip_grad_norm=1.0,
+        )
+    else:
+        rule = OptimizerUpdate(
+            family="sgd",
+            hypers=[SGDHyper(lr=1e-2, momentum=0.9, weight_decay=0.1)] * 2,
+            step=3,
+            first_moment=[torch.randn(n) for n in sizes],
+            second_moment=None,
+            clip_grad_norm=1.0,
+        )
+    assert rule.clip_coefficient(grad) < 1.0  # the clip engages: its branch runs too
+
+    # The instrument sees a temporary that is not kept.
+    largest, _ = _allocations(lambda: grad.to(torch.float64))
+    assert largest == 8 * n_params
+
+    calls: dict[str, Callable[[], Any]] = {
+        "response": lambda: rule.response(grad, grads_eval, params),
+        "clip_coefficient": lambda: rule.clip_coefficient(grad),
+        "weight_delta_dot_fp64": lambda: weight_delta_dot_fp64(grad, params_after, params),
+    }
+    measured = {name: _allocations(call) for name, call in calls.items()}
+    for name, (largest, peak) in measured.items():
+        assert largest < 2 * fp64_chunk, (name, largest / fp64_chunk)
+        assert peak <= 20 * fp64_chunk, (name, peak / fp64_chunk)
+        # ... and the chunks were really cut: something of a chunk's size was allocated.
+        assert largest >= fp64_chunk, (name, largest / fp64_chunk)
