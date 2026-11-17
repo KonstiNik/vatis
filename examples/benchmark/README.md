@@ -10,6 +10,13 @@ benchmarks, each in its own subdirectory with its committed results:
 | [`ddp_scaling/`](ddp_scaling/DDP_SCALING_RESULTS.md) | strong / weak DDP scaling efficiency across ranks | pythia-1.4b | 1–4× A100 (40 GB) |
 | [`accuracy/`](accuracy/accuracy_pythia-14m.png) | χ_net estimator variance vs `n_hutchinson` (both methods) | pythia-14m | 1× A100 |
 
+One further benchmark is not an A100 run and is driven by its own script
+rather than by an sbatch job:
+
+| benchmark | question it answers | model | hardware |
+|---|---|---|---|
+| [`update_response/`](update_response/results_llama-11m.md) | what the rows of the step that was taken (`update_response=`) add in wall-clock and peak memory, with the SGD rule and with the AdamW rule | 11M-parameter Llama, native bundles | CPU (shared machine) and 1× RTX 3090 Ti |
+
 Each subdirectory holds its sweep script, an sbatch job, the committed result
 (`*.md` / `*.json`), and a plot (`*.png`).
 
