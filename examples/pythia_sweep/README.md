@@ -3,7 +3,7 @@
 This is the example to start with. It loads `EleutherAI/pythia-14m` at 13
 published training checkpoints, measures `chi_loss`, `chi_net`, `delta_loss`
 and `chi_pos` on a prose batch and a code batch at each one, and adds the
-cross pair (prose, code): does a gradient step on prose help or hurt the model
+cross pair (prose, code), which compares the gradients of the two batches: does a gradient step on prose help or hurt the model
 on code, and how does that change as Pythia trains? Longer notes — why real
 text, how the run is sized, the early-phase findings in full — are in
 [details.md](details.md).
@@ -35,8 +35,9 @@ The figure is `cos(g_prose, g_code) = δL(prose, code) / sqrt(δL(prose, prose) 
 the cross `delta_loss` with the size of the two gradients divided out.
 
 - **Most of the decorrelation is over by step 512.** The cosine falls from
-  +0.31 at step 1 to +0.012 at step 512 (about 26×). It rebounds a little at
-  step 1000 and then stays near zero, slightly negative.
+  +0.31 at step 1 to +0.012 at step 512 (about 26×). It rebounds to +0.043 at
+  step 1000, is still positive at step 2000, and from step 4000 on stays
+  slightly below zero.
 - **The raw cross `delta_loss` is not monotonic** ([delta_loss.png](delta_loss.png)):
   +3.25 at step 1, +0.95 at step 64, +2.62 at step 1000, below zero from about
   step 4000, −18 at step 143000. Its step-1000 rebound looks much larger than
@@ -66,12 +67,14 @@ smooth and monotonic; see [details.md](details.md#revisions-and-early-phase-find
 - Files: `results.parquet` (234 rows), `chi_loss.png`, `chi_net.png`,
   `delta_loss.png`, `chi_pos.png`, `cos_similarity.png`.
 - Settings: `chi_net_method="per_sequence_cv"`, `n_hutchinson=32`, batch
-  8 × 128 tokens, `micro_batch_size=8`, seed 0 (as recorded in the parquet and
-  in `run.py`).
+  8 × 128 tokens, `micro_batch_size=8` (recorded in the parquet), and seed 0
+  (`SEED` in `run.py`; the parquet records a probe seed derived from it per
+  row).
 - Regenerated on 17 November 2026 with the then-current code and committed in
   `e1aa6f4` (#15). The timings above are from an RTX 3090 Ti; the result file
   does not record the device.
 - Against the April 2026 files they replaced, `chi_loss` and `delta_loss` agree
   to rounding; `chi_net` and `chi_pos` differ by about 1% (at most 13%),
-  because the random probes are now drawn differently for the same seed. Every
-  number quoted above holds for the committed files.
+  because the random probes are now drawn differently for the same seed, and
+  the differences are the size the probe noise predicts. Every number quoted
+  above holds for the committed files.

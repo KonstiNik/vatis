@@ -945,8 +945,8 @@ examples/
 │   ├── run.py                     # phase 1: the sweep, writes results.parquet + plots
 │   ├── evaluate.py                # post-processing of results.parquet — derived observables
 │   └── results.parquet, *.png     # the committed outputs of both
-└── benchmark/                     # A100 performance suite (see benchmark/README.md)
-    ├── README.md                  # index for the three benchmarks below
+└── benchmark/                     # performance and accuracy benchmarks (see benchmark/README.md)
+    ├── README.md                  # index for the four benchmarks below
     ├── submit.sh                  # sbatch wrapper that reads .env (HF_HOME, SBATCH_*)
     ├── _build_eval_batch.py       # builds the fixed eval batch fixture
     ├── single_gpu/                # single-GPU (method, n_h, B) sweep + plots

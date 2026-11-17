@@ -1,15 +1,14 @@
 # What do `chi_pos` and its AdamW-preconditioned version look like over a training run?
 
-A small Llama (10,981,440 parameters) is trained for 300 AdamW steps and saves
-19 checkpoints, each with its optimizer state, as a checkpoint bundle. vatis
-reads the bundle and measures, at every checkpoint and on one GPU, the raw
-observables and the preconditioned observables (optimizer-aware measurement:
-the same quantities on the kernel `J P Jᵀ`, with AdamW's `P = 1/(√v̂ + ε)` read
-from the saved optimizer state). The result is one figure and a timing table.
-The figure is descriptive: it shows that the pipeline works on a real bundle,
-not how training behaves. Longer notes — the measurement batches, the padding
-convention, the full sizing, the step-0 gap, the `1/ε` ceiling and the re-run
-of the training — are in [details.md](details.md).
+A small Llama (11M parameters) is trained for 300 AdamW steps; 19 checkpoints
+are saved with the optimizer's state. At each one vatis measures `chi_pos`
+twice: plainly ("raw"), and weighted the way AdamW weights each parameter
+("preconditioned", `chi_pos^P`). The weights are AdamW's per-parameter factors
+`P = 1/(√v̂ + ε)`, read from the saved optimizer state. The example shows that
+the pipeline works on a real run; it says nothing about training at scale.
+Longer notes — the measurement batches, the padding convention, the full
+sizing, the step-0 gap, the `1/ε` ceiling and the re-run of the training — are
+in [details.md](details.md).
 
 ## What you need
 
@@ -39,9 +38,8 @@ python examples/optimizer_aware_llama/run.py \
 python examples/optimizer_aware_llama/evaluate.py --dir examples/optimizer_aware_llama
 ```
 
-If the `eval_batch_*.npy` files are missing, `run.py` measures on random tokens
-with a loud warning and marks the figure and `run_summary.json` "scientifically
-empty": a pipeline demo, never a measurement.
+Without the `eval_batch_*.npy` files `run.py` falls back to random tokens, which
+is a pipeline demo, never a measurement ([details.md](details.md)).
 
 ## What it shows
 
@@ -49,22 +47,27 @@ empty": a pipeline demo, never a measurement.
 
 Left: `chi_pos` (blue) and `chi_pos^P` (orange) versus training step; right:
 the same versus train loss, with time running left to right. One line each for
-the eval batch `B` on itself and for the two cross pairs `A1 × B` and `A2 × B`.
+the eval batch `B` on itself and for the two cross pairs `A1 × B` and `A2 × B`
+(a cross pair compares the gradients of two different batches).
 The y axis is symlog because cross pairs are signed.
 
 - **There is no `chi_pos^P` at step 0.** The optimizer state of a step-0
   checkpoint is empty, so no AdamW `P` exists there; the P rows are skipped
   (18 of 19 checkpoints have them) and the orange curves start at step 1.
-- **The `1/ε` ceiling matters early and fades.** Coordinates the optimizer has
-  never touched sit at `P = 1/ε = 1e8`. On batch `B` they carry 10.23% of
-  `chi_net^P` at step 1, 0.37% at step 20 and 0.00% at step 299; they are 7.61%,
-  1.73% and 0.71% of all coordinates. All of them are rows of the token
-  embedding.
+- **Parameters AdamW has never updated distort `chi_pos^P` early, then stop
+  mattering.** AdamW gives them the weight `1/ε = 10⁸`; they are all
+  embedding rows of tokens that have not yet appeared in a training batch. At
+  step 1 they are 7.6% of the parameters and carry 10% of `chi_net^P` on batch
+  B; the share peaks at 14% at step 2, is below 0.4% from step 11 on, and by
+  step 299 they are 0.7% of the parameters and carry nothing, because B uses
+  none of those tokens.
 - **The cross pairs turn negative at the last checkpoint:** at step 299 both
   `chi_pos` and `chi_pos^P` are slightly negative for `A1 × B` and `A2 × B`.
-- **The preconditioned observables cost nothing extra:** about 4 s of analysis
-  per checkpoint for 3 batches and 2 cross pairs, both observables together,
-  because the P values reuse the raw pass's probes. Peak GPU memory 1683 MiB.
+- **The preconditioned observables need no extra backward pass:** they reuse
+  the raw pass's probes. Raw and preconditioned together took about 4 s of
+  analysis per checkpoint for 3 batches and 2 cross pairs; this run did not time
+  the raw observables alone. Largest per-checkpoint peak GPU memory 1687 MiB
+  (`performance.csv`).
 
 ## What it does not show
 
@@ -93,4 +96,4 @@ The y axis is symlog because cross pairs are signed.
 - Hardware: NVIDIA GeForce RTX 3090 Ti, torch 2.10.0+cu128 (recorded in
   `run_summary.json`).
 - Regenerated on 17 November 2026 with the then-current code and committed in
-  `e1aa6f4` (#15); moved into this folder, unchanged, in `e86142f`.
+  `e1aa6f4` (#15); moved into this folder, unchanged, in `00944c4` (#17).

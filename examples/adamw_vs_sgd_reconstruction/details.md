@@ -3,6 +3,27 @@
 The numbers and reasoning behind the four points of [README.md](README.md).
 Every number per step and batch is in [table.md](table.md).
 
+## The three predictions and their rows
+
+At a checkpoint of an AdamW run the optimizer moved the weights from θ_t to
+θ_{t+1}. To first order this changed the loss on a batch B by
+`truth = ∇L_B · (θ_{t+1} − θ_t)`, read from the two stored weight files (row
+`loss_change_first_order_weights`). A is the batch the step was computed on; η
+is the step's learning rate (row `update_lr`); c ≤ 1 is the factor by which
+gradient clipping scaled ∇L_A (row `update_clip_factor`); P_t is AdamW's
+diagonal preconditioner, built from the second moments the optimizer had saved
+before the step.
+
+| prediction | what it is | from the rows |
+|---|---|---|
+| AdamW rule ("optimizer's rule" in the figures and in `table.md`) | the AdamW update rebuilt from the saved optimizer state: a gradient part, a momentum part and a weight-decay part | `loss_change_first_order` = `_grad` + `_hist` + `_wd` |
+| SGD rule | a plain gradient step with the same learning rate η and clip factor c — no momentum, no decay, no preconditioner: −η·c·∇L_B·∇L_A | `−update_lr · update_clip_factor · delta_loss` |
+| −η·δL_P | AdamW's pre-step preconditioner P_t applied to the current gradient alone, without momentum or decay: −η·∇L_B·P_t∇L_A | `−update_lr · delta_loss_P` |
+
+Each prediction is evaluated on the step's own update batch (B = A) and on one
+held-out batch. The realized change `L_B(θ_{t+1}) − L_B(θ_t)` (row
+`loss_change`) is shown too, so that what first order itself misses is visible.
+
 ## 1. The AdamW rule
 
 The ratio of the AdamW rule to the truth is within 1.6·10⁻⁵ of one at step 0,

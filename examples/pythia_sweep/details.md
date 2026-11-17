@@ -48,7 +48,7 @@ for the wall-clock and memory sweep on an A100.
 
 The analysis script is separate from `run.py` on purpose: the compute is the
 expensive part (about a minute on an RTX 3090 Ti), the analysis is cheap (under
-a second), and `evaluate.py` imports only `pyarrow`, not vatis. That makes the
+a second), and `evaluate.py` imports no vatis code. That makes the
 parquet schema the contract — the right pattern for any downstream consumer.
 
 ## Revisions and early-phase findings
@@ -78,15 +78,19 @@ smooth and monotonic; with it several non-trivial features are visible
    structured representations.
 3. **The cross `delta_loss` has non-monotonic structure.** It starts at
    **+3.25 at step 1** (prose and code gradients well aligned on a random
-   model), drops to **+0.95 at step 64** (essentially orthogonal), climbs back
-   to **+2.62 at step 1000**, then declines, **crosses zero around step 4000**
-   and ends at **−18 at step 143000**. Without the early checkpoints the
+   model), drops to **+0.95 at step 64** and to its lowest positive value,
+   **+0.67, at step 512**, climbs back to **+2.62 at step 1000**, then
+   declines, **crosses zero around step 4000** and ends at **−18 at step
+   143000**. The drop to step 64 is mostly the gradients shrinking (the self
+   `delta_loss` falls from 7.9 to 2.5 on prose and from 13.8 to 5.5 on code;
+   the cosine is still 0.25 at step 64); by step 512 the gradients are nearly
+   orthogonal (cosine 0.012). Without the early checkpoints the
    trajectory looks like a clean monotonic decline from positive to negative —
    a simpler, and partly wrong, story.
 
 The negative end of the cross `delta_loss` trajectory is the negative-`chi_pos`
-interference regime that the earlier write-up attributes to the paper
-(arXiv:2605.31244 §A.2): a gradient step that decreases prose loss *increases*
+interference regime (arXiv:2605.31244 §A.2; not re-checked against the paper
+here): a gradient step that decreases prose loss *increases*
 code loss, and vice versa. None of this would be visible on random-integer
 inputs, where every batch is statistically equivalent to every other.
 
@@ -98,8 +102,9 @@ normalized cross-batch gradient correlation
 The raw cross `delta_loss` plot is visually misleading: it shows a
 step 1 → step 512 decline followed by a "rebound" at step 1000, but the rebound
 is amplified by gradient magnitudes growing at the same time. In normalized
-terms the rebound is real but ~10× smaller than the absolute number suggests,
-and the dominant feature is the early decline (`+0.31 → +0.012`, ~26×): **most
+terms the rebound is real but much smaller: the raw cross `delta_loss` at step
+1000 is back to 81% of its step-1 value (2.62 against 3.25), the cosine only to
+14% of its step-1 value (0.043 against 0.311). The dominant feature is the early decline (`+0.31 → +0.012`, ~26×): **most
 of the prose-vs-code gradient decorrelation is over by step 512**, well before
 the absolute cross `delta_loss` even starts looking interesting.
 

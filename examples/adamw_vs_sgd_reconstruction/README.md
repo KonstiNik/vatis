@@ -1,25 +1,22 @@
 # Which update rule reproduces the step an AdamW run took?
 
-At a checkpoint of an AdamW run the optimizer moved the weights from θ_t to
-θ_{t+1}. To first order this changed the loss on a batch B by
-`truth = ∇L_B · (θ_{t+1} − θ_t)`, read from the two stored weight files (row
-`loss_change_first_order_weights`). This example compares three predictions of
-that number that use only what was known *before* the step. That the AdamW rule
-rebuilt by vatis matches the stored weights is a **consistency check of vatis
-and the bundle, not a finding**; the comparison with the other two rules is the
-point. It is a small check, not a study: one run, one seed, an 11M-parameter
-model, 13 steps, 2 batches.
+An AdamW run took a step from θ_t to θ_{t+1}. How much that step changed the
+loss on a batch, to first order, can be read off the two stored weight files;
+call it the truth. Which rule, using only what was known before the step,
+predicts it?
 
-| prediction | what it is | from the rows |
-|---|---|---|
-| AdamW rule ("optimizer's rule" in the figures and in `table.md`) | the AdamW update rebuilt from the saved optimizer state: a gradient part, a momentum part and a weight-decay part | `loss_change_first_order` = `_grad` + `_hist` + `_wd` |
-| SGD rule | a plain gradient step with the same learning rate η and clip factor c — no momentum, no decay, no preconditioner: −η·c·∇L_B·∇L_A | `−update_lr · update_clip_factor · delta_loss` |
-| −η·δL_P | AdamW's pre-step preconditioner P_t applied to the current gradient alone, without momentum or decay: −η·∇L_B·P_t∇L_A | `−update_lr · delta_loss_P` |
+1. the AdamW update that vatis rebuilds from the saved optimizer state;
+2. a plain SGD step with the same learning rate η (and the same gradient
+   clipping);
+3. AdamW's preconditioner P — its per-parameter step-size factors before the
+   step — applied to the current gradient alone (−η·δL_P, where δL_P is the
+   dot product of the batch's gradient with the step's gradient, weighted by
+   P).
 
-A is the batch the step was computed on. Each prediction is evaluated on the
-step's own update batch (B = A) and on one held-out batch. The realized change
-`L_B(θ_{t+1}) − L_B(θ_t)` (row `loss_change`) is shown too, so that what first
-order itself misses is visible.
+Rule 1 has to match: that it does checks vatis and the bundle, it is not a
+finding. The point is how far off rules 2 and 3 are. Each is evaluated on the
+step's own batch and on one held-out batch. One run, one seed, 11M parameters,
+13 steps, 2 batches; row names and formulas are in [details.md](details.md).
 
 ## What you need
 
@@ -27,6 +24,10 @@ order itself misses is visible.
   with fp32 weight files, in which every step used has its successor stored
   (the truth needs θ_t and θ_{t+1}), plus a directory of held-out
   `eval_batch_*.npy` files (the last one is used).
+- The model code: `run.py` rebuilds the Llama from the training repository's
+  model definition (point the environment variable `VATIS_LLAMA_MODEL_PATH` at
+  that repository), or from your own factory given as
+  `--model-factory module:function`.
 - The gradient clipping of the run. This bundle records the clip value but not
   the algorithm, so the command states it: `--clip-grad-norm 1.0`.
 - A GPU is optional: 11 s on an RTX 3090 Ti for the 13 steps committed here,
@@ -48,23 +49,28 @@ python examples/adamw_vs_sgd_reconstruction/evaluate.py   # table.md + reconstru
 *Ratio of each prediction to the truth, log scale; the horizontal line at 1
 means exact. Hollow markers have the wrong sign and are drawn at |ratio|. Steps
 are not to scale. Steps 0–9 are in the learning-rate warm-up, and the clip
-engaged only at step 9 (c = 0.837).*
+engaged only at step 9 (c = 0.837). The figure calls rule 1 the
+optimizer's rule.*
 
 1. **The AdamW rule reproduces the truth.** It agrees to within 2·10⁻⁵
    relative at every step. This is the consistency check.
-2. **After the warm-up, no rescaling makes the SGD rule fit both batches.** It
-   is 400–1600 times too small on the update batch, which says little: η was
-   set for preconditioned steps. In steps 0–9 one rescaling would nearly fix
-   it, but there the gradients of the two batches are strongly aligned. From
-   step 661 on its ratios on the two batches differ by a factor of 2.7–21.
+2. **After the warm-up no learning rate fixes the SGD rule.** It is
+   400–1600× too small, as expected, since the rate was set for AdamW. The real
+   test is whether one rescaling fits both batches at once. In the first ten
+   steps it nearly would (within 13%), but there the two batches' gradients are
+   strongly aligned, so that proves little. From step 661 on the two batches
+   would need factors 2.7–21 apart, and at step 33062 factors of opposite
+   sign.
 3. **−η·δL_P overshoots the step taken, by ten times or more late in
-   training** (10–40 times the truth from step 661 on). The current gradient enters an AdamW
+   training** (10–40 times the truth from step 661 on, and 182 times at step
+   33062 on the held-out batch, where the truth is small). The current gradient
+   enters an AdamW
    step only with weight 1 − β₁ = 0.1, and the step is taken with a
    preconditioner already updated by that same gradient. That is how AdamW
    works, not something read from the result file.
 4. **First order is not the whole step.** From step 661 on, the realized loss
-   change on the held-out batch has the opposite sign to the first-order change
-   at 5 of 8 steps.
+   change on the held-out batch (`L(θ_{t+1}) − L(θ_t)`) has the opposite sign
+   to the first-order change at 5 of 8 steps.
 
 All ranges, per-step numbers and the reasoning behind points 2 and 3 are in
 [details.md](details.md).

@@ -1,8 +1,10 @@
 # vatis benchmarks
 
-Performance and accuracy benchmarks for vatis. The first three were measured
-on NVIDIA A100 GPUs — the production-class hardware vatis is meant to run on —
-each in its own subdirectory with its committed results:
+Performance and accuracy benchmarks for vatis, each in its own subdirectory
+with its committed results. `single_gpu/` and `ddp_scaling/` were measured on
+NVIDIA A100 GPUs — the production-class hardware vatis is meant to run on;
+`accuracy/` was first run on an A100, and the committed file is a re-run on an
+RTX 3090 Ti:
 
 | benchmark | question it answers | model | hardware |
 |---|---|---|---|
@@ -17,8 +19,10 @@ rather than by an sbatch job:
 |---|---|---|---|
 | [`update_response/`](update_response/results_llama-11m.md) | what the rows of the step that was taken (`update_response=`) add in wall-clock and peak memory, with the SGD rule and with the AdamW rule | 11M-parameter Llama, native bundles | CPU (shared machine) and 1× RTX 3090 Ti |
 
-Each subdirectory holds its sweep script, an sbatch job, the committed result
-(`*.md` / `*.json`), and a plot (`*.png`).
+Each of the first three subdirectories holds its sweep script, an sbatch job,
+the committed result (`*.md` / `*.json`), and a plot (`*.png`).
+`update_response/` holds its script and its committed results (`*.jsonl` and a
+`*.md` table), without an sbatch job or a plot.
 
 ## Running them
 
