@@ -75,6 +75,16 @@ The labels are the single source of truth for what enters the loss
   estimator, same expectation, different random numbers. `chi_loss` and
   `delta_loss` are bit-identical to 0.2.x, and so is `chi_net` with Gaussian
   probes on a CPU run. `make_probe` refuses a CUDA generator.
+- **Multi-rank (DDP) runs draw different Hutchinson probes for a given `seed`**:
+  rank 0 keeps the per-call stream, every other rank now has its own (see
+  "Fixed"). `chi_net`, `chi_net_P`, `chi_pos` and `chi_pos_P` (and
+  `chi_net_P_capped`) of a run with more than one rank are therefore a different
+  draw than in **every earlier version** — same estimator, same expectation —
+  and they depend on the number of ranks as well as on the seed. Single-process
+  results are unchanged *by this fix* (the CPU-probe entry above still applies
+  to them), and so are `chi_loss` and `delta_loss` everywhere. The
+  `hutchinson_seed` column keeps its meaning: it is the per-call seed, the
+  stream of rank 0, and is the same on every rank.
 - `chi_pos` is computed in fp64 and returned as an fp64 scalar. The absolute
   `1e-30` floor on its denominator is gone: only an exactly-zero denominator
   yields `0.0`.
@@ -89,6 +99,23 @@ The labels are the single source of truth for what enters the loss
   as before.
 
 ### Fixed
+- **DDP ranks no longer replay one Hutchinson probe stream.** Every rank seeded
+  its generator with the same per-call seed and drew the probes for its own
+  shard, so the same random vectors landed on the `k`-th sample of every shard.
+  The shards' estimation errors were then positively correlated (the
+  output-space Gram matrices of different inputs are not orthogonal), and the
+  variance of the all-reduced `chi_net` — hence of `chi_pos`, and to a
+  model-dependent degree of `chi_net_P` / `chi_pos_P` — was between 1× and
+  world-size× that of independent rank streams on the same shards. Where in
+  that range depends on the model and on the probe distribution, and it has
+  been measured **only on CPU test models of at most 1.25M parameters** (two toy
+  transformers and one small hub model; 2 / 4 ranks, one sequence per
+  micro-batch, where independent rank streams and a single process have the
+  same variance): 1.3× / 2.1–2.6× with the default Rademacher probes,
+  1.4–1.9× / 2.6–3.3× with Gaussian probes. Nothing larger has been measured.
+  The estimate was unbiased throughout. Rank `r > 0` now seeds its generator
+  from the per-call seed and `r`; the same measurements then give 0.8–1.2×,
+  consistent with 1.
 - The `valid_mask_fn ∧ labels != ignore_index` intersection is now applied to
   the token counts, the gradient weights and the probes, not only to `chi_loss`.
   With a `valid_mask_fn` *wider* than the labels (one that accepts positions
@@ -109,18 +136,24 @@ The labels are the single source of truth for what enters the loss
   loaders were not affected (their mask equals `labels != ignore_index`); every
   observable is bit-identical for them.
 
+### Documentation
+- `micro_batch_size` is documented as a noise setting, not only a memory
+  setting (README, `docs/SPEC.md`): one probe spans the whole micro-batch, so at
+  fixed `n_hutchinson` the variance of `chi_net` grows about linearly with the
+  micro-batch size for both estimators — measured ×1.7 / ×3.4 / ×6.5 at
+  micro-batch 2 / 4 / 8 on a trained toy transformer and ×1.1 / ×1.6 / ×1.9 on
+  `SimpleStories-1.25M` (small CPU test models only). This is existing
+  behaviour, not a change; the estimate is unbiased at every setting.
+- README "Multi-GPU" and `docs/SPEC.md` state that the sampled values of a
+  multi-rank run depend on the seed and on the number of ranks, and how the
+  batch is sharded when `B % N != 0` (the first `B % N` ranks get one sequence
+  more; the docs said the last rank gets a smaller shard).
+
 ### Known limitations
 - `delta_loss_P` is **not** the first-order loss change of the AdamW step:
   momentum, weight decay and the step's own second-moment update are excluded.
 - AdamW's `P` can only be built from native checkpoint bundles; optimizer states
   published with hub checkpoints are not read.
-- **DDP: every rank draws the same probe stream for its own shard.** The ranks'
-  estimation errors are therefore correlated, and a multi-rank `chi_net` /
-  `chi_net_P` (hence `chi_pos` / `chi_pos_P`) has a larger variance than a
-  single-process run with the same `n_hutchinson`, by a factor that depends on
-  the model, the data and the number of ranks. The estimate stays unbiased;
-  `chi_loss` and `delta_loss` are not affected. Fixed in a follow-up pull
-  request.
 - The unshifted-label guard of `causal_lm_loss` is not exhaustive: a single
   labelled token at the very end of a sequence, or a label equal to the token
   after it, looks the same in both conventions and is scored as given; a custom

@@ -1,19 +1,26 @@
 """Worker script invoked under torchrun by ``test_ddp_loopback``.
 
-Each rank initializes a process group, runs the analyzer on a fixed shared
-batch, and writes its result row dict to a JSON file at the path passed via
-``--out``. The driver test reads back rank 0's file and compares against the
-single-GPU baseline.
+Each rank initializes a process group and runs the analyzer on a fixed shared
+batch. Rank 0 writes its result rows to the JSON file passed via ``--out``; the
+driver test reads that file back and compares against the single-GPU baseline.
+Every other rank writes its (in-memory) rows to ``<out>.rank<r>``, for the tests
+that check what each rank records.
 
 ``--pin-probes`` swaps ``make_probe`` for :class:`ShapeKeyedProbe`, which makes
 ``chi_net`` a *deterministic functional of the shard*. That is what lets the
 driver compare DDP against single-process **exactly** instead of within a
 sampling bound: with the shipped RNG the two runs draw different probes for
-different samples (a rank's generator restarts at the same seed for its own
-shard), so only a statistical comparison is possible and it hides plumbing bugs
-of a few percent. Unbiasedness is tested elsewhere
+the same samples (rank 0 draws the per-call stream for its shard, every other
+rank draws its own rank-derived stream, while a single process runs the per-call
+stream through the whole batch), so DDP and single-process can only be compared
+statistically. Unbiasedness is tested elsewhere
 (``tests/unit/test_chi_net_probe_exactness.py``); here we are testing sharding
 and the all-reduce.
+
+``--duplicate-half`` builds the batch as two copies of a half-size batch, so the
+two ranks of a 2-rank run hold the *same* samples. That is the configuration in
+which ranks replaying one probe stream is visible without any statistics: the
+second rank then reproduces the first rank's number bit for bit.
 
 ``--ceiling`` (with ``--preconditioner``) swaps the spread ``P`` for
 :func:`ceiling_preconditioner`: a ``P`` that has a ceiling and entries sitting
@@ -129,6 +136,11 @@ def main() -> int:
         action="store_true",
         help="with --preconditioner: a P with a ceiling and entries at it (adds the capped rows)",
     )
+    parser.add_argument(
+        "--duplicate-half",
+        action="store_true",
+        help="batch = two copies of a (batch-size // 2)-sample batch: identical shards on 2 ranks",
+    )
     args = parser.parse_args()
 
     if args.pin_probes:
@@ -161,9 +173,15 @@ def main() -> int:
                 diag = torch.exp(torch.randn(n_params, generator=gen) * 2.0)
                 precond = Preconditioner.from_diagonal(diag, descriptor="explicit")
 
-        batch = make_tiny_lm_batch(
-            batch_size=args.batch_size, seed=args.seed, pad_fraction=0.25, device="cpu"
-        )
+        if args.duplicate_half:
+            half = make_tiny_lm_batch(
+                batch_size=args.batch_size // 2, seed=args.seed, pad_fraction=0.25, device="cpu"
+            )
+            batch = {k: torch.cat([v, v]) for k, v in half.items()}
+        else:
+            batch = make_tiny_lm_batch(
+                batch_size=args.batch_size, seed=args.seed, pad_fraction=0.25, device="cpu"
+            )
         results = analyze(
             model=bundle,
             revisions=["step0"],
@@ -175,9 +193,14 @@ def main() -> int:
             sink=None,
             device="cpu",
         )
+        rows = [r.to_dict() for r in results[0].rows]
         if get_rank() == 0:
-            rows = [r.to_dict() for r in results[0].rows]
             Path(args.out).write_text(json.dumps(rows))
+        else:
+            # The in-memory rows of the other ranks, for the tests that check what
+            # every rank records (the ``hutchinson_seed`` column). The values are
+            # the same all-reduced totals rank 0 holds.
+            Path(f"{args.out}.rank{get_rank()}").write_text(json.dumps(rows))
     finally:
         shutdown_distributed()
     return 0

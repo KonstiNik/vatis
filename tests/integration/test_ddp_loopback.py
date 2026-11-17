@@ -1,22 +1,32 @@
 """DDP loopback: 2 ranks on CPU via torchrun, against a single-process baseline.
 
-The interesting assertion is the **pinned-probe** one. With the shipped RNG each
-rank seeds its generator identically and then draws probes *for its own shard*,
-so the two runs apply different random numbers to different samples — ranks do
-**not** partition one global probe (an earlier version of this docstring said
-they did). The DDP total is therefore a different, still unbiased, estimate of
-the same trace and the two runs can only be compared statistically. The original
-assertion allowed 50% relative error on ``chi_net``, which is loose enough to
-pass through a real sharding bug (the native-RNG gap it tolerates is ~6%).
+**Seeding.** Each rank draws the probes *for its own shard* from its own stream:
+rank 0 from the per-call seed (the ``hutchinson_seed`` column — the stream a
+single process uses), rank ``r > 0`` from a seed derived from it and ``r``
+(``vatis.analyzer._rank_probe_seed``). Ranks do **not** partition one global
+probe, so with the shipped RNG the DDP total is a different, still unbiased,
+estimate of the same trace than the single-process one, and those two can only
+be compared statistically. The original assertion allowed 50% relative error on
+``chi_net``, which is loose enough to pass through a real sharding bug (the
+native-RNG gap it tolerates is ~6%).
 
-So the exactness claim is made with ``--pin-probes``: ``make_probe`` becomes a
-shape-keyed constant (see ``_ddp_worker.ShapeKeyedProbe``), which turns
-``chi_net`` into a deterministic functional of the shard. Then DDP **must**
-reproduce single-process for every observable, including the preconditioned
-triple, and it does to ~1e-7 — the floor set by the fp32 flat gradient the
-all-reduce operates on. Unbiasedness of the estimator is covered by
-``tests/unit/test_chi_net_probe_exactness.py``; this file is about sharding and
-the all-reduce.
+Until this was fixed every rank seeded its generator *identically*. The same
+random vectors then landed on the ``k``-th sample of every shard, the shards'
+estimation errors were positively correlated, and the variance of the summed
+``chi_net`` was up to the world size times what independent rank streams give.
+``test_ddp_ranks_do_not_replay_one_probe_stream`` pins that on the real
+``torchrun`` path, and ``test_ddp_shipped_rng_equals_the_per_rank_streams`` pins
+the seeding rule exactly; the statistics are in
+``tests/unit/test_ddp_probe_streams.py``.
+
+The exactness claim against **single-process** is made with ``--pin-probes``:
+``make_probe`` becomes a shape-keyed constant (see
+``_ddp_worker.ShapeKeyedProbe``), which turns ``chi_net`` into a deterministic
+functional of the shard. Then DDP **must** reproduce single-process for every
+observable, including the preconditioned triple, and it does to ~1e-7 — the
+floor set by the fp32 flat gradient the all-reduce operates on. Unbiasedness of
+the estimator is covered by ``tests/unit/test_chi_net_probe_exactness.py``; this
+file is about sharding, the all-reduce and the per-rank probe streams.
 
 Also covered: ``B % world_size != 0`` (batch 5 over 2 ranks), which exercises the
 token-weighted rank re-weighting rather than an even split, plus padding so the
@@ -25,6 +35,8 @@ per-rank valid-token counts differ.
 The ``*_capped`` rows have their own pinned-probe test, because the ``P`` of the
 test above has no ceiling and therefore no capped rows: with it, dropping the
 all-reduce of ``chi_net_P_capped`` changed nothing any tier asserts.
+``test_ddp_shipped_rng_capped_row_equals_the_per_rank_streams`` adds the same row
+under the shipped RNG, against the per-rank streams.
 
 The multi-GPU path remains unvalidated: this is a CPU gloo loopback
 (``CUDA_VISIBLE_DEVICES=""``), because NCCL wants one device per rank.
@@ -37,10 +49,12 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 import torch
 
+import vatis.analyzer as analyzer_mod
 import vatis.core.chi_net.hutchinson as hutch_mod
 import vatis.core.chi_net.per_seq_cv as cv_mod
 from tests.fixtures.tiny_transformer import (
@@ -51,7 +65,10 @@ from tests.fixtures.tiny_transformer import (
 )
 from tests.integration._ddp_worker import ShapeKeyedProbe, ceiling_preconditioner
 from vatis import analyze
+from vatis.core.chi_net import build_estimator
+from vatis.core.observables import chi_pos
 from vatis.core.preconditioner import Preconditioner
+from vatis.distributed.sharding import shard_batch
 from vatis.models.hf import ModelBundle
 
 pytestmark = pytest.mark.integration
@@ -61,7 +78,7 @@ pytestmark = pytest.mark.integration
 DDP_REL = 1e-6
 
 
-def _run_ddp(
+def _run_ddp_rows(
     out_path: Path,
     *,
     seed: int,
@@ -71,8 +88,9 @@ def _run_ddp(
     pin_probes: bool = False,
     preconditioner: bool = False,
     ceiling: bool = False,
-) -> dict[str, float]:
-    """Spawn a 2-rank torchrun pinned to CPU, return rank 0's observables."""
+    duplicate_half: bool = False,
+) -> list[list[dict[str, Any]]]:
+    """Spawn a 2-rank torchrun pinned to CPU, return every rank's rows (as dicts)."""
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = ""  # force CPU even if a GPU is around
     cmd = [
@@ -100,6 +118,8 @@ def _run_ddp(
         cmd.append("--preconditioner")
     if ceiling:
         cmd.append("--ceiling")
+    if duplicate_half:
+        cmd.append("--duplicate-half")
     result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
     if result.returncode != 0:
         raise RuntimeError(
@@ -108,8 +128,16 @@ def _run_ddp(
             + "\n--- stderr ---\n"
             + result.stderr
         )
-    rows = json.loads(out_path.read_text())
-    return {r["observable"]: r["value"] for r in rows}
+    return [
+        json.loads(out_path.read_text()),
+        json.loads(Path(f"{out_path}.rank1").read_text()),
+    ]
+
+
+def _run_ddp(out_path: Path, **kwargs: Any) -> dict[str, float]:
+    """Spawn a 2-rank torchrun pinned to CPU, return rank 0's observables."""
+    rank0_rows = _run_ddp_rows(out_path, **kwargs)[0]
+    return {r["observable"]: r["value"] for r in rank0_rows}
 
 
 def _baseline(
@@ -242,8 +270,10 @@ def test_ddp_loopback_matches_single_process(tmp_path: Path) -> None:
 
     The ``chi_net`` bound here is a **sampling** tolerance, not an accuracy claim:
     with the shipped RNG the DDP and single-process estimates use different
-    probes, and the measured gap is a few percent. The exactness claim lives in
-    ``test_ddp_matches_single_process_exactly_with_pinned_probes``.
+    probes, and the measured gap is a few percent. The exactness claims live in
+    ``test_ddp_matches_single_process_exactly_with_pinned_probes`` (against
+    single-process) and ``test_ddp_shipped_rng_equals_the_per_rank_streams``
+    (the shipped RNG, against the documented per-rank streams).
     """
     out = tmp_path / "ddp.json"
     ddp = _run_ddp(out, seed=0, batch_size=4, n_h=8)
@@ -272,3 +302,189 @@ def test_ddp_loopback_matches_single_process(tmp_path: Path) -> None:
     rel_chi_net = abs(ddp["chi_net"] - base["chi_net"]) / max(1e-12, abs(base["chi_net"]))
     assert rel_chi_net < 0.5, f"chi_net mismatch: {ddp['chi_net']} vs {base['chi_net']}"
     assert all(value == value for value in ddp.values()), "no NaNs"
+
+
+# --------------------------------------------------------------- per-rank probe streams
+
+
+def _toy_bundle(seed: int) -> tuple[ModelBundle, Preconditioner]:
+    """The worker's model and explicit P, rebuilt in this process."""
+    torch.manual_seed(seed)
+    model = TinyTransformer().eval()
+    bundle = ModelBundle(
+        model=model,
+        params=list(model.parameters()),
+        forward_fn=lambda m, b: m(b["input_ids"]),
+        loss_fn=causal_lm_loss,
+        valid_mask_fn=causal_lm_valid_mask,
+        identifier="toy@step0",
+    )
+    n_params = sum(p.numel() for p in model.parameters())
+    gen = torch.Generator().manual_seed(5)
+    precond = Preconditioner.from_diagonal(
+        torch.exp(torch.randn(n_params, generator=gen) * 2.0), descriptor="explicit"
+    )
+    return bundle, precond
+
+
+def _sum_over_rank_streams(
+    bundle: ModelBundle,
+    precond: Preconditioner,
+    batch: dict[str, torch.Tensor],
+    *,
+    method: str,
+    n_h: int,
+    call_seed: int,
+    world_size: int,
+) -> dict[str, float]:
+    """What the all-reduce must return for the probe-dependent traces.
+
+    The estimator on each rank's shard, with a generator seeded
+    ``_rank_probe_seed(call_seed, rank)``, summed over the ranks: ``chi_net``,
+    ``chi_net_P`` and, for a ``P`` with a ceiling, ``chi_net_P_capped``.
+    """
+    estimator = build_estimator(method, n_hutchinson=n_h, distribution="rademacher")
+    total: dict[str, float] = {}
+    for rank in range(world_size):
+        shard, _, _ = shard_batch(batch, rank=rank, world_size=world_size)
+        gen = torch.Generator().manual_seed(analyzer_mod._rank_probe_seed(call_seed, rank))
+        result = estimator.compute(
+            bundle.model,
+            shard,
+            bundle.forward_fn,
+            loss_fn=bundle.loss_fn,
+            valid_mask_fn=causal_lm_valid_mask,
+            params=bundle.params,
+            micro_batch_size=1,
+            generator=gen,
+            preconditioner=precond,
+        )
+        assert result.chi_net_p is not None
+        parts = {"chi_net": result.chi_net, "chi_net_P": result.chi_net_p}
+        if result.chi_net_p_capped is not None:
+            parts["chi_net_P_capped"] = result.chi_net_p_capped
+        for name, value in parts.items():
+            total[name] = total.get(name, 0.0) + float(value.to(dtype=torch.float64))
+    return total
+
+
+@pytest.mark.parametrize("method", ["hutchinson", "per_sequence_cv"])
+def test_ddp_ranks_do_not_replay_one_probe_stream(tmp_path: Path, method: str) -> None:
+    """Two ranks holding the same samples must not return the same number twice.
+
+    The batch is ``[a, b, a, b]``, so both shards are ``[a, b]``. Rank 0 keeps the
+    per-call stream, hence its partial is exactly the single-process ``chi_net`` of
+    ``[a, b]`` at the same seed. If rank 1 replayed that stream, the all-reduced
+    total would be exactly twice that number — which is what this returned before
+    the ranks got distinct streams (it is the world-size variance inflation in its
+    purest form: the second rank contributes no new probe). Deterministic.
+    """
+    ddp = _run_ddp(
+        tmp_path / "dup.json",
+        seed=0,
+        batch_size=4,
+        n_h=8,
+        method=method,
+        preconditioner=True,
+        duplicate_half=True,
+    )
+    half = _baseline(seed=0, batch_size=2, n_h=8, method=method, preconditioner=True)
+    for observable in ("chi_net", "chi_net_P"):
+        rank1_partial = ddp[observable] - half[observable]
+        rel = abs(rank1_partial - half[observable]) / abs(half[observable])
+        assert rel > 1e-4, (
+            f"{observable}: 2-rank total {ddp[observable]!r} is twice the one-shard value "
+            f"{half[observable]!r} -- rank 1 replayed rank 0's probe stream"
+        )
+        # Sanity on the other side: rank 1's partial is an estimate of the same trace.
+        assert rel < 0.5, (observable, rank1_partial, half[observable])
+
+
+@pytest.mark.parametrize("method", ["hutchinson", "per_sequence_cv"])
+@pytest.mark.parametrize("batch_size", [4, 5])
+def test_ddp_shipped_rng_equals_the_per_rank_streams(
+    tmp_path: Path, method: str, batch_size: int
+) -> None:
+    """The shipped RNG, exactly: DDP ``chi_net`` is the sum over ranks of the
+    estimator on that rank's shard, each on its documented stream.
+
+    This is the reproducibility contract — ``seed``, checkpoint id, batch name,
+    rank and world size determine every probe — checked against the real
+    ``torchrun`` run rather than within a sampling bound. ``batch_size=5`` is the
+    uneven split (shards of 3 and 2).
+
+    It also pins what the ``hutchinson_seed`` column of a multi-rank run holds:
+    the per-call seed, on every row of every rank — not the rank-derived seed a
+    rank ``r > 0`` actually seeds its generator with.
+    """
+    world_size, n_h = 2, 8
+    rank_rows = _run_ddp_rows(
+        tmp_path / f"ddp_rng_{method}_{batch_size}.json",
+        seed=0,
+        batch_size=batch_size,
+        n_h=n_h,
+        method=method,
+        preconditioner=True,
+    )
+    ddp = {r["observable"]: r["value"] for r in rank_rows[0]}
+    bundle, precond = _toy_bundle(0)
+    batch = make_tiny_lm_batch(batch_size=batch_size, seed=0, pad_fraction=0.25, device="cpu")
+    call_seed = analyzer_mod._per_call_seed(0, "toy@step0", "val")
+    assert len(rank_rows) == world_size
+    for rank, rows in enumerate(rank_rows):
+        assert rows, rank
+        assert {r["hutchinson_seed"] for r in rows} == {call_seed}, (rank, call_seed)
+    expected = _sum_over_rank_streams(
+        bundle, precond, batch, method=method, n_h=n_h, call_seed=call_seed, world_size=world_size
+    )
+    assert set(expected) == {"chi_net", "chi_net_P"}  # this P has no ceiling
+    expected["chi_pos"] = float(chi_pos(ddp["delta_loss"], ddp["chi_loss"], expected["chi_net"]))
+    expected["chi_pos_P"] = float(
+        chi_pos(ddp["delta_loss_P"], ddp["chi_loss"], expected["chi_net_P"])
+    )
+    for observable, want in expected.items():
+        rel = abs(ddp[observable] - want) / abs(want)
+        assert rel < DDP_REL, (method, batch_size, observable, ddp[observable], want, rel)
+
+
+@pytest.mark.parametrize("method", ["hutchinson", "per_sequence_cv"])
+def test_ddp_shipped_rng_capped_row_equals_the_per_rank_streams(
+    tmp_path: Path, method: str
+) -> None:
+    """The same contract for a ``P`` with a ceiling: ``chi_net_P_capped`` too.
+
+    ``chi_net_P_capped`` is a per-rank partial drawn from the same probes as
+    ``chi_net`` and ``chi_net_P``, so with the shipped RNG it must be the sum of
+    the per-rank capped parts on the per-rank streams. The pinned-probe test
+    above cannot see which stream a rank draws from (it replaces the probes);
+    this one does, on the uneven split (batch 5: shards of 3 and 2).
+    """
+    world_size, n_h, batch_size = 2, 8, 5
+    rank_rows = _run_ddp_rows(
+        tmp_path / f"ddp_rng_capped_{method}.json",
+        seed=0,
+        batch_size=batch_size,
+        n_h=n_h,
+        method=method,
+        preconditioner=True,
+        ceiling=True,
+    )
+    ddp = {r["observable"]: r["value"] for r in rank_rows[0]}
+    bundle, _ = _toy_bundle(0)
+    precond = ceiling_preconditioner(sum(p.numel() for p in bundle.params))
+    batch = make_tiny_lm_batch(batch_size=batch_size, seed=0, pad_fraction=0.25, device="cpu")
+    call_seed = analyzer_mod._per_call_seed(0, "toy@step0", "val")
+    for rank, rows in enumerate(rank_rows):
+        assert rows, rank
+        assert {r["hutchinson_seed"] for r in rows} == {call_seed}, (rank, call_seed)
+    expected = _sum_over_rank_streams(
+        bundle, precond, batch, method=method, n_h=n_h, call_seed=call_seed, world_size=world_size
+    )
+    assert set(expected) == {"chi_net", "chi_net_P", "chi_net_P_capped"}
+    # vacuity guard, as in the pinned-probe test: the capped part is a real share.
+    assert (
+        0.05 * expected["chi_net_P"] < expected["chi_net_P_capped"] < 0.95 * expected["chi_net_P"]
+    )
+    for observable, want in expected.items():
+        rel = abs(ddp[observable] - want) / abs(want)
+        assert rel < DDP_REL, (method, observable, ddp[observable], want, rel)
