@@ -59,7 +59,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   opened with `allow_unlisted_params` whose model has unlisted parameters,
   unless `update_response(unlisted_params_frozen=True)` confirms they were not
   trained. The realized rows are also skipped when the source loads the weights
-  as bf16 / fp16. The learning rate and the clip factor of each step are
+  as bf16 / fp16, and — for a rule built by hand — whenever the model at
+  either end of the step holds its parameters narrower than fp32. An update
+  batch on which no backward pass runs (no valid token) is refused. The
+  learning rate and the clip factor of each step are
   written as rows too (`update_lr` — or `update_lr_min` / `update_lr_max` when
   parameter groups have different rates — and `update_clip_factor`).
   On all of these rows the run-setting columns are filled as on every other

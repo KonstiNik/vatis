@@ -1064,9 +1064,20 @@ class Analyzer:
         # On non-distributed runs flat_grad_local is the full grad (unscaled).
         # On distributed runs we already wrote the reweighted+reduced version.
         self._last_n_valid = n_valid_a
+        if received is not None and float(received[0]) == 0.0:
+            # Asked which parameters the update batch gave a gradient to, and no
+            # backward pass ran at all (on any rank: the record is all-reduced).
+            # "No parameter is without a gradient" would be the wrong reading.
+            raise ValueError(
+                f"checkpoint {ckpt_id!r}: no backward pass ran on the update batch "
+                f"{batch_name!r} (it has no valid token), so there is no gradient to "
+                "rebuild the optimizer step from. The rows of the step that was taken "
+                "need the batch the step was computed on, with the labels the run "
+                "trained on."
+            )
         self._last_no_gradient = (
             ()
-            if received is None or float(received[0]) == 0.0
+            if received is None
             else tuple(i for i, count in enumerate(received[1:].tolist()) if count == 0.0)
         )
         return rows, flat_grad_local.detach()
@@ -1323,17 +1334,37 @@ class Analyzer:
         requested = set(self.observables)
         need_loss = bool(requested & {"loss_change", "loss_change_residual"})
         need_weights = bool(requested & {"loss_change_first_order_weights", "loss_change_residual"})
-        successor = (
-            update.next_weights()
-            if update.next_weights is not None and (need_loss or need_weights)
-            else None
-        )
-        if successor is not None:
-            if not isinstance(successor, ModelBundle):
-                raise TypeError(
-                    f"next_weights returned {type(successor).__name__} for checkpoint "
-                    f"{ckpt_id!r}; expected a ModelBundle"
+        successor = None
+        if update.next_weights is not None and (need_loss or need_weights):
+            # The realized rows compare two weight vectors, so neither may be
+            # rounded. A bundle source checks its files and its loader before it
+            # offers ``next_weights``; a rule built by hand is checked here, on
+            # the tensors themselves. theta_t first: if it is rounded,
+            # theta_(t+1) is not even loaded.
+            narrow = _narrow_float_dtypes(bundle.params)
+            if not narrow:
+                successor = update.next_weights()
+                if not isinstance(successor, ModelBundle):
+                    raise TypeError(
+                        f"next_weights returned {type(successor).__name__} for checkpoint "
+                        f"{ckpt_id!r}; expected a ModelBundle"
+                    )
+                narrow = _narrow_float_dtypes(successor.params)
+            if narrow:
+                warnings.warn(
+                    f"checkpoint {ckpt_id!r}: the weights before or after the step are held "
+                    f"as {', '.join(narrow)}, which is narrower than fp32. The analyzer would "
+                    "then compare two rounded thetas, and the difference of two rounded "
+                    "thetas is dominated by the rounding early in training, so the realized "
+                    "loss change and its residual (loss_change_first_order_weights, "
+                    "loss_change, loss_change_residual) are SKIPPED for this checkpoint. They "
+                    "need both models in fp32. The loss_change_first_order* rows built from "
+                    "the optimizer state are still reported.",
+                    UserWarning,
+                    stacklevel=2,
                 )
+                successor = None
+        if successor is not None:
             successor.model.eval()
             for name, raw in raw_batches.items():
                 if need_weights:
@@ -1675,6 +1706,20 @@ def _parameter_names(bundle: ModelBundle) -> list[str]:
     """A display name for each entry of ``bundle.params`` (for error messages)."""
     by_identity = {id(p): name for name, p in bundle.model.named_parameters()}
     return [by_identity.get(id(p), f"params[{i}]") for i, p in enumerate(bundle.params)]
+
+
+def _narrow_float_dtypes(params: Sequence[torch.Tensor]) -> list[str]:
+    """The dtypes among ``params`` that are narrower than fp32 (``[]`` if none).
+
+    bf16 and fp16 hold a rounded copy of weights that were trained in fp32.
+    """
+    return sorted(
+        {
+            str(p.dtype).removeprefix("torch.")
+            for p in params
+            if p.dtype not in (torch.float32, torch.float64)
+        }
+    )
 
 
 def _same_batch(a: Any, b: Any) -> bool:

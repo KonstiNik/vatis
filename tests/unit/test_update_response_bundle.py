@@ -831,6 +831,100 @@ def test_rounded_files_and_a_rounding_loader_are_both_named(tmp_path: Path) -> N
     assert rule is not None and rule.next_weights is None
 
 
+@pytest.mark.parametrize("rounded", ["theta_next", "theta"])
+def test_a_rule_built_by_hand_gets_no_realized_rows_from_rounded_weights(
+    adamw_run: tuple[Path, TrainingRecord], rounded: str
+) -> None:
+    """The check on the weights is the analyzer's too, not only the bundle source's.
+
+    A rule's ``next_weights`` can be any callable. Whatever it returns, and
+    whatever model the analyzer was handed, the realized rows are skipped with
+    a warning if either holds its parameters narrower than fp32.
+    """
+    import dataclasses
+
+    run_dir, _record = adamw_run
+    fp32_source = _source(run_dir, steps=[1])
+    fp32_rule = fp32_source.update_response()
+    loads = 0
+
+    def next_weights_of(rule: OptimizerUpdate | None) -> Any:
+        assert rule is not None and rule.next_weights is not None
+        load = rule.next_weights
+
+        def loaded() -> Any:
+            nonlocal loads
+            loads += 1
+            successor = load()
+            if rounded == "theta_next":
+                successor.model.to(torch.bfloat16)
+            return successor
+
+        return loaded
+
+    if rounded == "theta_next":
+        source = fp32_source
+
+        def factory(ckpt_id: str) -> OptimizerUpdate | None:
+            rule = fp32_rule(ckpt_id)
+            assert rule is not None
+            return dataclasses.replace(rule, next_weights=next_weights_of(rule))
+
+    else:
+        # theta_t rounded by the loader, which then offers no successor; the
+        # hand-built rule supplies an fp32 one all the same.
+        source = _source(run_dir, steps=[1], dtype="bf16")
+        build = source.update_response()
+
+        def factory(ckpt_id: str) -> OptimizerUpdate | None:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                rule = build(ckpt_id)
+            assert rule is not None and rule.next_weights is None
+            successor = next_weights_of(fp32_rule(fp32_source.checkpoints[0].identifier))
+            return dataclasses.replace(rule, next_weights=successor)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        rows = _run(source, update_response=factory)[1]
+    skipped = [str(w.message) for w in caught if "SKIPPED" in str(w.message)]
+    assert len(skipped) == 1 and "bfloat16" in skipped[0] and "narrower than fp32" in skipped[0]
+    assert not any(_has(rows, name) for name in REALIZED_CHANGE_OBSERVABLES)
+    assert all(_has(rows, name) for name in UPDATE_RESPONSE_OBSERVABLES)
+    # A rounded theta_t is seen before theta_(t+1) is loaded at all.
+    assert loads == (1 if rounded == "theta_next" else 0)
+
+
+@pytest.mark.parametrize("realized", [False, True])
+def test_an_update_batch_without_a_backward_pass_is_refused(
+    adamw_run: tuple[Path, TrainingRecord], realized: bool
+) -> None:
+    """No valid token on the update batch: no backward pass runs, so there is no
+    gradient to rebuild the step from and nothing that says which parameters
+    received one. That is refused; it must not pass as "every parameter got a
+    gradient" (without the realized rows, formula rows of a zero gradient were
+    written before)."""
+    import dataclasses
+
+    run_dir, _record = adamw_run
+    source = _source(run_dir, steps=[1])
+    build = source.update_response(realized=realized)
+    update_batch = dict(source.checkpoints[0].batch_a)
+    update_batch["labels"] = torch.full_like(update_batch["labels"], -100)
+
+    def factory(ckpt_id: str) -> OptimizerUpdate | None:
+        rule = build(ckpt_id)
+        assert rule is not None
+        return dataclasses.replace(rule, update_batch=update_batch)
+
+    with pytest.raises(ValueError, match="no backward pass ran on the update batch"):
+        _run(
+            source,
+            update_response=factory,
+            eval_batches={"train": update_batch, "val": held_out_batch()},
+        )
+
+
 # ------------------------------------------------- the precision of loss_change
 
 
