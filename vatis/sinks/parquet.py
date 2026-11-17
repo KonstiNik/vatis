@@ -10,7 +10,7 @@ Files written before a column existed
 =====================================
 
 The column set has only ever grown at the end (``preconditioner`` first, then
-``chi_net_method`` ... ``value_stderr``), and a file is always written in one
+``chi_net_method`` ... ``hutchinson_distribution``), and a file is always written in one
 piece with the column set of the version that wrote it: the sink never appends
 to an existing file (re-opening a path replaces the file), so no file mixes two
 column sets. An older file therefore simply lacks the later columns. Reading it
@@ -60,6 +60,9 @@ _SCHEMA = pa.schema(
         ("preconditioner_beta2", pa.float64()),
         ("preconditioner_capped_fraction", pa.float64()),
         ("value_stderr", pa.float64()),
+        # Two more settings of the run, on every row like ``n_hutchinson``.
+        ("micro_batch_size", pa.int32()),
+        ("hutchinson_distribution", pa.string()),
     ]
 )
 
@@ -157,7 +160,8 @@ def read_results(
       raw rows carry.
     - every later column (``chi_net_method``, ``n_ranks``,
       ``preconditioner_eps``, ``preconditioner_beta2``,
-      ``preconditioner_capped_fraction``, ``value_stderr``) is filled with
+      ``preconditioner_capped_fraction``, ``value_stderr``,
+      ``micro_batch_size``, ``hutchinson_distribution``) is filled with
       **null**: the file does not record them, and nothing is inferred. In
       particular a null ``value_stderr`` in an old file means "not recorded",
       not "exact".

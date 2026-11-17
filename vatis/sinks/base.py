@@ -51,6 +51,16 @@ class ResultRow:
       counterparts); ``None`` on ``chi_loss`` / ``delta_loss`` rows, which are
       not sampled, and with a single probe. Definition and limits:
       ``docs/SPEC.md`` -> "Standard error of the sampled values".
+    - ``micro_batch_size``: the ``micro_batch_size`` the run was made with
+      (sequences per backward). One probe spans a micro-batch, so the sampled
+      values and their standard error are specific to it.
+    - ``hutchinson_distribution``: the distribution the probes were drawn from
+      (``"rademacher"`` / ``"gaussian"``), as the estimator that ran reports it.
+
+    ``chi_net_method``, ``n_ranks``, ``micro_batch_size`` and
+    ``hutchinson_distribution`` describe the run, like ``n_hutchinson``, and are
+    written on every row -- also on the ``chi_loss`` / ``delta_loss`` rows,
+    whose values no probe enters.
     """
 
     checkpoint_id: str
@@ -71,6 +81,8 @@ class ResultRow:
     preconditioner_beta2: float | None = None
     preconditioner_capped_fraction: float | None = None
     value_stderr: float | None = None
+    micro_batch_size: int | None = None
+    hutchinson_distribution: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

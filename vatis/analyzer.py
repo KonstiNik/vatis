@@ -41,9 +41,10 @@ Provenance and sampling error
 -----------------------------
 
 Every row also says how it was obtained: the ``chi_net`` estimator that ran
-(``chi_net_method``), the number of ranks (``n_ranks``), and on the rows of an
-AdamW ``P`` its ``eps`` / ``beta2`` and the fraction of its coordinates at the
-``1/eps`` ceiling. The rows whose value depends on the Hutchinson probes carry
+(``chi_net_method``), the number of ranks (``n_ranks``), the micro-batch size
+and the probe distribution (``micro_batch_size``, ``hutchinson_distribution``),
+and on the rows of an AdamW ``P`` its ``eps`` / ``beta2`` and the fraction of
+its coordinates at the ``1/eps`` ceiling. The rows whose value depends on the Hutchinson probes carry
 ``value_stderr``, the standard error of the value under the probe draw: the
 estimators report the variance of their own estimate
 (``ChiNetResult.chi_net_var``, a sum over micro-batches), the ranks' variances
@@ -324,6 +325,7 @@ class Analyzer:
         # estimator each batch was measured with, and the standard error of each
         # batch's chi_net / chi_net^P / capped part (``None`` where there is none).
         self._chi_net_method_cache: dict[str, str] = {}
+        self._hutchinson_distribution_cache: dict[str, str | None] = {}
         self._chi_net_stderr_cache: dict[str, float | None] = {}
         self._chi_net_p_stderr_cache: dict[str, float | None] = {}
         self._chi_net_p_capped_stderr_cache: dict[str, float | None] = {}
@@ -877,6 +879,9 @@ class Analyzer:
             delta_loss_p_capped=delta_loss_p_capped_global,
             chi_net_p_capped=chi_net_p_capped_global,
             chi_net_method=estimator.name,
+            # What the estimator that ran says it drew its probes from -- not the
+            # argument this analyzer was constructed with.
+            hutchinson_distribution=_optional_str(chi_net_result.extras.get("distribution")),
             chi_net_stderr=_sqrt_optional(chi_net_var_global),
             chi_net_p_stderr=_sqrt_optional(chi_net_p_var_global),
             chi_net_p_capped_stderr=_sqrt_optional(chi_net_p_capped_var_global),
@@ -1017,9 +1022,16 @@ class Analyzer:
         # Usually one estimator for the whole run; the automatic selection picks
         # per batch, though, so the two batches of a pair can differ -- then the
         # row names both, in pair order.
-        method_a = self._chi_net_method_cache[name_a]
-        method_b = self._chi_net_method_cache[name_b]
-        chi_net_method = method_a if method_a == method_b else f"{method_a}+{method_b}"
+        chi_net_method = _pair_label(
+            self._chi_net_method_cache[name_a], self._chi_net_method_cache[name_b]
+        )
+        # The probe distribution is one setting of the analyzer, so the two
+        # batches agree; it is taken from what each batch's estimator reported
+        # all the same, and a disagreement would be named, not hidden.
+        hutchinson_distribution = _pair_label(
+            self._hutchinson_distribution_cache.get(name_a),
+            self._hutchinson_distribution_cache.get(name_b),
+        )
 
         return self._emit_rows(
             ckpt_id=ckpt_id,
@@ -1044,6 +1056,7 @@ class Analyzer:
             delta_loss_p_capped=delta_loss_p_capped_cross,
             chi_net_p_capped=chi_net_p_capped_cross,
             chi_net_method=chi_net_method,
+            hutchinson_distribution=hutchinson_distribution,
             chi_net_stderr=chi_net_cross_stderr,
             chi_net_p_stderr=chi_net_p_cross_stderr,
             chi_net_p_capped_stderr=chi_net_p_capped_cross_stderr,
@@ -1078,6 +1091,7 @@ class Analyzer:
         delta_loss_p_capped: float | None = None,
         chi_net_p_capped: float | None = None,
         chi_net_method: str | None = None,
+        hutchinson_distribution: str | None = None,
         chi_net_stderr: float | None = None,
         chi_net_p_stderr: float | None = None,
         chi_net_p_capped_stderr: float | None = None,
@@ -1090,6 +1104,7 @@ class Analyzer:
             self._chi_net_stderr_cache[batch_a] = chi_net_stderr
             if chi_net_method is not None:
                 self._chi_net_method_cache[batch_a] = chi_net_method
+            self._hutchinson_distribution_cache[batch_a] = hutchinson_distribution
             if chi_net_p is not None:
                 self._chi_net_p_cache[batch_a] = chi_net_p
                 self._chi_net_p_stderr_cache[batch_a] = chi_net_p_stderr
@@ -1209,6 +1224,8 @@ class Analyzer:
                         None if p_of_row is None else p_of_row.capped_fraction()
                     ),
                     value_stderr=stderrs.get(name),
+                    micro_batch_size=self.micro_batch_size,
+                    hutchinson_distribution=hutchinson_distribution,
                 )
             )
         return rows
@@ -1256,6 +1273,19 @@ def _normalize_preconditioner(
 
 def _optional_float(value: torch.Tensor | None) -> float | None:
     return None if value is None else float(value)
+
+
+def _optional_str(value: object) -> str | None:
+    return None if value is None else str(value)
+
+
+def _pair_label(a: str | None, b: str | None) -> str | None:
+    """What a cross pair records for a per-batch setting: the common value, or
+    ``"<a>+<b>"`` in pair order when the two batches differ. ``None`` when it is
+    unknown for either batch."""
+    if a is None or b is None:
+        return None
+    return a if a == b else f"{a}+{b}"
 
 
 def _sqrt_optional(variance: float | None) -> float | None:
