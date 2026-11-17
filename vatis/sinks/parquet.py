@@ -5,11 +5,27 @@ one parquet file per close(); for very long sweeps users can pass
 ``flush_every`` to write incremental files.
 
 The schema mirrors :class:`vatis.sinks.base.ResultRow`.
+
+Files written before a column existed
+=====================================
+
+The column set has only ever grown at the end (``preconditioner`` first, then
+``chi_net_method`` ... ``value_stderr``), and a file is always written in one
+piece with the column set of the version that wrote it: the sink never appends
+to an existing file (re-opening a path replaces the file), so no file mixes two
+column sets. An older file therefore simply lacks the later columns. Reading it
+with ``pyarrow`` / ``pandas`` works as before and code that selects columns by
+name is unaffected; what fails is asking such a file for a column it does not
+have, or concatenating it with a newer file without schema promotion.
+:func:`read_results` covers both: it returns any vatis result file -- or several,
+concatenated -- in the current column set, with the columns a file predates
+filled in as documented there.
 """
 
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from pathlib import Path
 
 import pyarrow as pa
@@ -35,7 +51,36 @@ _SCHEMA = pa.schema(
         # delta_loss_P / chi_net_P / chi_pos_P rows. Appended last so existing
         # readers that select by name are unaffected.
         ("preconditioner", pa.string()),
+        # Provenance and sampling error, appended after ``preconditioner`` for
+        # the same reason; null wherever a column does not apply to a row. See
+        # ``ResultRow`` for what each one records.
+        ("chi_net_method", pa.string()),
+        ("n_ranks", pa.int32()),
+        ("preconditioner_eps", pa.float64()),
+        ("preconditioner_beta2", pa.float64()),
+        ("preconditioner_capped_fraction", pa.float64()),
+        ("value_stderr", pa.float64()),
     ]
+)
+
+#: Column names of a result file written by this version, in file order.
+RESULT_COLUMNS: tuple[str, ...] = tuple(_SCHEMA.names)
+
+# The columns every vatis result file has had since the first release. A file
+# that lacks one of these is not a vatis result file; ``read_results`` refuses it
+# rather than inventing the column.
+_ORIGINAL_COLUMNS: tuple[str, ...] = (
+    "checkpoint_id",
+    "revision",
+    "batch_a",
+    "batch_b",
+    "n_valid_a",
+    "n_valid_b",
+    "observable",
+    "value",
+    "n_hutchinson",
+    "hutchinson_seed",
+    "wallclock_s",
 )
 
 
@@ -95,3 +140,66 @@ def _rows_to_table(rows: list[ResultRow]) -> pa.Table:
         for k in cols:
             cols[k].append(d.get(k))
     return pa.Table.from_pydict(cols, schema=_SCHEMA)
+
+
+def read_results(
+    paths: str | os.PathLike[str] | Sequence[str | os.PathLike[str]],
+) -> pa.Table:
+    """Read one or more vatis result files into the **current** column set.
+
+    A file written by an older version lacks the columns added since. This
+    returns it with those columns present, so old and new files can be read by
+    the same code and concatenated:
+
+    - ``preconditioner`` is filled with ``"none"``. That is a fact about the
+      file, not a guess: the preconditioned rows and this column arrived
+      together, so a file without it holds raw rows only, and ``"none"`` is what
+      raw rows carry.
+    - every later column (``chi_net_method``, ``n_ranks``,
+      ``preconditioner_eps``, ``preconditioner_beta2``,
+      ``preconditioner_capped_fraction``, ``value_stderr``) is filled with
+      **null**: the file does not record them, and nothing is inferred. In
+      particular a null ``value_stderr`` in an old file means "not recorded",
+      not "exact".
+
+    Columns come back in the order of :data:`RESULT_COLUMNS` and in the types
+    of the current schema; columns this version does not know (a file written
+    by a newer version) are kept, after the known ones. Several paths are
+    concatenated in the order given. The files are not modified.
+
+    Raises:
+        ValueError: a file lacks one of the columns every vatis result file has
+            had since the first release -- it is not a result file, and no
+            column is invented for it.
+    """
+    if isinstance(paths, (str, os.PathLike)):
+        paths = [paths]
+    tables = [_read_one_result_file(Path(p)) for p in paths]
+    if not tables:
+        raise ValueError("read_results needs at least one path")
+    if len(tables) == 1:
+        return tables[0]
+    return pa.concat_tables(tables, promote_options="default")
+
+
+def _read_one_result_file(path: Path) -> pa.Table:
+    table = pq.read_table(path)
+    missing_original = [name for name in _ORIGINAL_COLUMNS if name not in table.column_names]
+    if missing_original:
+        raise ValueError(
+            f"{path} is not a vatis result file: it lacks the column(s) {missing_original}, "
+            "which every result file has had since the first release"
+        )
+    columns: dict[str, pa.Array | pa.ChunkedArray] = {}
+    for schema_field in _SCHEMA:
+        name = schema_field.name
+        if name in table.column_names:
+            columns[name] = table.column(name).cast(schema_field.type)
+        elif name == "preconditioner":
+            columns[name] = pa.array(["none"] * table.num_rows, type=schema_field.type)
+        else:
+            columns[name] = pa.nulls(table.num_rows, type=schema_field.type)
+    for name in table.column_names:
+        if name not in columns:
+            columns[name] = table.column(name)
+    return pa.table(columns)
