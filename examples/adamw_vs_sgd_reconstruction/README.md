@@ -41,10 +41,6 @@ python examples/adamw_vs_sgd_reconstruction/run.py --bundle <run>/bundle \
 python examples/adamw_vs_sgd_reconstruction/evaluate.py   # table.md + reconstruction.png
 ```
 
-In `run.py`, `cross_pairs=[(update_batch, held_out)]` is what makes
-`delta_loss` for the pair (A, held-out batch) available, i.e. the SGD rule on
-the held-out batch.
-
 ## What it shows
 
 ![Ratio of each prediction to the truth, per step, on the update batch and on the held-out batch](reconstruction.png)
@@ -54,41 +50,24 @@ means exact. Hollow markers have the wrong sign and are drawn at |ratio|. Steps
 are not to scale. Steps 0–9 are in the learning-rate warm-up, and the clip
 engaged only at step 9 (c = 0.837).*
 
-1. **The AdamW rule reproduces the truth** to within 2·10⁻⁵ relative at every
-   step: within 1.6·10⁻⁵ of a ratio of one at step 0 (where the step is so small
-   that fp32 rounding of the stored weights shows) and within 10⁻⁵ at the other
-   twelve; the largest absolute difference is 1.4·10⁻⁷. This is the consistency
-   check.
-2. **The SGD rule is 400–1600 times too small** on the update batch (20–1400
-   times on the held-out batch). That alone says little: η was set for
-   preconditioned steps. Would one rescaling fix it on both batches? In steps
-   0–9 it nearly would: its ratio to the truth is the same on the two batches
-   to within 13%. But in those steps the gradients of the two batches are
-   themselves strongly aligned (cosine 0.68–0.84), so this is weak evidence.
-   From step 661 on (cosine −0.07 to 0.17) no rescaling fixes it: the two
-   ratios differ by a factor of 2.7–21, and at step 33062 the sign is wrong on
-   the held-out batch.
-3. **−η·δL_P is 1.3–6 times the truth in steps 1–9 and 10–40 times from step
-   661 on** (182 times at step 33062 on the held-out batch, where the truth is
-   small). On the update batch the late step is almost entirely its gradient
-   part (table below), and that part is 0.06–0.09 of −η·δL_P: the current
-   gradient enters an AdamW step with weight 1 − β₁ = 0.1, and the step uses its
-   own preconditioner, which already contains that gradient and is smaller than
-   P_t where the gradient is large. On the held-out batch the momentum part has
-   the opposite sign and cancels 44–94% of the gradient part at six of the eight
-   late steps, which makes the factor larger there; at the other two it is
-   again about 10. By the scale-free measure of point 2 (ratio on the
-   held-out batch divided by ratio on the update batch) −η·δL_P does worse
-   than the SGD rule in the warm-up (0.41–0.74 at steps 1–9, against 0.98–1.13
-   at steps 0–9; −η·δL_P has no value at step 0, where the optimizer state is
-   still empty, so there is no P_t) and better
-   from step 661 on (0.84–3.2, 16 at step 33062, against 2.7–21).
-4. **First order is not the whole step.** In steps 0–9 the realized loss change
-   is within 1.6% of the truth (0.01–0.11% at steps 0–5, 1–1.6% at step 9).
-   From step 661 on it differs by 3–13% on the update batch (13% at steps 661
-   and 665, 3–5% later), and on the held-out batch it has the opposite sign at
-   5 of 8 steps (661, 665, 6611, 33062, 66110): there, even an exact first-order prediction does not predict the loss
-   change of one step.
+1. **The AdamW rule reproduces the truth.** It agrees to within 2·10⁻⁵
+   relative at every step. This is the consistency check.
+2. **After the warm-up, no rescaling makes the SGD rule fit both batches.** It
+   is 400–1600 times too small on the update batch, which says little: η was
+   set for preconditioned steps. In steps 0–9 one rescaling would nearly fix
+   it, but there the gradients of the two batches are strongly aligned. From
+   step 661 on its ratios on the two batches differ by a factor of 2.7–21.
+3. **−η·δL_P overshoots the step taken, by ten times or more late in
+   training** (10–40 times the truth from step 661 on). The current gradient enters an AdamW
+   step only with weight 1 − β₁ = 0.1, and the step is taken with a
+   preconditioner already updated by that same gradient. That is how AdamW
+   works, not something read from the result file.
+4. **First order is not the whole step.** From step 661 on, the realized loss
+   change on the held-out batch has the opposite sign to the first-order change
+   at 5 of 8 steps.
+
+All ranges, per-step numbers and the reasoning behind points 2 and 3 are in
+[details.md](details.md).
 
 The parts of the AdamW rule as fractions of their sum, at six of the steps (the
 weight-decay part is below 0.2% of the sum everywhere except at step 33062 on
@@ -121,21 +100,12 @@ ratio on the update batch.
 ## About the committed outputs
 
 - Files: `results.parquet`, `run_summary.json`, `table.md`, `reconstruction.png`.
-- The run: bundle `adamw_s0`, an 11M-parameter Llama (10,981,440 parameters)
-  trained with AdamW — η rises from 1e-5 to 2e-3 over the first 100 steps and
-  stays there, β = (0.9, 0.95), weight decay 0.01, batches of 32 × 512 tokens,
-  pad-masked loss, gradient norm clipped at 1.0, fp32 weight files. 50 of its
-  85 checkpoints have their successor stored (steps 0–9, 661–670, 6611–6620,
-  33057–33066, 66105–66114); the 13 used are the first steps of the warm-up and
-  two from each later group.
+- The run: bundle `adamw_s0`, an 11M-parameter Llama trained with AdamW;
+  details of the run and of the 13 steps used are in
+  [details.md](details.md#the-run).
 - Settings (from `run_summary.json` and `run.py`): fp32, `micro_batch_size=8`,
   `n_hutchinson=1` (`chi_net` is not used here), seed 0, `--device cuda` on an
-  NVIDIA GeForce RTX 3090 Ti, torch 2.10.0+cu128; 11 s wall time.
-- Reproducibility: two other runs of the same command on the shared card (13 s
-  and 34 s) agree with the committed `loss_change*` rows to 3.1·10⁻¹⁰ in
-  absolute terms. The same 13 steps on the CPU (115 s) give the same table:
-  every `loss_change*` row agrees with the GPU value to within 1.1·10⁻⁷ in
-  absolute terms (2·10⁻⁵ to 3·10⁻⁴ relative on the first-order rows, more only
-  where a value is itself below 10⁻⁶), and the learning-rate and clip-factor
-  rows to 3·10⁻⁷.
+  NVIDIA GeForce RTX 3090 Ti, torch 2.10.0+cu128; 11 s wall time. Repeated
+  runs on the GPU and a run on the CPU give the same table
+  ([details.md](details.md#reproducibility)).
 - Committed on 17 November 2026 in `2d6b92f` (#14).
