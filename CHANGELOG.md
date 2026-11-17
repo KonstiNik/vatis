@@ -53,7 +53,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   warning. Gradient clipping is never assumed: it is read from `metadata.json`
   (`gradient_clip_val`, `gradient_clip_algorithm`) or stated with
   `update_response(clip_grad_norm=...)`, and a bundle that says neither is
-  refused. No extra backward; no result-file column was added (the rows are new
+  refused. Also refused: a parameter that receives no gradient on the update
+  batch while the saved state would move it (torch skips it or not depending on
+  how the loop cleared gradients, which a bundle does not record), and a source
+  opened with `allow_unlisted_params` whose model has unlisted parameters,
+  unless `update_response(unlisted_params_frozen=True)` confirms they were not
+  trained. The realized rows are also skipped when the source loads the weights
+  as bf16 / fp16. No extra backward; no result-file column was added (the rows are new
   `observable` values, tagged `"adamw_update"` / `"adam_update"` /
   `"sgd_update"` or `"none"` in the `preconditioner` column).
 - `vatis.core.update_response` (`OptimizerUpdate`, `AdamHyper`, `SGDHyper`):
@@ -177,7 +183,9 @@ The labels are the single source of truth for what enters the loss
   momentum, weight decay and the step's own second-moment update are excluded.
   The `update_response*` rows measure that change (see "Added").
 - The `update_response*` rows rebuild the step from a gradient vatis recomputes
-  on the stored batch. Gradient clipping must be stated; dropout, mixed
+  on the stored batch. `loss_change` and `loss_change_residual` are resolved
+  only down to the round-off of the fp32 forward pass (measured `1e-8` to
+  `1e-7` on an 11M-parameter model). Gradient clipping must be stated; dropout, mixed
   precision or any other alteration of the gradient by the training loop is not
   detectable from a bundle and makes the rows describe a different step.
 - AdamW's `P` can only be built from native checkpoint bundles; optimizer states

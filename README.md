@@ -213,9 +213,10 @@ analyzer.run(source.model_specs())
 The rows sit on the pair (update batch, `B`) for every eval batch `B`. They are
 loss changes — learning rate included, negative when the loss falls — for
 AdamW, Adam and SGD bundles, at every checkpoint including step 0. The last
-three need the next step in the bundle and **fp32 weight files**; with bf16
-files they are skipped with a warning, because the difference of two rounded
-weight files is mostly rounding.
+three need the next step in the bundle and **fp32 weight files loaded as fp32**;
+with bf16 files (or `load_local_bundle(dtype="bf16")`) they are skipped with a
+warning, because the difference of two rounded sets of weights is mostly
+rounding.
 
 Two things to know before using it:
 
@@ -232,6 +233,8 @@ Two things to know before using it:
   `update_response_weights` must agree; if they do not, that assumption fails
   for your bundle
   ([`docs/SPEC.md` → The response to the update that was taken](docs/SPEC.md)).
+  A residual near the round-off of the forward pass (about `1e-8` to `1e-7` on
+  an 11M-parameter model in fp32) is noise.
 
 ## Output
 

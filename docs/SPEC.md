@@ -307,14 +307,20 @@ analyzer.run(source.model_specs())
   and are negative when the step lowers the loss on `B`. `delta_loss` and
   `delta_loss_P` are gradient products without the learning rate and with the
   opposite sign convention; the comparable quantity is `−η · delta_loss_P`,
-  which equals `update_response_grad` only where `P_t = P_{t+1}` and the
-  prefactor `(1−β1)/(1−β1^{t+1})` is one.
+  which equals `update_response_grad` only where `P_t = P_{t+1}`, the
+  prefactor `(1−β1)/(1−β1^{t+1})` is one and the gradient was not clipped. It
+  is a different quantity, not an estimate of this one: where the two are set
+  side by side below, the ratio says how far apart the hypothetical update and
+  the step taken are, not how wrong either is.
 - **Where the rows are.** On the pair `(batch_a, batch_b)` = (update batch,
   `B`) for every eval batch `B`, the update batch itself included; the response
   is not symmetric in the two. The update batch must be one of the eval batches
   (`source.batch_a_spec()`): the analyzer recognises it by comparing the eval
   batches' tensors with the checkpoint's stored batch, whatever its name, and
-  refuses to run when none matches. The four formula rows carry the update
+  refuses when none matches — before the checkpoint's first forward pass, not
+  after its `χ_net` estimates. (To make that possible the eval batches of a
+  checkpoint are fetched once, up front, when an update rule is configured.)
+  The four formula rows carry the update
   rule's descriptor in the `preconditioner` column (`"adamw_update"`,
   `"adam_update"`, `"sgd_update"`); the three realized-change rows involve no
   optimizer formula and carry `"none"`.
@@ -373,15 +379,42 @@ gradient the optimizer saw. vatis cannot verify that from one checkpoint:
   update batch's own `delta_loss` row, which is `‖g‖²`.
 - *Rounded weights.* A bf16 weight file holds a rounded `θ_t`, so `g` is the
   gradient at a slightly different point (see "Native checkpoint bundles" for
-  how different). The formula rows are still reported; the realized rows are
-  not (below).
+  how different). The same holds for unrounded files opened with
+  `load_local_bundle(dtype="bf16")` or `"fp16"`, which rounds them in memory.
+  The formula rows are still reported; the realized rows are not (below).
+- *A parameter that receives no gradient at the step* — it is not in the graph
+  of the update batch (an unused branch, an unused parameter). torch treats
+  the two ways this can look differently: a parameter whose `.grad` is `None`
+  is skipped altogether, with no momentum and no weight decay (the default
+  `zero_grad()` leaves `None`); one whose `.grad` holds zeros
+  (`zero_grad(set_to_none=False)` after an earlier gradient) gets both. The
+  rebuilt update sees a zero gradient and applies both. Which of the two the
+  run did is not in a bundle, but the analyzer does know which parameters got
+  no gradient on the update batch, so it settles the cases it can: if the
+  saved state would not move such a parameter anyway (no weight decay on it
+  and no momentum history), both readings agree and the rows are exact;
+  otherwise the rows are **refused**, naming the parameter. For Adam and AdamW
+  a parameter that was skipped at an earlier step also shows in the state —
+  its step counter lags, or it has no state at all — and that was already
+  refused.
+- *Parameters outside the canonical list* (a source opened with
+  `allow_unlisted_params` whose model has parameters `param_names.json` does
+  not name). They are in no gradient vector and in no saved optimizer state.
+  If the run trained them, their part of the step is missing from every
+  `update_response*` row while `loss_change` still contains its effect; if
+  they merely had gradients when the norm was clipped, the clipping factor is
+  wrong. A bundle does not say, so `update_response()` **refuses** such a
+  bundle unless the caller confirms with `unlisted_params_frozen=True` that
+  those parameters received no gradient and no update during the run.
 - *Gradient accumulation.* `batch_a.npy` must be the whole effective batch and
   the run must have descended its token-weighted mean loss (see the pad
   convention under "Native checkpoint bundles"); then accumulation changes
   nothing here.
 - *Everything else the loop did to the gradient or the weights*: dropout or
   other train-mode randomness (the analyzer evaluates in `eval()` mode), mixed
-  precision (the gradient is recomputed in the loader's dtype), weight
+  precision (the gradient is recomputed in the loader's dtype, and the formula
+  rows take `θ_t` at that precision too: with `dtype="bf16"` both are those of
+  the rounded model, whatever the files hold), weight
   averaging, a manual edit of the weights between steps. None of it is
   detectable from a bundle. The contract a bundle has to meet is: *reloading
   step `t` and applying one optimizer step on `batch_a.npy` reproduces the
@@ -400,28 +433,44 @@ fp32 step is 1.6% smaller than the exact one (and `loss_change` follows the
 applied one).
 
 **The realized change** needs `θ_{t+1}`. Where the bundle also holds step
-`t + 1` — whether or not it is among the selected `steps` — and both weight
-files are stored as fp32 or wider, the three realized rows are measured:
+`t + 1` — whether or not it is among the selected `steps` — both weight
+files are stored as fp32 or wider and the source loads them as fp32
+(`load_local_bundle(dtype="fp32")`, the default), the three realized rows are
+measured:
 `update_response_weights`, `loss_change` and `loss_change_residual`. The
 residual is taken against the *stored* weight difference, not against the
 rebuilt update, so it contains the loss surface's higher orders and nothing
-about the optimizer formula. With bf16 (or fp16) weight files these rows are
-**skipped with a warning**: the difference of two rounded files is dominated by
-the rounding early in training (measured below), and a residual computed from
-it would be an artefact. A checkpoint with no stored successor has no such
-rows, silently. `update_response(realized=False)` switches them off.
+about the optimizer formula. With bf16 (or fp16) weight files, or with a source
+that loads the weights as bf16 or fp16, these rows are
+**skipped with a warning**: the difference of two rounded sets of weights is
+dominated by the rounding early in training (measured below), and a residual
+computed from it would be an artefact. A checkpoint with no stored successor
+has no such rows, silently. `update_response(realized=False)` switches them off.
 Both losses are evaluated forward-only, as token-weighted means over
-micro-batches and DDP ranks, with the logits upcast to fp64 before the loss so
-that the difference of two nearly equal losses is not limited by fp32
-round-off in the cross entropy.
+micro-batches and DDP ranks, with the logits upcast to fp64 before the loss, so
+the cross entropy itself adds no fp32 round-off to the difference of two nearly
+equal losses (`test_loss_change_is_the_fp64_loss_of_the_fp32_logits`). The
+forward pass stays in the model's own precision, and that sets a noise floor:
+an fp32 forward perturbs each loss by an amount that does not cancel in the
+difference. `loss_change`, and with it `loss_change_residual`, is therefore
+only resolved down to that floor — measured at about `1e-8` to `1e-7` on the
+real model below — and a residual of that size is noise, whatever its sign.
+The alternative, evaluating both losses on an fp64 copy of the model, was not
+taken: the analyzer does not know the model (casting one wholesale also hits
+complex buffers and fp32 tables, which is why the loader casts parameters
+only), and an fp64 copy of both models doubles the memory of the realized
+rows, which a model near the limit of its device does not have.
 
 **Cost.** No extra backward. The gradients of all eval batches are kept for
 the checkpoint (one parameter-sized fp32 vector each, placed as
 `cross_grad_storage` says), the saved optimizer state stays on the CPU for the
 checkpoint (two parameter-sized vectors for AdamW), and the reductions run in
 fp64 chunks. The realized rows hold a second model and cost two forward passes
-per eval batch. Under DDP every rank rebuilds the same update from the
-all-reduced gradients; only the two loss evaluations are all-reduced.
+per eval batch — only if they are asked for: `θ_{t+1}` is loaded only when one
+of the three is among `observables`, and the forward passes run only for
+`loss_change` / `loss_change_residual`. Under DDP every rank rebuilds the same
+update from the all-reduced gradients; only the two loss evaluations (and the
+record of which parameters received no gradient) are all-reduced.
 
 **Precision.** The rule itself is exact: on an fp64 model the rebuilt update
 equals the one `torch.optim` applied element by element to `1e-10` of its
@@ -474,7 +523,7 @@ the value but not the algorithm; AdamW with peak rate 2e-3, SGD with momentum
 | AdamW | 9 | 1.9e−4 | 0.837 | −0.166286 | −0.038766 | −0.127525 | −0.166286 (2e−7) | −0.164681 | +1.6e−3 | −0.358982 (2.2×) |
 | AdamW | 661 | 2.0e−3 | 1 | −0.138667 | −0.146740 | +0.008074 | −0.138667 (2e−7) | −0.120782 | +1.8e−2 | −1.583337 (11.4×) |
 | AdamW | 66105 | 2.0e−3 | 1 | −0.059246 | −0.061295 | +0.002052 | −0.059246 (4e−7) | −0.057270 | +2.0e−3 | −0.713140 (12.0×) |
-| SGD | 0 | 1.0e−5 | 1 | −6.556e−6 | −6.556e−6 | 0 | −6.454e−6 (1.6e−2) | −6.454e−6 | +2.9e−10 | −6.556e−6 (equal) |
+| SGD | 0 | 1.0e−5 | 1 | −6.556e−6 | −6.556e−6 | 0 | −6.454e−6 (1.6e−2) | −6.454e−6 | below the noise floor (reported: +2.9e−10) | −6.556e−6 (equal) |
 | SGD | 1 | 1.0e−2 | 1 | −0.010984 | −0.006045 | −0.004940 | −0.010984 (5e−7) | −0.010991 | −6.4e−6 | −0.006045 (0.55×) |
 | SGD | 661 | 1.0 | 1 | −0.134733 | −0.153860 | +0.019127 | −0.134733 (2e−7) | −0.110690 | +2.4e−2 | −0.153860 (1.14×) |
 
@@ -486,12 +535,22 @@ within `2e-7` of the stored weight difference at step 1). Late in the AdamW run
 than that against the whole step: the current gradient enters the update with
 weight `1−β1`, and on its own batch the history is nearly orthogonal to it. For
 SGD `delta_loss_P` is `delta_loss`, so `−η · delta_loss_P` is the gradient part
-exactly, and the rest is momentum. On the held-out batch the first-order change
+— exactly so only for a step that was not clipped, has no dampening and is not
+Nesterov, which holds for the three SGD rows above (the gradient part carries
+the factors `clip`, `1−τ` and, under Nesterov, `1 + μ(1−τ)`) — and the rest is
+momentum. On the held-out batch the first-order change
 late in training is small (−0.008 at AdamW step 661) against a residual of
 +0.012: there the realized change (+0.003) has the opposite sign.
-`loss_change` computed with the whole model in fp64 differed from the reported
-value by at most `2e-8` (steps 0, 9 and 661 of the AdamW run), so residuals of
-`1e-6` and larger are not round-off.
+**The noise floor of `loss_change`**, measured on this model: computed with the
+whole model in fp64, `loss_change` differed from the fp32-forward value by at
+most `1.3e-8` on the update batch (32 × 512 tokens) and by at most `8.3e-8` on
+the held-out batch (8 × 512 tokens), over steps 0, 9 and 661 of the AdamW run
+and steps 0, 1 and 661 of the SGD run (twelve comparisons; the same with 2 and
+with 8 threads). Residuals of `1e-6` and larger in the table are therefore not
+round-off. The residual of the first SGD step is: the analyzer reported
+`+2.9e-10` on the update batch where the fp64 model gives `+2.1e-10`, and
+`−9.3e-9` on the held-out batch where the fp64 model gives `+1.2e-9` — numbers
+of that size are not reproducible and should be read as "below `1e-7`".
 
 #### Reading the P rows
 
@@ -1413,7 +1472,7 @@ cross-validation test tier (gated, skipped in CI).
 | — | `delta_loss_P_capped`, `chi_net_P_capped` | the same two quantities with `P` restricted to the coordinates at its ceiling (`1/ε`) |
 | `∇L^B · Δθ` | `update_response`, `update_response_grad` / `_hist` / `_wd` | first-order loss change on `B` under the step that was taken, rebuilt from the pre-step optimizer state, and its three parts |
 | `∇L^B · (θ_{t+1} − θ_t)` | `update_response_weights` | the same from two stored weight files |
-| `ν_t` | `loss_change_residual` | `loss_change − update_response_weights`, with `loss_change = L_B(θ_{t+1}) − L_B(θ_t)` |
+| — | `loss_change`, `loss_change_residual` | `L_B(θ_{t+1}) − L_B(θ_t)`, and that minus `update_response_weights`: the realized change, and what the first-order term from the stored weight difference leaves over |
 | `Θ` | (not stored) | empirical NTK; never materialized |
 | `N_A`, `N_B` | `n_valid_a`, `n_valid_b` | valid (non-pad) token counts |
 | `n` | `n_hutchinson` | number of Hutchinson probe vectors |
