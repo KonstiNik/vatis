@@ -142,6 +142,9 @@ class TrainingRecord:
     shapes: list[tuple[int, ...]]
     steps: list[RecordedStep] = field(default_factory=list)
     final_params: list[torch.Tensor] = field(default_factory=list)
+    # Model parameters the optimizer was not given (they stay at their initial
+    # values): name -> value. Empty when the optimizer holds every parameter.
+    frozen: dict[str, torch.Tensor] = field(default_factory=dict)
     dtype: torch.dtype = torch.float64
     tie_head: bool = True
     seed: int = 0
@@ -195,12 +198,16 @@ def run_training(
     params = optimizer_parameters(optimizer)
     name_of = {id(p): name for name, p in model.named_parameters()}
     names = [name_of[id(p)] for p in params]
+    held = {id(p) for p in params}
     record = TrainingRecord(
         names=names,
         shapes=[tuple(p.shape) for p in params],
         dtype=dtype,
         tie_head=tie_head,
         seed=seed,
+        frozen={
+            name: p.detach().clone() for name, p in model.named_parameters() if id(p) not in held
+        },
     )
     tokens = token_stream(
         n_rows=batch_size * n_steps, seq_len=SEQ_LEN, vocab_size=VOCAB_SIZE, seed=seed + 1
@@ -307,10 +314,12 @@ def write_bundle(
         recorded = record.steps[step]
         ckpt_dir = run_dir / "checkpoints" / f"step_{step:08d}"
         ckpt_dir.mkdir(parents=True, exist_ok=True)
+        weights = dict(zip(record.names, recorded.params_before, strict=True))
+        weights.update(record.frozen)  # every model parameter is in the file
         save_file(
             {
                 name: value.to(dtype=_WEIGHT_DTYPES[weight_dtype]).clone()
-                for name, value in zip(record.names, recorded.params_before, strict=True)
+                for name, value in weights.items()
             },
             str(ckpt_dir / "model.safetensors"),
         )

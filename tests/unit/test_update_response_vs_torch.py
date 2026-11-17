@@ -661,3 +661,115 @@ def test_a_non_finite_update_is_refused_not_reported() -> None:
     grad = torch.tensor([1.0, 0.0], dtype=torch.float64)
     with pytest.raises(ValueError, match="not finite"):
         rule.response(grad, {"A": grad}, [torch.ones(2, dtype=torch.float64)])
+
+
+# ------------------------------------------------ a parameter without a gradient
+
+
+def _run_with_an_idle_parameter(
+    make_optimizer: Callable[[list[nn.Parameter]], torch.optim.Optimizer],
+    *,
+    set_to_none: bool,
+    n_steps: int = 4,
+) -> list[dict[str, Any]]:
+    """Two parameters; ``b`` is in the graph at steps 0 and 1 only.
+
+    Each record holds the weights and the ``state_dict()`` before the step, the
+    gradient as a flat vector (zeros where torch held ``None``), whether ``b``'s
+    gradient was ``None``, and the weights after.
+    """
+    a = nn.Parameter(torch.linspace(0.5, 1.5, 3, dtype=torch.float64))
+    b = nn.Parameter(torch.linspace(-1.0, 1.0, 4, dtype=torch.float64))
+    optimizer = make_optimizer([a, b])
+    target = torch.arange(1.0, 4.0, dtype=torch.float64)
+    records = []
+    for t in range(n_steps):
+        optimizer.zero_grad(set_to_none=set_to_none)
+        loss = ((a - target) ** 2).sum()
+        if t < 2:
+            loss = loss + (b**3).sum()
+        loss.backward()
+        records.append(
+            {
+                "before": [a.detach().clone(), b.detach().clone()],
+                "state": copy.deepcopy(optimizer.state_dict()),
+                "grad": torch.cat(
+                    [a.grad, torch.zeros_like(b) if b.grad is None else b.grad]
+                ).clone(),
+                "b_has_no_gradient": b.grad is None,
+            }
+        )
+        optimizer.step()
+        records[-1]["after"] = [a.detach().clone(), b.detach().clone()]
+    return records
+
+
+def _idle_rule(record: dict[str, Any], step: int) -> OptimizerUpdate:
+    layout = ParameterLayout.from_records([["a", [3]], ["b", [4]]])
+    return optimizer_update_from_state(
+        OptimizerStateView(record["state"], layout), checkpoint_step=step
+    )
+
+
+_IDLE_OPTIMIZERS = [
+    pytest.param(lambda ps: torch.optim.AdamW(ps, lr=1e-2, weight_decay=0.5), id="adamw"),
+    pytest.param(lambda ps: torch.optim.SGD(ps, lr=1e-2, momentum=0.9, weight_decay=0.5), id="sgd"),
+]
+
+
+@pytest.mark.parametrize("make_optimizer", _IDLE_OPTIMIZERS)
+def test_torch_skips_a_parameter_whose_gradient_is_none(make_optimizer: Any) -> None:
+    """No momentum, no weight decay: the parameter is not touched — and the rule,
+    which sees a zero gradient, would move it. Told which parameter got no
+    gradient, the rule refuses instead."""
+    record = _run_with_an_idle_parameter(make_optimizer, set_to_none=True)[2]
+    assert record["b_has_no_gradient"]
+    assert torch.equal(record["after"][1], record["before"][1])  # torch: untouched
+    assert not torch.equal(record["after"][0], record["before"][0])
+
+    rule = _idle_rule(record, 2)
+    predicted = rule.predicted_delta(record["grad"], record["before"])
+    assert float(predicted[3:].abs().max()) > 1e-3  # momentum and decay, never applied
+    with pytest.raises(ValueError, match=r"parameter 1 \(b\) receives no gradient"):
+        rule.predicted_delta(record["grad"], record["before"], no_gradient={1: "b"})
+    with pytest.raises(ValueError, match="receives no gradient"):
+        rule.response(record["grad"], {"A": record["grad"]}, record["before"], no_gradient={1: "b"})
+
+
+@pytest.mark.parametrize("make_optimizer", _IDLE_OPTIMIZERS)
+def test_a_zero_gradient_is_not_a_missing_one(make_optimizer: Any) -> None:
+    """``zero_grad(set_to_none=False)`` leaves zeros in ``.grad``: torch then does
+    apply momentum and decay, and the rule reproduces that step exactly."""
+    record = _run_with_an_idle_parameter(make_optimizer, set_to_none=False)[2]
+    assert not record["b_has_no_gradient"]
+    actual = flat(record["after"]) - flat(record["before"])
+    assert float(actual[3:].abs().max()) > 1e-3
+    predicted = _idle_rule(record, 2).predicted_delta(record["grad"], record["before"])
+    assert float((predicted - actual).abs().max()) <= 1e-10 * float(actual.abs().max())
+
+
+def test_adam_step_counters_diverge_after_a_skipped_step() -> None:
+    """One checkpoint later the skip is visible in the state, and refused."""
+    records = _run_with_an_idle_parameter(
+        lambda ps: torch.optim.AdamW(ps, lr=1e-2, weight_decay=0.5), set_to_none=True
+    )
+    with pytest.raises(BundleSchemaError, match="different 'step' counters"):
+        _idle_rule(records[3], 3)
+
+
+def test_no_gradient_is_exact_when_nothing_would_move_the_parameter() -> None:
+    """Plain SGD, decay on ``a`` only: skipped or not, ``b`` does not move."""
+    record = _run_with_an_idle_parameter(
+        lambda ps: torch.optim.SGD(
+            [{"params": [ps[0]], "weight_decay": 0.5}, {"params": [ps[1]], "weight_decay": 0.0}],
+            lr=1e-2,
+        ),
+        set_to_none=True,
+    )[2]
+    assert record["b_has_no_gradient"]
+    actual = flat(record["after"]) - flat(record["before"])
+    predicted = _idle_rule(record, 2).predicted_delta(
+        record["grad"], record["before"], no_gradient={1: "b"}
+    )
+    assert float(actual[3:].abs().max()) == 0.0 and float(predicted[3:].abs().max()) == 0.0
+    assert float((predicted - actual).abs().max()) <= 1e-10 * float(actual.abs().max())

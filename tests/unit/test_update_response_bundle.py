@@ -766,3 +766,349 @@ def test_an_explicit_rule_works_on_any_model_bundle() -> None:
             n_hutchinson=2,
             dtype="fp32",
         )
+
+
+# ------------------------------------------- rounded in memory, not only on disk
+
+
+def test_a_source_that_rounds_the_weights_on_load_gives_no_realized_rows(
+    adamw_run: tuple[Path, TrainingRecord],
+) -> None:
+    """fp32 weight files opened with ``dtype="bf16"``: the two thetas the analyzer
+    would compare are rounded in memory, exactly as if the files were bf16."""
+    run_dir, record = adamw_run
+    source = _source(run_dir, dtype="bf16", steps=[1])
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        rows = _run(source)[1]
+    skipped = [str(w.message) for w in caught if "SKIPPED" in str(w.message)]
+    assert len(skipped) == 1
+    assert 'dtype="bf16"' in skipped[0] and "weight files are stored" not in skipped[0]
+    assert not any(_has(rows, name) for name in REALIZED_CHANGE_OBSERVABLES)
+    # The formula rows are reported, from theta_t and a gradient at bf16 precision.
+    for batch in ("train", "val"):
+        assert _value(rows, batch, "update_response") == pytest.approx(
+            _reference(record, 1, batch), rel=0.1
+        )
+
+    # fp16 likewise (the factory alone: no forward pass is needed to decide).
+    half = _source(run_dir, dtype="fp16", steps=[1])
+    with pytest.warns(UserWarning, match='dtype="fp16"'):
+        rule = half.update_response()(half.checkpoints[0].identifier)
+    assert rule is not None and rule.next_weights is None
+    # Both reasons are named when both apply; fp32 loaded as fp32 stays silent.
+    exact = _source(run_dir, steps=[1])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        rule = exact.update_response()(exact.checkpoints[0].identifier)
+    assert rule is not None and rule.next_weights is not None
+
+
+def test_rounded_files_and_a_rounding_loader_are_both_named(tmp_path: Path) -> None:
+    run_dir, _record = _write(tmp_path, weight_dtype="bf16", bundle_steps=(1, 2))
+    source = _source(run_dir, dtype="bf16", steps=[1])
+    with pytest.warns(UserWarning, match="stored as .*BF16.* and the source was opened with"):
+        rule = source.update_response()(source.checkpoints[0].identifier)
+    assert rule is not None and rule.next_weights is None
+
+
+# ------------------------------------------------- the precision of loss_change
+
+
+def test_loss_change_is_the_fp64_loss_of_the_fp32_logits(
+    adamw_run: tuple[Path, TrainingRecord],
+) -> None:
+    """The cross entropy is evaluated in fp64 on the logits the fp32 model produced.
+
+    With each batch in ONE micro-batch the analyzer's forward pass is the
+    reference's forward pass, bit for bit, so the only thing left between the
+    two is the arithmetic of the loss. Evaluated in fp64 they agree to fp64
+    round-off; an fp32 cross entropy would differ by its own round-off, about
+    ``1e-7`` on a loss of 4 — which is the size of a small residual.
+    """
+    from tests.utils.bundle_fixture import batch_from_tokens
+
+    run_dir, record = adamw_run
+    val = held_out_batch()
+    rows_by_step = _run(_source(run_dir, steps=list(WITH_SUCCESSOR)), micro_batch_size=8)
+    worst = 0.0
+    for step, rows in rows_by_step.items():
+        recorded = record.steps[step]
+        for name, batch in (("train", batch_from_tokens(recorded.tokens)), ("val", val)):
+            reference = _loss_fp64(record, recorded.params_after, batch) - _loss_fp64(
+                record, recorded.params_before, batch
+            )
+            worst = max(worst, abs(_value(rows, name, "loss_change") - reference))
+    assert worst < 1e-11, f"loss_change is {worst:.2e} away from the fp64 loss of the same logits"
+
+
+# ------------------------------------------------------------ failing early
+
+
+def _no_forward(model: nn.Module, batch: Any) -> torch.Tensor:
+    raise AssertionError("a forward pass ran")
+
+
+def test_a_rule_that_cannot_be_placed_fails_before_any_forward_pass(
+    adamw_run: tuple[Path, TrainingRecord],
+) -> None:
+    """Both refusals come before the first forward pass of the checkpoint."""
+    import dataclasses
+
+    run_dir, _record = adamw_run
+    source = _source(run_dir, steps=[2], forward_fn=_no_forward)
+    with pytest.raises(ValueError, match="none of the eval batches"):
+        _run(source, eval_batches={"val": held_out_batch()})
+
+    build = source.update_response()
+
+    def anonymous(ckpt_id: str) -> OptimizerUpdate | None:
+        rule = build(ckpt_id)
+        assert rule is not None
+        return dataclasses.replace(rule, update_batch=None)
+
+    with pytest.raises(ValueError, match="does not carry the batch"):
+        _run(source, update_response=anonymous)
+    # The same source does reach the model once the rule can be placed.
+    with pytest.raises(AssertionError, match="a forward pass ran"):
+        _run(source)
+
+
+def test_every_eval_batch_is_fetched_once_per_checkpoint(
+    adamw_run: tuple[Path, TrainingRecord],
+) -> None:
+    """A resampling spec hands out a new batch per call; the rows of one
+    checkpoint must all be about the batch its self pair measured."""
+    from vatis.data.batches import EvalBatchSpec
+
+    run_dir, record = adamw_run
+    drawn: list[dict[str, torch.Tensor]] = []
+
+    class Loader:
+        def __iter__(self) -> Any:
+            seed = 910
+            while True:
+                batch = held_out_batch(seed=seed)
+                drawn.append(batch)
+                seed += 1
+                yield batch
+
+    source = _source(run_dir, steps=[1, 2])
+    rows_by_step = _run(
+        source,
+        eval_batches={"train": source.batch_a_spec(), "val": EvalBatchSpec.resample(Loader())},
+    )
+    assert len(drawn) == 2
+    assert not torch.equal(drawn[0]["input_ids"], drawn[1]["input_ids"])
+    for (step, rows), batch in zip(rows_by_step.items(), drawn, strict=True):
+        recorded = record.steps[step]
+        _loss, grad = record.loss_and_grad(recorded.params_before, batch)
+        assert _value(rows, "val", "update_response") == pytest.approx(
+            float(grad @ recorded.delta), rel=RTOL
+        )
+        assert _value(rows, "val", "delta_loss", batch_a="val") == pytest.approx(
+            float(grad @ grad), rel=RTOL
+        )
+        reference = _loss_fp64(record, recorded.params_after, batch) - _loss_fp64(
+            record, recorded.params_before, batch
+        )
+        assert _value(rows, "val", "loss_change") == pytest.approx(reference, rel=1e-4, abs=1e-7)
+
+
+# --------------------------------------- work only for the rows that were asked for
+
+
+def test_theta_next_is_loaded_and_evaluated_only_for_the_rows_that_need_it(
+    adamw_run: tuple[Path, TrainingRecord],
+) -> None:
+    import dataclasses
+
+    from vatis.models.local_bundle import plain_lm_forward as real_forward
+
+    run_dir, _record = adamw_run
+    forwards = 0
+
+    def counting_forward(model: nn.Module, batch: Any) -> torch.Tensor:
+        nonlocal forwards
+        forwards += 1
+        return real_forward(model, batch)
+
+    def measure(observables: list[str]) -> tuple[int, int, set[str]]:
+        nonlocal forwards
+        source = _source(run_dir, steps=[1], forward_fn=counting_forward)
+        build = source.update_response()
+        loads = 0
+
+        def factory(ckpt_id: str) -> OptimizerUpdate | None:
+            rule = build(ckpt_id)
+            assert rule is not None and rule.next_weights is not None
+            load = rule.next_weights
+
+            def counted() -> Any:
+                nonlocal loads
+                loads += 1
+                return load()
+
+            return dataclasses.replace(rule, next_weights=counted)
+
+        forwards = 0
+        rows = _run(source, update_response=factory, observables=observables)[1]
+        return loads, forwards, {r.observable for r in rows}
+
+    formula = ["delta_loss", "update_response", "update_response_hist"]
+    loads, base_forwards, names = measure(formula)
+    assert loads == 0 and names == set(formula)
+
+    # The stored weight difference needs theta_{t+1} but no forward pass.
+    loads, n_forwards, names = measure([*formula, "update_response_weights"])
+    assert loads == 1 and n_forwards == base_forwards
+    assert names == {*formula, "update_response_weights"}
+
+    # The realized change needs two forward passes per micro-batch: 2 micro-batches
+    # of the 4-row update batch and 4 of the 8-row held-out batch, at both thetas.
+    loads, n_forwards, names = measure([*formula, "loss_change"])
+    assert loads == 1 and n_forwards == base_forwards + 2 * (2 + 4)
+    assert names == {*formula, "loss_change"}
+
+    loads, n_forwards, names = measure([*formula, "loss_change_residual"])
+    assert loads == 1 and n_forwards == base_forwards + 2 * (2 + 4)
+    assert names == {*formula, "loss_change_residual"}
+
+
+# ---------------------------------------------- parameters without a gradient
+
+
+class _WithUnusedParameter(nn.Module):
+    """The tiny transformer plus a parameter the forward pass never touches."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        from tests.fixtures.update_response_toys import make_model
+
+        self.inner = make_model(dtype=torch.float32).eval()
+        self.unused = nn.Parameter(torch.ones(5))
+
+    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+        out: torch.Tensor = self.inner(input_ids)
+        return out
+
+
+def _first_step_rows(model: nn.Module, decay_on_unused: float = 0.1) -> list[ResultRow]:
+    """The rows of a first AdamW step (empty state), decay 0.1 on every parameter
+    except a parameter named ``unused``, which gets ``decay_on_unused``."""
+    params = list(model.parameters())
+    batch = held_out_batch(seed=905, n_rows=4)
+    unused = getattr(model, "unused", None)
+    hypers = [
+        AdamHyper(
+            lr=1e-2,
+            beta1=0.9,
+            beta2=0.99,
+            eps=1e-8,
+            weight_decay=decay_on_unused if p is unused else 0.1,
+        )
+        for p in params
+    ]
+    rule = OptimizerUpdate(
+        family="adam",
+        hypers=hypers,
+        step=0,
+        first_moment=None,
+        second_moment=None,
+        descriptor="adamw_update",
+        update_batch=batch,
+    )
+    results = analyze(
+        model=ModelBundle(
+            model=model,
+            params=params,
+            forward_fn=plain_lm_forward,
+            loss_fn=causal_lm_loss,
+            valid_mask_fn=causal_lm_valid_mask,
+            identifier="toy",
+        ),
+        eval_batches={"A": batch, "B": held_out_batch(seed=906, n_rows=4)},
+        update_response=lambda ckpt_id: rule,
+        chi_net_method="hutchinson",
+        n_hutchinson=2,
+        dtype="fp32",
+    )
+    return results[0].rows
+
+
+def test_a_parameter_without_a_gradient_is_refused_when_the_rule_would_move_it() -> None:
+    """torch skips a parameter whose gradient is ``None``; the rule would decay it.
+
+    The analyzer knows the parameter got no gradient on the update batch (autograd
+    returned ``None``), and whether the run skipped it or decayed it is not in a
+    bundle — so the rows are refused, naming the parameter.
+    """
+    torch.manual_seed(0)
+    with pytest.raises(ValueError, match=r"parameter \d+ \(unused\) receives no gradient"):
+        _first_step_rows(_WithUnusedParameter(), decay_on_unused=0.1)
+
+
+def test_a_parameter_without_a_gradient_is_harmless_when_nothing_moves_it() -> None:
+    """No decay and no history on it: skipped or not, its update is zero."""
+    torch.manual_seed(0)
+    model = _WithUnusedParameter()
+    with_unused = _first_step_rows(model, decay_on_unused=0.0)
+    # The same model without the extra parameter gives the same rows.
+    alone = _first_step_rows(model.inner)
+    for batch in ("A", "B"):
+        for observable in UPDATE_RESPONSE_OBSERVABLES:
+            assert _value(with_unused, batch, observable, batch_a="A") == pytest.approx(
+                _value(alone, batch, observable, batch_a="A"), rel=1e-12, abs=1e-18
+            )
+
+
+# ------------------------------------------- parameters outside the canonical list
+
+
+def _frozen_position_embedding(model: nn.Module) -> torch.optim.Optimizer:
+    """AdamW over every parameter but the position embedding, which is frozen."""
+    frozen = dict(model.named_parameters())["pos_embed.weight"]
+    frozen.requires_grad_(False)
+    return torch.optim.AdamW(
+        [p for p in model.parameters() if p is not frozen],
+        lr=3e-3,
+        betas=(0.9, 0.95),
+        weight_decay=0.1,
+    )
+
+
+def test_unlisted_parameters_must_be_confirmed_frozen(tmp_path: Path) -> None:
+    """A model with parameters ``param_names.json`` does not name.
+
+    If they were trained, their part of the step is in ``loss_change`` and in no
+    other row; if they had gradients when the norm was clipped, the clip factor
+    is wrong. A bundle cannot say, so the caller has to.
+    """
+    run_dir, record = _write(tmp_path, _frozen_position_embedding, clip_grad_norm=0.5)
+    assert list(record.frozen) == ["pos_embed.weight"]
+    assert "pos_embed.weight" not in record.names
+
+    source = _source(run_dir, steps=[0, 1], allow_unlisted_params=True)
+    with pytest.raises(ValueError, match=r"outside\s+param_names.json \(\['pos_embed.weight'\]"):
+        _run(source)
+
+    confirmed = _source(run_dir, steps=[0, 1], allow_unlisted_params=True)
+    rows_by_step = _run(
+        confirmed, update_response=confirmed.update_response(unlisted_params_frozen=True)
+    )
+    _assert_matches_the_run(record, rows_by_step)
+    for step, rows in rows_by_step.items():
+        recorded = record.steps[step]
+        val = held_out_batch()
+        reference = _loss_fp64(record, recorded.params_after, val) - _loss_fp64(
+            record, recorded.params_before, val
+        )
+        assert _value(rows, "val", "loss_change") == pytest.approx(reference, rel=1e-4, abs=1e-7)
+
+
+def test_allow_unlisted_params_is_harmless_when_every_parameter_is_listed(
+    adamw_run: tuple[Path, TrainingRecord],
+) -> None:
+    run_dir, record = adamw_run
+    source = _source(run_dir, steps=[1], allow_unlisted_params=True)
+    _assert_matches_the_run(record, _run(source))
