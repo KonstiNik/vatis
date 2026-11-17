@@ -305,15 +305,15 @@ at step 20 and exactly 0 at step 299 — the last column of the table.
 
 **These files were regenerated on 17 November 2026** with the code that adds
 the eight run-setting columns (the `feat/result-schema` branch, commit
-`9aa0751`), on the same RTX 3090 Ti, with the command and defaults above
+`9aa0751`), on an RTX 3090 Ti as before, with the command and defaults above
 (`--device cuda`, seed 0). They replace files from 28–29 July 2026, which
 predated the `*_capped` rows and the eight columns.
 
 **The bundle is not the one the July files were measured on.** That bundle sat
-in `/tmp` and was lost; the training run was repeated on 31 July 2026 with the
-same command and seeds. The two training runs agree bit for bit up to step 27
-(identical recorded train loss at every checkpoint) and then drift apart, as GPU
-training does without deterministic kernels: from step 37 on the recorded train
+in `/tmp` and was lost; the training run was repeated on 31 July 2026 with, per
+the data directory's notes, the same command and seeds. The two training runs agree bit for bit up to step 27
+(identical recorded train loss at every checkpoint) and then drift apart, most
+likely because GPU training is not bit-for-bit deterministic: from step 37 on the recorded train
 loss differs, by 3e-6 relative at step 37 and up to about 0.5% later (1.7778 vs
 1.7816 at step 299). Every row of the July file has a counterpart in the new one, and the
 comparison follows that split exactly:
