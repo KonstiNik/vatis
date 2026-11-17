@@ -39,7 +39,8 @@ all-reduce of ``chi_net_P_capped`` changed nothing any tier asserts.
 under the shipped RNG, against the per-rank streams.
 
 The provenance columns and ``value_stderr`` have their own section at the end:
-every rank's rows name the estimator and the world size, the rows of an AdamW
+every rank's rows name the estimator, the world size, the micro-batch size and
+the probe distribution of the run, the rows of an AdamW
 ``P`` carry its ``eps`` / ``beta2`` / capped fraction, and the standard error of
 the all-reduced ``chi_net`` is the root of the **sum over ranks** of the
 variances the estimator reports on each rank's stream -- at
@@ -106,6 +107,7 @@ def _run_ddp_rows(
     duplicate_half: bool = False,
     adamw: bool = False,
     micro_batch_size: int | None = None,
+    distribution: str | None = None,
 ) -> list[list[dict[str, Any]]]:
     """Spawn a 2-rank torchrun pinned to CPU, return every rank's rows (as dicts)."""
     env = os.environ.copy()
@@ -141,6 +143,8 @@ def _run_ddp_rows(
         cmd.append("--adamw")
     if micro_batch_size is not None:
         cmd += ["--micro-batch-size", str(micro_batch_size)]
+    if distribution is not None:
+        cmd += ["--hutchinson-distribution", distribution]
     result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
     if result.returncode != 0:
         raise RuntimeError(
@@ -562,26 +566,34 @@ def _rank_stream_variances(
     return per_rank
 
 
-@pytest.mark.parametrize("method", ["hutchinson", "per_sequence_cv"])
+@pytest.mark.parametrize(
+    ("method", "distribution", "micro"),
+    [("hutchinson", "rademacher", 1), ("per_sequence_cv", "gaussian", 2)],
+)
 def test_ddp_rows_record_the_estimator_the_ranks_and_the_adamw_p(
-    tmp_path: Path, method: str
+    tmp_path: Path, method: str, distribution: str, micro: int
 ) -> None:
     """What a two-rank run writes into the provenance columns, on every rank.
 
-    ``n_ranks`` is the world size (2, where a single process writes 1) and
-    ``chi_net_method`` the estimator, on every row. The rows computed with the
+    ``n_ranks`` is the world size (2, where a single process writes 1),
+    ``chi_net_method`` the estimator, ``micro_batch_size`` and
+    ``hutchinson_distribution`` the micro-batch size and probe distribution the
+    run was made with -- once with the defaults, once with Gaussian probes at
+    micro-batch 2 -- on every row. The rows computed with the
     AdamW ``P`` carry its ``eps`` and ``beta2`` and the fraction of its
     coordinates whose second moment is zero -- counted here from the second
     moment itself -- and the raw rows carry none of the three.
     """
     rank_rows = _run_ddp_rows(
-        tmp_path / f"ddp_provenance_{method}.json",
+        tmp_path / f"ddp_provenance_{method}_{distribution}.json",
         seed=0,
         batch_size=5,
         n_h=4,
         method=method,
         preconditioner=True,
         adamw=True,
+        micro_batch_size=micro,
+        distribution=distribution,
     )
     bundle, _ = _toy_bundle(0)
     exp_avg_sq = adamw_second_moment(sum(p.numel() for p in bundle.params))
@@ -593,6 +605,8 @@ def test_ddp_rows_record_the_estimator_the_ranks_and_the_adamw_p(
         for r in rows:
             assert r["n_ranks"] == 2, (rank, r)
             assert r["chi_net_method"] == method, (rank, r)
+            assert r["micro_batch_size"] == micro, (rank, r)
+            assert r["hutchinson_distribution"] == distribution, (rank, r)
             if r["observable"] in _P_ROWS:
                 assert r["preconditioner"] == "adamw", (rank, r)
                 assert r["preconditioner_eps"] == ADAMW_EPS, (rank, r)

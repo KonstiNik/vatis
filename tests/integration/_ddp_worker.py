@@ -150,6 +150,7 @@ def main() -> int:
     parser.add_argument("--n-hutchinson", type=int, default=8)
     parser.add_argument("--micro-batch-size", type=int, default=1)
     parser.add_argument("--chi-net-method", default=None)
+    parser.add_argument("--hutchinson-distribution", default="rademacher")
     parser.add_argument(
         "--pin-probes",
         action="store_true",
@@ -224,6 +225,7 @@ def main() -> int:
             eval_batches={"val": batch},
             preconditioner=precond,
             chi_net_method=args.chi_net_method,
+            hutchinson_distribution=args.hutchinson_distribution,
             n_hutchinson=args.n_hutchinson,
             micro_batch_size=args.micro_batch_size,
             sink=None,

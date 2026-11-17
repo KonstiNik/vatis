@@ -1,6 +1,6 @@
 """The result-file column set: what is written, where it is null, and old files.
 
-Six columns were appended after ``preconditioner``:
+Eight columns were appended after ``preconditioner``:
 
     chi_net_method                  str      the chi_net estimator that ran
     n_ranks                         int32    number of processes (DDP world size)
@@ -8,10 +8,14 @@ Six columns were appended after ``preconditioner``:
     preconditioner_beta2            float64  beta2 of an AdamW P      (P rows only)
     preconditioner_capped_fraction  float64  share of P at its ceiling (P rows only)
     value_stderr                    float64  probe standard error of ``value``
+    micro_batch_size                int32    sequences per backward of the run
+    hutchinson_distribution         str      distribution the probes were drawn from
 
-This file pins the names, types and order, which rows carry which of the first
-five, and that files written with an earlier column set stay usable. What
-``value_stderr`` *is* has its own file, ``test_value_stderr.py``.
+This file pins the names, types and order, which rows carry which of them (the
+four settings of the run -- estimator, rank count, micro-batch size, probe
+distribution -- on every row; the three P columns on the P rows), and that
+files written with an earlier column set stay usable. What ``value_stderr``
+*is* has its own file, ``test_value_stderr.py``.
 """
 
 from __future__ import annotations
@@ -58,6 +62,8 @@ NEW_COLUMNS = [
     ("preconditioner_beta2", pa.float64()),
     ("preconditioner_capped_fraction", pa.float64()),
     ("value_stderr", pa.float64()),
+    ("micro_batch_size", pa.int32()),
+    ("hutchinson_distribution", pa.string()),
 ]
 CURRENT_COLUMNS = ORIGINAL_COLUMNS + PRECONDITIONER_COLUMN + NEW_COLUMNS
 P_PROVENANCE = ("preconditioner_eps", "preconditioner_beta2", "preconditioner_capped_fraction")
@@ -169,6 +175,8 @@ def test_adamw_rows_carry_eps_beta2_and_the_capped_fraction(tmp_path: Path, meth
     for row in rows:
         assert row["chi_net_method"] == method, row
         assert row["n_ranks"] == 1, row
+        assert row["micro_batch_size"] == 2, row
+        assert row["hutchinson_distribution"] == "rademacher", row
         if row["observable"] in P_OBSERVABLES + P_CAPPED_OBSERVABLES:
             assert row["preconditioner"] == "adamw"
             assert row["preconditioner_eps"] == 1e-3
@@ -264,6 +272,72 @@ def test_a_p_that_is_not_adamw_writes_nulls_where_it_has_nothing_to_say() -> Non
         assert row.preconditioner_capped_fraction == (n_params // 4) / n_params
 
 
+@pytest.mark.parametrize(
+    ("method", "distribution", "micro"),
+    [
+        ("hutchinson", "gaussian", 3),
+        ("per_sequence_cv", "gaussian", 1),
+        ("hutchinson", "rademacher", 8),
+    ],
+)
+def test_micro_batch_size_and_probe_distribution_are_on_every_row(
+    tmp_path: Path, method: str, distribution: str, micro: int
+) -> None:
+    """The two settings the sampled values and their standard error depend on.
+
+    Like ``chi_net_method`` and ``n_ranks`` they describe the run and are written
+    on every row of it: the sampled rows, the rows no probe enters (``chi_loss``,
+    ``delta_loss``), the P rows, and the cross pair, through the parquet file.
+
+    ``micro_batch_size`` is the setting the run was made with, also where it
+    exceeds a batch (``micro = 8`` on batches of 4 and 6: each batch is then one
+    micro-batch, and the column still reads 8). The distribution is what the
+    estimator reports having drawn from, checked here against a property of
+    the numbers themselves: Gaussian and Rademacher probes give different
+    ``chi_net`` for the same seed.
+    """
+    bundle = _mlp_bundle()
+    n_params = sum(p.numel() for p in bundle.params)
+
+    def run(dist: str, sink: str | None) -> list[ResultRow]:
+        return analyze(
+            model=bundle,
+            revisions=["step7"],
+            eval_batches={"a": _mlp_batch(4, 1), "b": _mlp_batch(6, 2)},
+            cross_pairs=[("a", "b")],
+            preconditioner=Preconditioner.identity(n_params),
+            chi_net_method=method,
+            hutchinson_distribution=dist,
+            n_hutchinson=3,
+            micro_batch_size=micro,
+            sink=sink,
+            dtype="fp32",
+        )[0].rows
+
+    out = tmp_path / "results.parquet"
+    in_memory = run(distribution, str(out))
+    rows = pq.read_table(out).to_pylist()
+    assert len(rows) == len(in_memory) == 3 * len(ALL_OBSERVABLES + P_OBSERVABLES)
+    assert {(r["batch_a"], r["batch_b"]) for r in rows} == {("a", "a"), ("b", "b"), ("a", "b")}
+    assert {r["observable"] for r in rows} >= {"chi_loss", "delta_loss", "chi_net", "chi_pos_P"}
+    for row in rows:
+        assert row["micro_batch_size"] == micro, row
+        assert row["hutchinson_distribution"] == distribution, row
+    assert {(r.micro_batch_size, r.hutchinson_distribution) for r in in_memory} == {
+        (micro, distribution)
+    }
+
+    other = "rademacher" if distribution == "gaussian" else "gaussian"
+    values = {(r.batch_a, r.batch_b, r.observable): r.value for r in in_memory}
+    for r in run(other, None):
+        assert r.hutchinson_distribution == other
+        same_row = values[(r.batch_a, r.batch_b, r.observable)]
+        if r.observable in ("chi_loss", "delta_loss"):
+            assert r.value == same_row, r.observable
+        if r.observable == "chi_net":
+            assert r.value != same_row, "the distribution did not change the probes"
+
+
 @pytest.mark.parametrize("batch_size", [4, 40])
 def test_the_estimator_that_ran_is_recorded_when_it_was_selected_automatically(
     batch_size: int,
@@ -313,6 +387,8 @@ def test_a_cross_pair_of_two_estimators_names_both(monkeypatch: pytest.MonkeyPat
         ("small", "large"): {"per_sequence_cv+hutchinson"},
         ("large", "small"): {"hutchinson+per_sequence_cv"},
     }
+    # The other settings are the analyzer's own and the same for both batches.
+    assert {(r.micro_batch_size, r.hutchinson_distribution) for r in rows} == {(2, "rademacher")}
     # Two independent estimates still combine: the pair has a standard error.
     cross = [r for r in rows if r.batch_a != r.batch_b and r.observable == "chi_net"]
     assert cross and all(r.value_stderr is not None and r.value_stderr > 0 for r in cross)
@@ -349,6 +425,12 @@ def _write_old_file(path: Path, columns: list[tuple[str, pa.DataType]], n_rows: 
         "hutchinson_seed": [1000 + i for i in range(n_rows)],
         "wallclock_s": [0.1] * n_rows,
         "preconditioner": ["none", "adamw", "none"][:n_rows],
+        "chi_net_method": ["hutchinson"] * n_rows,
+        "n_ranks": [2] * n_rows,
+        "preconditioner_eps": [None, 1e-8, None][:n_rows],
+        "preconditioner_beta2": [None, 0.95, None][:n_rows],
+        "preconditioner_capped_fraction": [None, 0.25, None][:n_rows],
+        "value_stderr": [0.125] * n_rows,
     }
     schema = pa.schema(columns)
     pq.write_table(pa.Table.from_pydict({n: data[n] for n in schema.names}, schema=schema), path)
@@ -357,6 +439,11 @@ def _write_old_file(path: Path, columns: list[tuple[str, pa.DataType]], n_rows: 
 OLD_GENERATIONS = {
     "before_preconditioner": ORIGINAL_COLUMNS,
     "before_provenance": ORIGINAL_COLUMNS + PRECONDITIONER_COLUMN,
+    # Never released or merged: the column set of the first version of the change
+    # that added the provenance columns, before the last two were appended. It is
+    # here because nothing special is needed for it -- ``read_results`` fills
+    # whatever columns a file lacks -- not because such files are known to exist.
+    "before_run_settings": ORIGINAL_COLUMNS + PRECONDITIONER_COLUMN + NEW_COLUMNS[:6],
 }
 
 
@@ -394,8 +481,11 @@ def test_read_results_returns_an_old_file_in_the_current_columns(
         for i, old in enumerate(pq.read_table(path).to_pylist())
     ]
     # ... the columns it predates are null: not recorded is not a value ...
+    in_file = {name for name, _ in columns}
+    predated = [name for name, _ in NEW_COLUMNS if name not in in_file]
+    assert {"micro_batch_size", "hutchinson_distribution"} <= set(predated)
     for row in rows:
-        assert all(row[name] is None for name, _ in NEW_COLUMNS), row
+        assert all(row[name] is None for name in predated), row
     # ... except ``preconditioner`` in a file from before that column, which can
     # only hold raw rows (the P rows and the column were introduced together).
     if generation == "before_preconditioner":
@@ -410,7 +500,18 @@ def test_read_results_concatenates_old_and_new_files(tmp_path: Path) -> None:
     _write_old_file(oldest, OLD_GENERATIONS["before_preconditioner"], n_rows=2)
     _write_old_file(old, OLD_GENERATIONS["before_provenance"], n_rows=3)
     sink = ParquetSink(new)
-    sink.write_rows([_row("chi_net", chi_net_method="hutchinson", n_ranks=2, value_stderr=0.125)])
+    sink.write_rows(
+        [
+            _row(
+                "chi_net",
+                chi_net_method="hutchinson",
+                n_ranks=2,
+                value_stderr=0.125,
+                micro_batch_size=4,
+                hutchinson_distribution="gaussian",
+            )
+        ]
+    )
     sink.close()
 
     # Without help the files do not go together ...
@@ -423,6 +524,8 @@ def test_read_results_concatenates_old_and_new_files(tmp_path: Path) -> None:
     assert table.column("chi_net_method").to_pylist() == [None] * 5 + ["hutchinson"]
     assert table.column("n_ranks").to_pylist() == [None] * 5 + [2]
     assert table.column("value_stderr").to_pylist() == [None] * 5 + [0.125]
+    assert table.column("micro_batch_size").to_pylist() == [None] * 5 + [4]
+    assert table.column("hutchinson_distribution").to_pylist() == [None] * 5 + ["gaussian"]
     assert table.column("preconditioner").to_pylist() == ["none"] * 3 + ["adamw", "none", "none"]
 
 
