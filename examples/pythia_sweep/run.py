@@ -69,6 +69,7 @@ from run_config import configure_hf_cache  # noqa: E402
 
 configure_hf_cache()
 
+import argparse  # noqa: E402
 import json  # noqa: E402
 import platform  # noqa: E402
 import time  # noqa: E402
@@ -535,4 +536,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # No options: the parser only gives --help; a plain call runs the sweep as before.
+    argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    ).parse_args()
     main()
