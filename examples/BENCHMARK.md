@@ -195,30 +195,38 @@ computed with all positions counted.
 Llama `dim=320, n_layers=6, n_heads=4`, vocab 4096 → **10,981,440 parameters in
 57 tensors**; 300 AdamW steps at `B=32, S=512`; `--bundle_steps log:20` → 19
 checkpoints. Analysis: `per_sequence_cv`, `n_hutchinson=32`,
-`micro_batch_size=8`, fp32, 3 eval batches + 2 cross pairs, 840 result rows.
+`micro_batch_size=8`, fp32, 3 eval batches + 2 cross pairs, 1020 result rows.
+These are the numbers of the committed run in `examples/output/` (17 November
+2026, see [Outputs](#outputs-under-examplesoutput)):
 
 | stage | per checkpoint | total |
 |---|---|---|
-| bundle load (weights → GPU) | 0.05–0.35 s (mean 0.09) | 1.7 s |
-| analysis (3 self pairs + 2 cross pairs, both rulers) | 4.04–4.46 s (mean 4.13) | 78.5 s |
-| **sweep** (load + both rulers + sink) | — | **80.5 s** |
-| script total (+ the `P = I` re-check and the epsilon split) | — | 93.7 s |
-| peak GPU memory (torch allocator, this process) | — | 1875 MiB |
+| bundle load (weights → GPU) | 0.07–2.71 s (mean 0.61) | 11.5 s |
+| analysis (3 self pairs + 2 cross pairs, both rulers) | 3.61–4.35 s (mean 3.95) | 75.1 s |
+| **sweep** (load + both rulers + sink) | — | **87.1 s** |
+| script total (+ the `P = I` re-check and the epsilon split) | — | 100.3 s |
+| peak GPU memory (torch allocator, this process) | — | 1683 MiB |
 
 Budget a grid run with the *sweep* row; the extra 13 s are this example's own
 diagnostics, which a production sweep does not pay.
 
-**Caveat attached to every number above: the GPU was shared** with an unrelated
-process (~425 MiB resident, ~33% utilization) for the whole run. Nothing was
-tuned or best-of-N'd; an earlier identical run of the same script came out at
-3.51 s mean analysis time instead of 4.13 s, which is the size of the
-contention noise. (The observable *values* are unaffected — they reproduce
-bit-for-bit across those runs.) Both rulers cost the same as one: the P
-observables reuse the raw pass's probes, so `chi_net^P` adds no backward.
+**Caveat attached to every number above: the card is shared.** Another job's
+work runs on it at times; `nvidia-smi` showed it idle (18 MiB in use, 0%
+utilization) immediately before and after this run, but nothing watched it
+during the run, so contention cannot be ruled out. (The `gpu_contended` entry in
+`run_summary.json` is a fixed sentence the script writes on every GPU run, not a
+measurement.) Nothing was tuned or best-of-N'd. The run these files replace (July
+2026, same card) recorded 3.22–6.51 s per checkpoint (mean 3.90 s) of analysis,
+and the run this table showed before that one a mean of 4.13 s, which gives an
+idea of the run-to-run spread. Both rulers cost the same as one: the P observables reuse the raw pass's
+probes, so `chi_net^P` adds no backward.
 
 Rule of thumb for budgeting the WP1 grid from this: **~4 s per checkpoint per
 (3 batches + 2 cross pairs) at 11M parameters and 4k measurement tokens**, plus
-~0.06 s to load a checkpoint from local disk. Checkpoint loading is *not* the
+the time to read a checkpoint (~105 MB of weights and optimizer state) from disk:
+0.07–0.14 s on 11 of the 19 checkpoints of this run and 0.86–2.71 s on the
+other 8, with the bundle on a network file system (the July run read its bundle
+from `/tmp` at 0.37–0.47 s per checkpoint). Checkpoint loading is *not* the
 bottleneck here (unlike the HF path, where downloads dominate).
 
 ### The step-0 hole, and why the figure has one
@@ -244,7 +252,7 @@ For this run (300 steps, ~4.9M training tokens over a 4096-token vocabulary):
 
 | step | P diagonal at `1/eps` | dead vocab rows | of those, present in batch B | `chi_net^P` from the ceiling |
 |---|---|---|---|---|
-| 1 | 835,840 / 10,981,440 (7.61%) | 2612 / 4096 | 139 | **10.22%** |
+| 1 | 835,840 / 10,981,440 (7.61%) | 2612 / 4096 | 139 | **10.23%** |
 | 20 | 189,440 / 10,981,440 (1.73%) | 592 / 4096 | 5 | **0.37%** |
 | 299 | 78,080 / 10,981,440 (0.71%) | 244 / 4096 | 0 | **0.00%** |
 
@@ -268,21 +276,50 @@ Three things worth knowing, all visible in that table:
   assume it**, and note that the diagonal share alone overstates the effect
   (0.71% of coordinates carried 0% of the trace here).
 
+The result file now carries this split on every P row, not only on the three
+checkpoints above: `chi_net_P_capped` and `delta_loss_P_capped` are the parts of
+`chi_net_P` and `delta_loss_P` contributed by the ceiling coordinates, and
+`preconditioner_capped_fraction` is the diagonal share. For batch B's self pair
+in the committed file, `chi_net_P_capped / chi_net_P` is 10.23% at step 1, 0.37%
+at step 20 and exactly 0 at step 299 — the last column of the table.
+
 ### Outputs (under `examples/output/`)
 
-**These files are from 28–29 July 2026 and do not show everything the current
-code writes.** They were last regenerated on 29 July 2026, together with the
-change to the bit-packed CPU probe draw, and predate the `*_capped` rows and
-the later fixes on this branch: `results.parquet` has no
-`delta_loss_P_capped` / `chi_net_P_capped` rows, and the timing table is that
-state's. The values that are there still hold — a CPU re-run of the step-0 and
-step-1 checkpoints (batches `A1` and `B`) with the current code reproduced
-every committed row, `chi_net` and `chi_net_P` included, to better than 1e-6
-relative with the same seeds. The files will be regenerated with the final
-code.
+**These files were regenerated on 17 November 2026** with the code that adds
+the eight run-setting columns (the `feat/result-schema` branch, commit
+`9aa0751`), on the same RTX 3090 Ti, with the command and defaults above
+(`--device cuda`, seed 0). They replace files from 28–29 July 2026, which
+predated the `*_capped` rows and the eight columns.
 
-- `results.parquet` — 840 rows: 19 checkpoints × (3 self + 2 cross pairs) ×
-  the raw and P observables, in the canonical long format.
+**The bundle is not the one the July files were measured on.** That bundle sat
+in `/tmp` and was lost; the training run was repeated on 31 July 2026 with the
+same command and seeds. The two training runs agree bit for bit up to step 27
+(identical recorded train loss at every checkpoint) and then drift apart, as GPU
+training does without deterministic kernels: from step 37 on the recorded train
+loss differs, by 3e-6 relative at step 37 and up to about 0.5% later (1.7778 vs
+1.7816 at step 299). Every row of the July file has a counterpart in the new one, and the
+comparison follows that split exactly:
+
+- steps 0–8: all rows agree to better than 1e-6 relative (largest 7.8e-7);
+- steps 11–27: they agree to better than 2.5e-5 relative, the difference growing
+  step by step as the two training runs' weights separate;
+- steps 37–299: they differ by up to ~1% in `chi_loss`, up to ~5% in `chi_net`
+  and up to ~3% in `chi_net_P`, and by much more in the small, signed cross-pair
+  values. In particular both AdamW cross pairs (`A1 × B`, `A2 × B`) of
+  `delta_loss_P` / `chi_pos_P` were positive at step 299 in the July file and
+  are negative in this one, as the raw cross pairs already were in both.
+
+A CPU run of the current code over steps 0 and 1 agrees with the July file to
+5.2e-7 relative and with this one to 1.7e-6 (largest on a `delta_loss_P_capped`
+row; 5.9e-7 on every other row), so the device does not matter at this level
+either. So the rows that measure the same weights reproduce, and the rest describe a
+different (equally valid) training run; the July values for steps 37–299 cannot
+be reproduced, because their bundle no longer exists.
+
+- `results.parquet` — 1020 rows: 19 checkpoints × (3 self + 2 cross pairs) ×
+  the raw observables, plus the P observables and their `_capped` parts on the
+  18 checkpoints that have an optimizer state, in the canonical long format
+  with all 20 columns of the current schema.
 - `run_summary.json` — everything the parquet has no column for: per-checkpoint
   train loss / lr / tokens seen (from the bundle's `meta.json`), the performance
   table, the `P = I` re-check, the epsilon-ceiling records, the data-fallback
