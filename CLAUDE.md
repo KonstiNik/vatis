@@ -180,7 +180,7 @@ Reference point from the v1.1 deployment example. All numbers use fp32 forward, 
 | hutchinson        |  32 | 16 |  0.38 |    1529 |                                       |
 | per_sequence_cv   |  32 | 16 |  0.64 |    3280 | per-sample grad cache visible here    |
 
-For the deployment example as committed (`per_sequence_cv`, n=32, B=8, S=128, 13 revisions × 2 self pairs + 1 cross pair = 39 measurements), end-to-end wallclock including model loading was **~20 s with a warm HF cache** and **~50 s on first run** in April 2026, when checkpoint loading dominated. Re-measured on 17 November 2026 (same card model, shared): **~52–55 s warm** and **~76 s cold**, with a median ~1.5 s of compute per (checkpoint, pair) against ~0.54 s in April, so the analysis now dominates; the cause is not yet measured (see `examples/BENCHMARK.md` → Sizing).
+For the deployment example as committed (`per_sequence_cv`, n=32, B=8, S=128, 13 revisions × 2 self pairs + 1 cross pair = 39 measurements), end-to-end wallclock including model loading is **~52–55 s with a warm HF cache** and **~76 s on first run** (measured 2026-11-17). The analysis dominates, ~1.5 s per (checkpoint, pair); about 0.6 s of that is drawing the 32 probes on the CPU (~18 ms per probe of shape 8 × 128 × 50,304, against ~1 ms drawn on the GPU). Before the CPU probe draw (April 2026) it was ~20 s warm / ~50 s cold.
 
 **Reading guidance:** use the 3090 Ti table only as a smoke check. If your toy or 1B-class model runs at ~10× the wallclock of the rows above, your micro-batch is probably wrong. Use the 8B/A100 estimates above as the production target.
 
