@@ -70,7 +70,7 @@ The y axis is symlog because cross pairs are signed.
   (`performance.csv`).
 
 The loss the run recorded and every observable, raw and preconditioned, over
-training — the diagnostic figure every example draws:
+training — the diagnostic figure this example and the Pythia sweep draw:
 [observables_over_training.png](observables_over_training.png).
 
 ## What it does not show

@@ -53,7 +53,7 @@ Without the four early checkpoints (steps 1, 8, 64, 512) these curves look
 smooth and monotonic; see [details.md](details.md#revisions-and-early-phase-findings).
 
 The loss of each batch and every observable over training — the diagnostic
-figure every example draws:
+figure this example and the Llama example draw:
 [observables_over_training.png](observables_over_training.png).
 
 ## What it does not show

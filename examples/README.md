@@ -11,9 +11,9 @@ a small public model at one checkpoint, call vatis once and print the result;
 [`pythia_sweep/`](pythia_sweep/README.md):** the same model over 13 training
 checkpoints, with figures, in about a minute.
 
-Each example that follows a training run also draws
+Two examples, the Pythia sweep and the Llama example, also draw
 `observables_over_training.png`: the loss and every observable over the
-training step, with the same layout in every example (`_plots.py`).
+training step, with the same layout in both (`_plots.py`).
 
 The Llama example and the reconstruction example need a **training bundle that
 is not part of this repository**: a checkpoint bundle written by a separate
