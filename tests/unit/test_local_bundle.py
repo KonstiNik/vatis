@@ -1,6 +1,6 @@
 """Unit tests for the native checkpoint-bundle loader (``vatis.models.local_bundle``).
 
-The four tests the WP0 spec (``02_vatis_loader.md``) declares:
+The four tests the project spec (``02_vatis_loader.md``) declares:
 
 - **T-roundtrip** — :func:`test_roundtrip_theta_optimizer_and_metadata`
 - **T-alignment** — :func:`test_alignment_flat_state_matches_gradient_flattening`

@@ -1,4 +1,4 @@
-"""The WP0 golden end-to-end gate (``03_estimator.md`` §Golden).
+"""The golden end-to-end gate of the preconditioned observables (``03_estimator.md`` §Golden).
 
 Run it with ``pytest -m golden`` (the ``tests/conftest.py`` hook skips it
 otherwise, so it never slows the unit tier down).
@@ -13,7 +13,7 @@ What it does, per parametrized architecture:
    :attr:`LocalBundleCheckpoint.batch_a` reconstructs from ``batch_a.npy`` must be
    token-for-token the batch the loop trained on. A bundle that cannot do that
    silently corrupts every downstream number.
-3. Runs vatis over it: raw + ``adamw`` rulers, ``k = 2`` fixed measurement
+3. Runs vatis over it: raw and ``adamw``-preconditioned observables, ``k = 2`` fixed measurement
    batches ``A1``/``A2`` and one eval batch ``B``, all from held-out data, with
    ``delta_loss(A_i, B)`` cross pairs.
 4. Asserts: the pipeline completes; every value is finite; a ``P = I`` re-run
@@ -21,7 +21,7 @@ What it does, per parametrized architecture:
    ``|chi_pos_P| <= 1.5``.
 5. **Prints, with no hard assert**: (a) the linearization sum
    ``sum_t eta_t * delta_loss(A_t, B)`` against the realized change in
-   ``loss(B)`` across the run, for both rulers; (b) how much of ``chi_net^P`` is
+   ``loss(B)`` across the run, for the raw and the preconditioned values; (b) how much of ``chi_net^P`` is
    carried by coordinates sitting at AdamW's ``1/eps`` ceiling. Both are
    diagnostics whose *value* is the number, not a pass/fail.
 

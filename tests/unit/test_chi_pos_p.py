@@ -1,4 +1,4 @@
-"""Exact-answer tests for the preconditioned ruler chi_pos^P (WP0 component 03).
+"""Exact-answer tests for the preconditioned observable chi_pos^P.
 
 These are the acceptance criteria of ``03_estimator.md`` §Tests. Every one of
 them compares vatis's *shipping* estimator path against a value known in closed
@@ -169,9 +169,9 @@ def test_identity_preconditioner_reproduces_raw_columns(method: str) -> None:
 def test_preconditioner_does_not_perturb_raw_chi_net() -> None:
     """Passing a (non-identity) P must leave ``chi_net`` bit-identical.
 
-    The no-regression guard for "no change to raw-ruler numerics": the P
+    The no-regression guard for "no change to the raw numerics": the P
     accumulators are additive, so for a fixed seed the raw value must not move
-    at all when the preconditioned ruler is switched on.
+    at all when the preconditioned observables are switched on.
     """
     model = Fp64MLP(in_dim=6, hidden=8, n_out=4, seed=3)
     params = list(model.parameters())
@@ -215,7 +215,7 @@ def test_gn_preconditioner_gives_one_over_m(seed: int) -> None:
     ``N = 64 > M = m|A| = 4 * 10 = 40``, ``rank(J) = M``. See
     :func:`gauss_newton_jacobian` for the construction and for why it keeps
     ``(J^T J)^+`` diagonal (vatis's ``P`` is diagonal by design; non-diagonal
-    ``P`` is out of scope for WP0). ``Theta_P = J (J^T J)^+ J^T = I_M``, so
+    ``P`` is out of scope). ``Theta_P = J (J^T J)^+ J^T = I_M``, so
 
         chi_pos^P = u^T I u / (||u||^2 * Tr I) = 1/M   for ANY loss gradient u.
 
@@ -301,7 +301,7 @@ def test_gn_preconditioner_gives_one_over_m(seed: int) -> None:
         f"chi_pos_P (fp64 components) != 1/M: {pos_p_fp64!r} vs {target!r} "
         f"(abs {abs(pos_p_fp64 - target):.3e})"
     )
-    # The raw ruler on the same model is NOT 1/M — otherwise the test would pass
+    # The raw chi_pos on the same model is NOT 1/M — otherwise the test would pass
     # for a P that was silently ignored.
     raw_pos = reference["delta_loss"] / (chi_loss * reference["chi_net"])
     assert abs(raw_pos - target) > 1e-4, (
@@ -316,7 +316,7 @@ def test_gn_dense_reference_also_gives_one_over_m() -> None:
     Pure-math companion to the test above: for *any* ``M x N`` ``J`` of full row
     rank with ``N > M``, ``J (J^T J)^+ J^T = I_M`` and hence
     ``chi_pos^P = 1/M``. The Gauss-Newton ``P`` is then dense, which is outside
-    the diagonal-``P`` scope of WP0 — so this asserts the mathematical statement
+    the diagonal-``P`` scope of vatis — so this asserts the mathematical statement
     (from the materialized Jacobian), while the previous test asserts that
     vatis's shipping estimator reproduces it. Together they cover both halves.
     """

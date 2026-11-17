@@ -337,7 +337,7 @@ def test_adamw_state_wrong_step_would_change_p() -> None:
 
 
 def test_adamw_from_state_rejects_missing_second_moment() -> None:
-    """An SGD-style state has no exp_avg_sq: refuse loudly (its ruler is raw)."""
+    """An SGD-style state has no exp_avg_sq: refuse loudly (its P is the identity: raw)."""
     toy = _AdamWToy()
     layout = ParameterLayout.from_named_parameters(toy)
     sgd_state = {

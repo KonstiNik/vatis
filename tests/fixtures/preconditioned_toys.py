@@ -1,4 +1,4 @@
-"""Toys and ground-truth helpers for the chi_pos^P (preconditioned ruler) tests.
+"""Toys and ground-truth helpers for the chi_pos^P (preconditioned observables) tests.
 
 Everything here is fp64 and seeded. Three families:
 
@@ -139,7 +139,7 @@ def gauss_newton_jacobian(
     gradient ``u``, which is what T-GN asserts.
 
     Why constrain the randomness this way: vatis's ``P`` is diagonal by design
-    (non-diagonal ``P`` is explicitly out of scope for WP0), so a genuinely
+    (non-diagonal ``P`` is explicitly out of scope), so a genuinely
     dense ``(J^T J)^+`` could not be fed through the production estimator at
     all. Orthogonalizing the live columns keeps ``J`` random, keeps ``N > M``
     and ``rank(J) = M``, and makes the Gauss-Newton ``P`` land in the class the
@@ -311,7 +311,7 @@ def preconditioned_reference(
     u: torch.Tensor,
     p_diag: torch.Tensor,
 ) -> dict[str, float]:
-    """Ground truth for the preconditioned ruler from an explicit ``J``.
+    """Ground truth for the preconditioned observables from an explicit ``J``.
 
     Forms ``Theta_P = J P J^T`` and takes its **eigendecomposition**, then
     reports both the LNP-spectral form and the ratio form of ``chi_pos^P``:

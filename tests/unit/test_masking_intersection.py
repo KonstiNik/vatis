@@ -147,7 +147,7 @@ def test_chi_net_excludes_positions_the_labels_ignore() -> None:
 
 
 def test_chi_net_p_excludes_the_same_positions() -> None:
-    """The preconditioned ruler inherits the mask, so it must inherit the fix.
+    """The preconditioned observables inherit the mask, so it must inherit the fix.
 
     Reference: ``Tr(J P J^T) = sum_i P_i ||J_{:, i}||^2`` from the explicit
     Jacobian, with a ``P`` that has real dynamic range (so a wrong column set
