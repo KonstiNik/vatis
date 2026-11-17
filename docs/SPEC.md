@@ -939,12 +939,15 @@ vatis/
 ```
 examples/
 ├── _helpers.py                    # shared: tokenize_into_lm_batch, step_from_revision
+├── _plots.py                      # shared: the loss-and-observables-over-training figure
 ├── README.md                      # index of the examples
+├── quickstart/                    # the smallest complete use: one checkpoint, CPU, prints the rows
+│   └── run.py, README.md
 ├── pythia_sweep/                  # canonical example: 13 pythia-14m revisions × prose + code
 │   ├── README.md, details.md      # what it shows; sizing and findings in full
-│   ├── run.py                     # phase 1: the sweep, writes results.parquet + plots
+│   ├── run.py                     # phase 1: the sweep, writes results.parquet, run_summary.json + plots
 │   ├── evaluate.py                # post-processing of results.parquet — derived observables
-│   └── results.parquet, *.png     # the committed outputs of both
+│   └── results.parquet, run_summary.json, *.png   # the committed outputs of both
 └── benchmark/                     # performance and accuracy benchmarks (see benchmark/README.md)
     ├── README.md                  # index for the four benchmarks below
     ├── submit.sh                  # sbatch wrapper that reads .env (HF_HOME, SBATCH_*)

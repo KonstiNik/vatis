@@ -59,7 +59,9 @@ alone, so their extra cost is not measured here.
 The timings are as measured, not tuned. The card is shared with other jobs; it
 was idle just before and just after this run, but nothing watched it during
 the run. (The `gpu_contended` line in `run_summary.json` is fixed text the
-script always writes, not a measurement.)
+script writes for every GPU run, not a measurement. `run.py` now writes "not
+checked -- the card may be shared"; the committed file still carries the
+earlier fixed text, "yes -- another process shares this card".)
 
 This timing table is the one hardware-specific number set kept with an example
 rather than in [`../benchmark/`](../benchmark/README.md): it calibrates the
@@ -141,6 +143,18 @@ seed 0):
   performance table, the `P = I` re-check, the epsilon-ceiling records, the
   data-fallback flag.
 - `performance.csv` — the timing table on its own.
+
+A fresh run of the current `run.py` writes a `run_summary.json` that differs
+from the committed one in more than the timings: the scripts were later
+restructured (support code moved into `llama_bundle.py` and `llama_checks.py`),
+and the text of the performance table, which the summary stores under
+`performance.table`, was reworded at the same time ("raw and preconditioned"
+for "both rulers"; the peak-memory line and the peak column of the "mean" row
+now give the largest and the mean of the per-checkpoint peaks instead of the
+last checkpoint's peak, 1683 MiB, which is still what `performance.peak_gpu_mb`
+records). `gpu_contended` changed as described above. The computed values do
+not change: a re-run with the restructured script reproduced the committed
+`results.parquet` to within 1.2·10⁻⁷ relative.
 - `chi_pos_raw_vs_adamw.png` — the figure: `chi_pos` and `chi_pos^P` versus
   training step (left) and versus train loss (right, time running left to
   right), for the eval batch's self pair and the two cross pairs. Symlog y,

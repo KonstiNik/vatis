@@ -27,13 +27,16 @@ transfer, negative → interference, zero → orthogonal). Watching this
 across checkpoints answers a real LNA question: do the prose and code
 loss directions become more or less aligned as Pythia trains?
 
-Sized to fit comfortably under the 15-minute budget on the reference
-hardware (RTX 3090 Ti, see ``examples/pythia_sweep/details.md`` for the budget
-arithmetic). On that hardware the script wallclock is ~20 s with a
-warm HF cache and ~50 s on the first run (the four early-phase
-checkpoints add ~30 s of cold downloads). Slower hardware or a cold
-HF cache will take longer still; the rate-limiting step is the
-per-checkpoint download/load, not the chi_net computation.
+After the sweep the script also evaluates the loss of each batch at each
+checkpoint — the mean next-token cross-entropy over the scored positions,
+computed with the same loss function vatis differentiates (``bundle.loss_fn``
+of :func:`vatis.models.hf.load_hf_model`, on logits upcast to fp64 as vatis
+does for its loss rows) — and writes it to ``run_summary.json``. It needs one
+more forward pass per checkpoint and batch, and loads each checkpoint once
+more (from the local cache).
+
+How the run is sized and how long it takes on the reference hardware is in
+``README.md`` and ``details.md`` next to this script.
 
 Run with::
 
@@ -45,6 +48,8 @@ model cache off your home filesystem; see ``run_config.py``.
 Outputs are written next to this script:
 
 - ``examples/pythia_sweep/results.parquet``  — canonical long-format result table
+- ``examples/pythia_sweep/run_summary.json`` — the loss of each batch at each checkpoint,
+  the settings, the device and the date
 - ``examples/pythia_sweep/chi_loss.png``      — chi_loss_normalized vs step (self pairs only)
 - ``examples/pythia_sweep/chi_net.png``       — chi_net_normalized vs step (self pairs only)
 - ``examples/pythia_sweep/delta_loss.png``    — delta_loss vs step (self + cross)
@@ -64,7 +69,11 @@ from run_config import configure_hf_cache  # noqa: E402
 
 configure_hf_cache()
 
+import argparse  # noqa: E402
+import json  # noqa: E402
+import platform  # noqa: E402
 import time  # noqa: E402
+from datetime import date  # noqa: E402
 
 import matplotlib
 
@@ -77,6 +86,7 @@ from transformers import AutoTokenizer
 
 from _helpers import step_from_revision, tokenize_into_lm_batch
 from vatis import analyze
+from vatis.models.hf import load_hf_model  # noqa: E402
 
 # ---------------------------------------------------------------- config
 
@@ -124,6 +134,7 @@ CROSS_PAIRS: list[tuple[str, str]] = [(PROSE_NAME, CODE_NAME)]
 
 OUT_DIR = Path(__file__).parent
 PARQUET_PATH = OUT_DIR / "results.parquet"
+SUMMARY_PATH = OUT_DIR / "run_summary.json"
 PLOTS = {
     "chi_loss_normalized": OUT_DIR / "chi_loss.png",
     "chi_net_normalized": OUT_DIR / "chi_net.png",
@@ -339,6 +350,28 @@ if __name__ == "__main__":
 # ---------------------------------------------------------------- helpers
 
 
+def mean_losses(
+    revision: str, eval_batches: dict[str, dict[str, torch.Tensor]], device: torch.device
+) -> dict[str, float]:
+    """The loss of each eval batch at one checkpoint, as vatis defines it.
+
+    ``bundle.loss_fn`` is the loss vatis differentiates for every observable:
+    the cross-entropy of the pre-shifted next-token labels, averaged over the
+    positions whose label is not -100 (here every position but the last of each
+    row). Forward only; the logits are upcast to fp64 first, as vatis does for
+    the loss rows it reports itself.
+    """
+    bundle = load_hf_model(MODEL, revision=revision, dtype="fp32", device=device)
+    out: dict[str, float] = {}
+    with torch.no_grad():
+        for name, batch in eval_batches.items():
+            on_device = {key: value.to(device) for key, value in batch.items()}
+            logits = bundle.forward_fn(bundle.model, on_device)
+            out[name] = float(bundle.loss_fn(logits.to(torch.float64), on_device))
+    del bundle
+    return out
+
+
 def cross_label(name_a: str, name_b: str) -> str:
     """Render a cross-pair label for plot legends."""
     return f"{name_a} × {name_b}"
@@ -398,6 +431,32 @@ def main() -> None:
         sink=str(PARQUET_PATH),
     )
     total_s = time.perf_counter() - t_total
+
+    # ---- the loss of each batch at each checkpoint, for the overview figure
+    # of evaluate.py. Not part of the parquet (it is not an observable).
+    losses = {revision: mean_losses(revision, eval_batches, device) for revision in REVISIONS}
+    summary = {
+        "model": MODEL,
+        "revisions": REVISIONS,
+        "loss": losses,
+        "loss_definition": "mean next-token cross-entropy (nats per token) over the scored "
+        "positions of each eval batch: vatis's causal_lm_loss on fp64 logits, forward only",
+        "batch_size": BATCH_SIZE,
+        "seq_len": SEQ_LEN,
+        "n_hutchinson": N_HUTCHINSON,
+        "seed": SEED,
+        "chi_net_method": "per_sequence_cv",
+        "dtype": "fp32",
+        "device": str(device),
+        "device_name": torch.cuda.get_device_name(device) if device.type == "cuda" else "cpu",
+        "torch": torch.__version__,
+        "python": platform.python_version(),
+        "date": date.today().isoformat(),
+        "command": "python " + " ".join(sys.argv),
+        "sweep_wall_s": total_s,
+    }
+    SUMMARY_PATH.write_text(json.dumps(summary, indent=2) + "\n")
+    print(f"wrote {SUMMARY_PATH}")
 
     # ---- read back, plot
     table = pq.read_table(PARQUET_PATH)
@@ -477,4 +536,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # No options: the parser only gives --help; a plain call runs the sweep as before.
+    argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    ).parse_args()
     main()

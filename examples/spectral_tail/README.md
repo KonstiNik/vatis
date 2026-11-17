@@ -76,7 +76,8 @@ all figures are in [figures/](figures/).
 ## About the committed outputs
 
 - Files: `results_pythia-{14m,31m,70m,160m,410m}.parquet` and `figures/`
-  (step-based and `_compute` variants of every plot).
+  (step-based and `_compute` variants of every plot). The probe texts are in
+  `probe_texts.py`, moved out of `run.py` unchanged.
 - Settings: B = 1, S = 1024, `n_hutchinson=32`, 13 checkpoints per model
   (steps 1 to 143000), seed 0 (in `run.py`). `run.py` uses `per_sequence_cv`
   up to 160m and `hutchinson` for 410m. The hardware is not recorded.

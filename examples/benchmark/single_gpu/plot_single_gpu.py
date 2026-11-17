@@ -5,8 +5,8 @@ two-panel figure: wall time vs n_hutchinson (lines per method×B) and peak
 memory vs batch size (lines per method). Pure pandas-free parsing + matplotlib,
 no GPU, no vatis import — consumes the results table as the contract.
 
-    .venv/bin/python examples/benchmark/plot_single_gpu.py \\
-        --results examples/benchmark/results_pythia-160m.md
+    python examples/benchmark/single_gpu/plot_single_gpu.py \\
+        --results examples/benchmark/single_gpu/results_pythia-160m.md
 """
 
 from __future__ import annotations

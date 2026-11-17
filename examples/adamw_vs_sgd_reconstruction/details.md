@@ -1,7 +1,11 @@
 # Reconstructing the AdamW step — details
 
 The numbers and reasoning behind the four points of [README.md](README.md).
-Every number per step and batch is in [table.md](table.md).
+Every number per step and batch is in [table_full.md](table_full.md): each
+prediction as a ratio to the truth (4–7 digits) and as a difference from it,
+the unclipped SGD rule, the realized change and the spread of every rule.
+[table.md](table.md), which the README links to, is the short version (3
+digits) plus the split into the three parts.
 
 ## The three predictions and their rows
 
@@ -16,7 +20,7 @@ before the step.
 
 | prediction | what it is | from the rows |
 |---|---|---|
-| AdamW rule ("optimizer's rule" in the figure and in `table.md`) | the AdamW update rebuilt from the saved optimizer state: a gradient part, a momentum part and a weight-decay part | `loss_change_first_order` = `_grad` + `_hist` + `_wd` |
+| AdamW rule ("optimizer's rule" in the figures and in `table.md`) | the AdamW update rebuilt from the saved optimizer state: a gradient part, a momentum part and a weight-decay part | `loss_change_first_order` = `_grad` + `_hist` + `_wd` |
 | SGD rule | a plain gradient step with the same learning rate η and clip factor c — no momentum, no decay, no preconditioner: −η·c·∇L_B·∇L_A | `−update_lr · update_clip_factor · delta_loss` |
 | −η·δL_P | AdamW's pre-step preconditioner P_t applied to the current gradient alone, without momentum or decay: −η·∇L_B·P_t∇L_A | `−update_lr · delta_loss_P` |
 
@@ -29,7 +33,7 @@ held-out batch. The realized change `L_B(θ_{t+1}) − L_B(θ_t)` (row
 The ratio of the AdamW rule to the truth is within 1.6·10⁻⁵ of one at step 0,
 where the step is so small that fp32 rounding of the stored weights shows, and
 within 10⁻⁵ of one at the other twelve steps. The largest absolute difference
-is 1.4·10⁻⁷.
+is 1.4·10⁻⁷. (Both read from `table_full.md`; `table.md` rounds them.)
 
 ## 2. The SGD rule
 
@@ -49,7 +53,7 @@ is 1.4·10⁻⁷.
   repairs it.
 - **Without the clip factor.** "The SGD rule, unclipped" differs from the SGD
   rule only at step 9, the one step where the clip engaged (c = 0.837); both
-  are in `table.md`.
+  are in `table_full.md`.
 
 ## 3. −η·δL_P
 
@@ -59,9 +63,10 @@ is 1.4·10⁻⁷.
   so there is no P_t. It is a different quantity, not an estimate of the step
   taken.
 - **Why about ten times, late in training.** On the update batch the late step
-  is almost entirely its gradient part (the split table in the README), and
-  that part is 0.06–0.09 of −η·δL_P. The current gradient enters an AdamW step
-  with weight 1 − β₁ = 0.1. In addition, the step is taken with the
+  is almost entirely its gradient part (the split figure in the README; the
+  numbers are in `table.md`), and that part is 0.06–0.09 of −η·δL_P (its
+  fraction in `table.md` divided by the −η·δL_P ratio in `table_full.md`). The
+  current gradient enters an AdamW step with weight 1 − β₁ = 0.1. In addition, the step is taken with the
   preconditioner after the second-moment update by that same gradient, not
   with P_t. By the way AdamW works (this is reasoning, not something read from
   the result file), that preconditioner is smaller than P_t where the gradient
@@ -77,7 +82,7 @@ is 1.4·10⁻⁷.
 ## 4. First order against the realized change
 
 During the warm-up the realized loss change `L_B(θ_{t+1}) − L_B(θ_t)` differs
-from the truth by 0.01% to 0.11% (steps 0–5) and by 1% to 1.6% (step 9). At
+(columns "realized" of `table_full.md`) from the truth by 0.01% to 0.11% (steps 0–5) and by 1% to 1.6% (step 9). At
 the full learning rate it differs by 13% on the update batch at steps 661 and
 665 and by 3% to 5% later. On the held-out batch the realized change then has
 the opposite sign to the first-order change at five of the eight later steps

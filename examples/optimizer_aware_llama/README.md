@@ -69,6 +69,10 @@ The y axis is symlog because cross pairs are signed.
   the raw observables alone. Largest per-checkpoint peak GPU memory 1687 MiB
   (`performance.csv`).
 
+The loss the run recorded and every observable, raw and preconditioned, over
+training — the diagnostic figure this example and the Pythia sweep draw:
+[observables_over_training.png](observables_over_training.png).
+
 ## What it does not show
 
 - Anything about training dynamics at scale. A 300-step run of an 11M-parameter
@@ -89,7 +93,13 @@ The y axis is symlog because cross pairs are signed.
 - Files: `results.parquet` (1020 rows), `run_summary.json` (settings,
   per-checkpoint train loss and learning rate, the timing table, the `P = I`
   re-check, the ceiling records), `performance.csv` (the timing table),
-  `chi_pos_raw_vs_adamw.png`.
+  `chi_pos_raw_vs_adamw.png` and `observables_over_training.png` (both drawn
+  by `evaluate.py` from `results.parquet` and `run_summary.json`).
+- Scripts: `run.py` shows the vatis calls; the model factory and the
+  measurement batches are in `llama_bundle.py`, the timing, the two
+  self-checks and the summary in `llama_checks.py`. Code outside this
+  repository that needs the model factory imports it with this folder on
+  `sys.path`: `from llama_bundle import llama_factory`.
 - Settings: `chi_net_method="per_sequence_cv"`, `n_hutchinson=32`,
   `micro_batch_size=8`, fp32, seed 0, `--device cuda` (recorded in
   `run_summary.json`).
@@ -97,3 +107,5 @@ The y axis is symlog because cross pairs are signed.
   `run_summary.json`).
 - Regenerated on 17 November 2026 with the then-current code and committed in
   `e1aa6f4` (#15); moved into this folder, unchanged, in `00944c4` (#17).
+  The two figures were redrawn later from the same files (a new title, and the
+  new overview figure); the data are unchanged.

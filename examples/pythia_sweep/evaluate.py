@@ -10,13 +10,13 @@ aren't part of the canonical row schema.
 
 Why a separate script? Two reasons:
 
-1. **Iteration speed.** ``run.py`` takes ~20 s with a warm
-   HF cache and ~50 s cold. ``evaluate.py`` runs in well under
-   a second. If you want to try a different normalization, a
+1. **Iteration speed.** ``run.py`` loads 13 checkpoints and runs
+   backward passes (its run time is in ``README.md``); ``evaluate.py``
+   only reads files. If you want to try a different normalization, a
    different plot style, or a different derived quantity, you do it
    here without re-running compute.
 2. **The parquet is the contract.** vatis's public output is the long-
-   format parquet schema documented in CLAUDE.md. Anything you want
+   format parquet schema documented in ``docs/SPEC.md``. Anything you want
    to compute downstream of vatis lives in scripts like this one,
    reading only the parquet — no vatis imports needed.
 
@@ -43,26 +43,25 @@ The cosine similarity strips out the gradient magnitudes (which can
 grow several orders of magnitude over training and dominate the raw
 ``delta_loss`` numbers) so the *direction* trajectory is visible.
 
-This matters because the raw cross ``delta_loss`` plot in
-``run.py`` looks non-monotonic — the cross value drops from
-+3.25 at step1 to +0.67 at step512, then *climbs back* to +2.62 at
-step1000 before declining to negative values. That looks like a big
-effect because the absolute number 4×'d. The cosine similarity tells
-a different story: the correlation drops from +0.31 at step1 to
-+0.012 at step512 (a ~26× drop), rebounds to +0.043 at step1000 (a
-real but small rebound, also ~4×), and then declines to small
-negative values. So the rebound is real in *both* views — but the
-absolute-delta_loss view exaggerates it because gradient magnitudes
-are simultaneously growing 60× from step512 to step1000. The
-underlying decorrelation is dominated by the early phase (step1 →
-step512); everything after that is small wiggles around an
-essentially-orthogonal regime.
+In the committed ``results.parquet`` the raw cross ``delta_loss`` is
+not monotonic: +3.25 at step1, +0.67 at step512, +2.62 at step1000,
+negative from step4000 on. The cosine drops from +0.31 at step1 to
++0.012 at step512 (about 26×), rebounds to +0.043 at step1000 (3.6×;
+the raw value rebounds 3.9×, because the product of the two gradient
+norms grows only 1.07× between these two steps) and then stays at small
+negative values. The decorrelation is dominated by the early phase
+(step1 → step512); after step1000 the two gradients are close to
+orthogonal.
 
 Outputs
 =======
 
 - ``examples/pythia_sweep/cos_similarity.png`` — one line per cross pair, training
   step on x-axis (log), cos in [-1, +1] on y-axis (linear).
+- ``examples/pythia_sweep/observables_over_training.png`` — the common diagnostic
+  figure of the examples (``examples/_plots.py``): the loss of each batch (from
+  ``run_summary.json`` next to the parquet) and every observable over training.
+  Skipped, with a note, when there is no ``run_summary.json``.
 - A summary table printed to stdout showing all cross pairs at all
   checkpoints with the derived correlation alongside the canonical
   ``delta_loss`` and ``chi_pos`` columns.
@@ -72,15 +71,18 @@ Usage
 
 ::
 
-    .venv/bin/python examples/pythia_sweep/evaluate.py
+    python examples/pythia_sweep/evaluate.py
 
-Optionally pass an alternate parquet path::
+Optionally pass an alternate parquet path (the figures are still written
+next to this script)::
 
-    .venv/bin/python examples/pythia_sweep/evaluate.py path/to/other.parquet
+    python examples/pythia_sweep/evaluate.py path/to/other.parquet
 """
 
 from __future__ import annotations
 
+import argparse
+import json
 import math
 import sys
 from pathlib import Path
@@ -94,9 +96,11 @@ import pyarrow.parquet as pq
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # examples/, for _helpers
 from _helpers import step_from_revision  # noqa: E402
+from _plots import plot_observables_over_training  # noqa: E402
 
 DEFAULT_PARQUET = Path(__file__).parent / "results.parquet"
 COS_PLOT_PATH = Path(__file__).parent / "cos_similarity.png"
+OVERVIEW_PATH = Path(__file__).parent / "observables_over_training.png"
 
 
 def main(parquet_path: Path = DEFAULT_PARQUET) -> None:
@@ -185,19 +189,51 @@ def main(parquet_path: Path = DEFAULT_PARQUET) -> None:
     print(sep)
     print()
     print(
-        "The cosine similarity is the cross delta_loss with gradient "
-        "magnitudes divided\nout. The early-phase decline (step1 → step512) "
-        "is the dominant feature: ~26× drop\nfrom +0.31 to +0.012. The small "
-        "step512 → step1000 rebound is real but ~10×\nsmaller than what the "
-        "absolute delta_loss plot suggests, because gradient\nmagnitudes are "
-        "also growing during that step range. After step1000 the\ncorrelation "
-        "drifts into the small-negative regime and stays there. See\n"
-        "examples/BENCHMARK.md for the spectral interpretation."
+        "The cosine similarity is the cross delta_loss with the gradient magnitudes\n"
+        "divided out. What it shows for the committed run is described in\n"
+        "examples/pythia_sweep/README.md; the longer notes are in details.md."
     )
+
+    plot_overview(parquet_path, rows)
+
+
+def plot_overview(parquet_path: Path, rows: list[dict[str, object]]) -> None:
+    """The common diagnostic figure, if run.py recorded the losses next to the parquet."""
+    summary_path = parquet_path.parent / "run_summary.json"
+    if not summary_path.is_file():
+        print(f"\nno {summary_path.name} next to {parquet_path}: overview figure skipped")
+        return
+    summary = json.loads(summary_path.read_text())
+    losses: dict[str, dict[int, float]] = {}
+    for revision, by_batch in summary["loss"].items():
+        for batch, value in by_batch.items():
+            losses.setdefault(batch, {})[step_from_revision(revision)] = value
+    path = plot_observables_over_training(
+        rows,
+        losses,
+        OVERVIEW_PATH,
+        title=f"{summary['model']}: loss and every observable over training",
+        loss_label="mean cross-entropy (nats per token)",
+        note="Loss: mean next-token cross-entropy of each eval batch at the checkpoint "
+        "(run_summary.json). prose, code: the two eval batches of run.py.",
+    )
+    print(f"\nwrote {path}")
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=__doc__.splitlines()[0]
+        + " Draws cos_similarity.png and observables_over_training.png next to this script."
+    )
+    parser.add_argument(
+        "parquet",
+        nargs="?",
+        type=Path,
+        default=DEFAULT_PARQUET,
+        help=f"result file to read (default: {DEFAULT_PARQUET.name} next to this script)",
+    )
+    return parser.parse_args(argv)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        main(Path(sys.argv[1]))
-    else:
-        main()
+    main(parse_args().parquet)

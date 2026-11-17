@@ -39,7 +39,7 @@ step's own batch and on one held-out batch. One run, one seed, 11M parameters,
 python examples/adamw_vs_sgd_reconstruction/run.py --bundle <run>/bundle \
     --eval-batches <run>/eval_batches --clip-grad-norm 1.0 --device cuda \
     --steps 0 1 2 5 9 661 665 6611 6615 33057 33062 66105 66110
-python examples/adamw_vs_sgd_reconstruction/evaluate.py   # table.md + reconstruction.png
+python examples/adamw_vs_sgd_reconstruction/evaluate.py   # tables + reconstruction.png + update_parts.png
 ```
 
 ## What it shows
@@ -75,22 +75,23 @@ optimizer's rule.*
 All ranges, per-step numbers and the reasoning behind points 2 and 3 are in
 [details.md](details.md).
 
-The parts of the AdamW rule as fractions of their sum, at six of the steps (the
-weight-decay part is below 0.2% of the sum everywhere except at step 33062 on
-the held-out batch, where it is 2%):
+![The AdamW rule split into its gradient, momentum and weight-decay parts, each as a fraction of their sum, per step, on the update batch and on the held-out batch](update_parts.png)
 
-| step | update batch: gradient | momentum | held-out batch: gradient | momentum |
-|---|---|---|---|---|
-| 1 | 0.61 | 0.39 | 0.51 | 0.49 |
-| 9 | 0.23 | 0.77 | 0.19 | 0.81 |
-| 661 | 1.06 | −0.06 | 2.50 | −1.50 |
-| 6615 | 1.04 | −0.04 | 1.13 | −0.13 |
-| 33062 | 1.00 | −0.00 | 17.2 | −16.2 |
-| 66110 | 1.02 | −0.02 | 3.76 | −2.76 |
+*The parts of the AdamW rule (rows `loss_change_first_order_grad`, `_hist`,
+`_wd`) as fractions of their sum; symmetric-log axis, linear between ±10⁻³.*
+After the warm-up the step on the update batch is almost entirely its gradient
+part (1.00–1.06 of the sum from step 661 on). On the held-out batch the
+momentum part has the opposite sign at 7 of the 8 steps from 661 on and is
+often comparable in size to the gradient part (at step 33062: 17.2 and
+−16.2). The weight-decay part is below 0.2% of the sum everywhere except at step 33062 on
+the held-out batch, where it is 2%.
 
-Every number per step and batch: [table.md](table.md), which also has the SGD
-rule without the clip factor and the ratio on the held-out batch divided by the
-ratio on the update batch.
+The numbers per step and batch: [table.md](table.md) — the ratios of the
+figure above, the learning rate and clip factor c of each step (the SGD rule
+without the clip factor is its ratio divided by c), the ratio on the held-out
+batch divided by the ratio on the update batch, and the parts as fractions.
+The same with more digits and the differences from the truth:
+[table_full.md](table_full.md).
 
 ## What it does not show
 
@@ -105,7 +106,10 @@ ratio on the update batch.
 
 ## About the committed outputs
 
-- Files: `results.parquet`, `run_summary.json`, `table.md`, `reconstruction.png`.
+- Files: `results.parquet`, `run_summary.json`, `table.md`, `reconstruction.png`,
+  `update_parts.png`, `table_full.md` (the wide table: 4–7 digits, differences,
+  the unclipped SGD rule). All but the first two are drawn by `evaluate.py`
+  from the first two.
 - The run: bundle `adamw_s0`, an 11M-parameter Llama trained with AdamW;
   details of the run and of the 13 steps used are in
   [details.md](details.md#the-run).
@@ -114,4 +118,7 @@ ratio on the update batch.
   NVIDIA GeForce RTX 3090 Ti, torch 2.10.0+cu128; 11 s wall time. Repeated
   runs on the GPU and a run on the CPU give the same table
   ([details.md](details.md#reproducibility)).
-- Committed on 17 November 2026 in `2d6b92f` (#14).
+- Committed on 17 November 2026 in `2d6b92f` (#14). `table.md` was made
+  narrower and `update_parts.png` added later, both drawn from the same
+  committed `results.parquet`; the earlier wide `table.md` is kept, unchanged,
+  as `table_full.md`.

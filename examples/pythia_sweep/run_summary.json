@@ -1,0 +1,87 @@
+{
+  "note": "Added by hand, not written by run.py: this file comes from a separate run of the same command on the date and device below, after results.parquet was committed. That run's results.parquet had the same values as the committed one in every row and column except wallclock_s (which differs on every run), so the committed file was kept; only this summary (the loss of each batch at each checkpoint) is new.",
+  "model": "EleutherAI/pythia-14m",
+  "revisions": [
+    "step1",
+    "step8",
+    "step64",
+    "step512",
+    "step1000",
+    "step2000",
+    "step4000",
+    "step8000",
+    "step16000",
+    "step32000",
+    "step64000",
+    "step128000",
+    "step143000"
+  ],
+  "loss": {
+    "step1": {
+      "prose": 11.009346760721467,
+      "code": 10.96314997508007
+    },
+    "step8": {
+      "prose": 10.987712954173299,
+      "code": 10.945093817907079
+    },
+    "step64": {
+      "prose": 10.244311000875006,
+      "code": 10.329246316031444
+    },
+    "step512": {
+      "prose": 5.8751078775753545,
+      "code": 6.066128504378586
+    },
+    "step1000": {
+      "prose": 5.049902781707789,
+      "code": 5.139051518739595
+    },
+    "step2000": {
+      "prose": 4.605484349623561,
+      "code": 4.12369466464908
+    },
+    "step4000": {
+      "prose": 4.367168729285655,
+      "code": 3.5593494505491714
+    },
+    "step8000": {
+      "prose": 4.253788010233146,
+      "code": 3.401777622065705
+    },
+    "step16000": {
+      "prose": 4.169790699423536,
+      "code": 3.336027066744565
+    },
+    "step32000": {
+      "prose": 4.151554429563061,
+      "code": 3.286898146050873
+    },
+    "step64000": {
+      "prose": 4.076246460225335,
+      "code": 3.1568795929005153
+    },
+    "step128000": {
+      "prose": 4.058814148754423,
+      "code": 3.107979545400489
+    },
+    "step143000": {
+      "prose": 4.0633889355561434,
+      "code": 3.1125433766375106
+    }
+  },
+  "loss_definition": "mean next-token cross-entropy (nats per token) over the scored positions of each eval batch: vatis's causal_lm_loss on fp64 logits, forward only",
+  "batch_size": 8,
+  "seq_len": 128,
+  "n_hutchinson": 32,
+  "seed": 0,
+  "chi_net_method": "per_sequence_cv",
+  "dtype": "fp32",
+  "device": "cuda",
+  "device_name": "NVIDIA GeForce RTX 3090 Ti",
+  "torch": "2.10.0+cu128",
+  "python": "3.11.15",
+  "date": "2026-11-17",
+  "command": "python examples/pythia_sweep/run.py",
+  "sweep_wall_s": 37.21337723406032
+}
