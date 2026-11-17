@@ -196,7 +196,7 @@ class Analyzer:
             ``LocalBundleSource.adamw_preconditioner()``, which reads each
             checkpoint's saved (pre-step) optimizer state.
         chi_net_method: ``"hutchinson"``, ``"per_sequence_cv"``, ``"opacus"``,
-            or ``None`` for auto.
+            or ``None`` for the default, ``"hutchinson"``.
         n_hutchinson: number of probe vectors per micro-batch.
         hutchinson_distribution: ``"rademacher"`` (default) or ``"gaussian"``.
         micro_batch_size: number of sequences per backward. Default 1.

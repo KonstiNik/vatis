@@ -132,7 +132,7 @@ _DEFAULT_MEMORY_FRACTION = 0.5
 class PerSequenceControlVariateEstimator(ChiNetEstimator):
     """Per-sequence backward + Hutchinson control variate.
 
-    The default for small batches (``B <= 32``).
+    Opt-in (``chi_net_method="per_sequence_cv"``); the default is ``hutchinson``.
 
     Args:
         n_hutchinson: number of Hutchinson probes per micro-batch (after the
@@ -225,8 +225,7 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
                 f"for B={b_total}, n_params={n_params}, but only "
                 f"~{available_bytes / 1e9:.1f} GB free on {where} "
                 f"(threshold: {memory_fraction:.0%}). "
-                f"Use chi_net_method='hutchinson' for large models. "
-                f"See CLAUDE.md auto-selection rule."
+                f"Use chi_net_method='hutchinson' (the default) for large models."
             )
 
     def compute(

@@ -209,11 +209,10 @@ def test_per_seq_cv_records_alignment_matrix() -> None:
     assert torch.all(align.diag() >= 0)
 
 
-def test_select_chi_net_method_auto() -> None:
-    assert select_chi_net_method(8, None) == "per_sequence_cv"
-    assert select_chi_net_method(32, None) == "per_sequence_cv"
-    assert select_chi_net_method(33, None) == "hutchinson"
-    assert select_chi_net_method(1000, None) == "hutchinson"
+def test_select_chi_net_method_default_is_hutchinson_at_every_batch_size() -> None:
+    # Through 0.2.x a batch of at most 32 sequences selected per_sequence_cv.
+    for b_total in (1, 8, 32, 33, 1000):
+        assert select_chi_net_method(b_total, None) == "hutchinson"
 
 
 def test_select_chi_net_method_user_override() -> None:
