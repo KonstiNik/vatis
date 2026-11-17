@@ -181,9 +181,12 @@ class Preconditioner:
     def capped_fraction(self) -> float | None:
         """Fraction of the entries at the ceiling; ``None`` without a ceiling.
 
-        ``count_capped() / n_params`` -- for the ``adamw`` source the share of
-        parameter coordinates whose second moment is still zero, so that
-        ``P = 1/eps`` there. This is a property of ``P`` alone (how many
+        ``count_capped() / n_params``, with the criterion of
+        :attr:`capped_weight_floor`: ``P_i >= (1 - CEILING_RTOL) * ceiling``.
+        For the ``adamw`` source that is ``1/(sqrt(v_hat) + eps) >=
+        (1 - 1e-6)/eps``, i.e. ``sqrt(v_hat) <~ 1e-6 * eps`` -- the coordinates
+        whose second moment is zero *or negligible against* ``eps**2``, not
+        only the exactly-zero ones. This is a property of ``P`` alone (how many
         coordinates), not of a measurement: how much of a value those
         coordinates carry is what the ``*_capped`` rows report. The count is
         one pass over ``P``; it is taken once and remembered on the instance

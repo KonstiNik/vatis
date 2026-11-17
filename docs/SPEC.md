@@ -933,7 +933,9 @@ These say how a row was obtained. They do not change any value.
 - **`preconditioner_capped_fraction`** — on the rows computed with a `P` that
   has a ceiling (`1/ε` for AdamW), the fraction of the coordinates of `P` that
   sit at it, by the criterion of the `*_capped` rows (`P_i ≥ (1 − 1e-6) ·
-  ceiling`; for AdamW: second moment still zero). It is a property of `P` —
+  ceiling`). For AdamW that reads `1/(√v̂ + ε) ≥ (1 − 1e-6)/ε`, i.e.
+  `√v̂ ≲ 1e-6 · ε`: the second moment is zero or negligible against `ε²`, not
+  necessarily exactly zero. It is a property of `P` —
   *how many* coordinates — and the same on every row of a checkpoint. How much
   of a value those coordinates carry is a different question, answered by the
   `*_capped` rows ("Coordinates at the ceiling"): a fraction of `1e-4` can
@@ -1003,20 +1005,41 @@ the batch touches) is zero for every probe draw and has `value_stderr = 0`.
   micro-batches of four) the reported variance of `chi_pos` was 0.80 of the
   observed one, i.e. the standard error about 10% too small. Treat the
   propagated standard error as approximate once `value_stderr / value` of
-  `chi_net` exceeds about 10%.
+  `chi_net` exceeds about 10%. (Reproduce with
+  `python scripts/value_stderr_seed_study.py propagation --seeds 4000`.)
+- **Not a weight for averaging.** A row's `value` and its `value_stderr` are
+  computed from the same per-probe values, and those are right-skewed: a draw
+  that comes out high also reports a large error. The two are positively
+  correlated, so weighting repeated measurements by `1/value_stderr²` favours
+  the low draws and pulls the average down. Measured over 800 seeds on a test
+  model (`chi_net` of one batch of five samples, Rademacher probes, both
+  estimators, the batch as one micro-batch and as five): correlation 0.31–0.66;
+  the inverse-variance-weighted mean was 3–19% below the plain mean with 2 and
+  4 probes per micro-batch and 0.5–1.6% below with 16. Average repeated
+  measurements with equal weights, or with weights fixed beforehand. (Reproduce
+  with `python scripts/value_stderr_seed_study.py weighting --seeds 800`.)
+- **Specific to the probe distribution, which the file does not record.** One
+  Gaussian probe has variance `2‖A‖²_F`, one Rademacher probe
+  `2Σ_{i≠j}A²_ij` (`A` the micro-batch's Gram matrix): with Gaussian probes the
+  diagonal counts as well, so the same run has a larger standard error. The
+  column reports the error of the distribution that was used, but two files
+  written with different `hutchinson_distribution` cannot be told apart.
 - **Not independent between rows that share probes.** `chi_net`, `chi_net_P`,
   `chi_net_P_capped`, `chi_pos` and `chi_pos_P` of one batch come from the same
   probes, and a cross pair's rows from the probes of its two batches; their
   errors are correlated and must not be combined as independent. Rows of
   different batches or checkpoints use different streams.
-- **Validated with Rademacher probes on CPU test models only.** The definition
-  does not depend on the probe distribution, but the tests use the default.
+- **Validated on CPU test models only.** The check against the exact variance
+  covers Rademacher and Gaussian probes; the check against the spread over
+  seeds through `analyze()` uses the default Rademacher probes.
 
 **How it is checked** (`tests/unit/test_value_stderr.py`,
 `tests/integration/test_ddp_loopback.py`): the variance an estimator reports
 equals the spread of its own regenerated probes evaluated on an explicit
-Jacobian; averaged over seeds it equals the exact Rademacher variance
-`Σ_m 2Σ_{i≠j}(A_m)²_ij / n`; through `analyze()`, the mean of `value_stderr²`
+Jacobian; averaged over seeds it equals the exact variance, for Rademacher
+probes (`Σ_m 2Σ_{i≠j}(A_m)²_ij / n`) and for Gaussian ones
+(`Σ_m 2‖A_m‖²_F / n`); the same data under two batch names is probed with
+different streams, which the cross-pair formula relies on; through `analyze()`, the mean of `value_stderr²`
 over 256 seeds equals the sample variance of `value` within four standard
 errors of that comparison, for both estimators and two micro-batch sizes — the
 directly sampled rows in every configuration, the propagated ones where `χ_net`
