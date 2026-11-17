@@ -1,15 +1,18 @@
-"""WP0 GPU end-to-end example, phase 2: the figure and the tables.
+"""Raw and preconditioned observables over a real Llama checkpoint bundle. Step 2 of 2: figures and tables.
 
 Reads what ``examples/optimizer_aware_llama/run.py`` wrote and produces the deliverables a
 human actually looks at:
 
-- ``examples/optimizer_aware_llama/chi_pos_raw_vs_adamw.png`` — ONE figure, two panels:
+- ``examples/optimizer_aware_llama/chi_pos_raw_vs_adamw.png`` — two panels:
   ``chi_pos`` and ``chi_pos^P`` versus training step, and versus train loss.
+- ``examples/optimizer_aware_llama/observables_over_training.png`` — the common
+  diagnostic figure of the examples (``examples/_plots.py``): the train loss the
+  run recorded and every observable over the training step.
 - the printed performance table (wall time per checkpoint, peak GPU memory,
   total runtime) and the epsilon-ceiling diagnostic.
 
-**This script imports no vatis code** — only ``pyarrow``, ``matplotlib`` and the
-standard library. That is the point of the compute/analysis split
+**This script imports no vatis code** — only ``pyarrow``, ``matplotlib``, the
+standard library and ``examples/_plots.py``. That is the point of the compute/analysis split
 (``CLAUDE.md`` §Research workflow): the parquet is the contract with downstream
 consumers, and the only way to keep a contract honest is to consume it. The one
 thing the parquet cannot carry is per-checkpoint *run* metadata (train loss, lr,
@@ -41,6 +44,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 import textwrap
 from pathlib import Path
 from typing import Any
@@ -52,12 +56,15 @@ matplotlib.use("Agg")  # headless — no display backend
 import matplotlib.pyplot as plt  # noqa: E402
 import pyarrow.parquet as pq  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # examples/, for _plots
+from _plots import plot_observables_over_training  # noqa: E402
+
 DEFAULT_DIR = Path(__file__).parent
 
-# Hue carries the ruler (the comparison this figure exists for); linestyle and
-# marker carry the batch pair. Two hues, so the palette stays trivially
-# colourblind-safe, and identity is never colour-alone.
-RULERS = {
+# Hue carries raw versus preconditioned (the comparison this figure exists for);
+# linestyle and marker carry the batch pair. Two hues, so the palette stays
+# trivially colourblind-safe, and identity is never colour-alone.
+CURVES = {
     "chi_pos": {"color": "#2a78d6", "label": r"$\chi_{\mathrm{pos}}$ (raw)"},
     "chi_pos_P": {"color": "#eb6834", "label": r"$\chi_{\mathrm{pos}}^{P}$ (AdamW)"},
 }
@@ -146,25 +153,25 @@ def plot(
     }
 
     plotted: list[float] = []
-    for observable in RULERS:
+    for observable in CURVES:
         for pair, _style in PAIRS:
             plotted.extend(series.get((observable, *pair), {}).values())
     scale_name, scale_kwargs = y_scale(plotted)
 
     fig, (ax_step, ax_loss) = plt.subplots(1, 2, figsize=(12.0, 6.2), sharey=True)
 
-    for observable, ruler in RULERS.items():
+    for observable, curve in CURVES.items():
         for pair, (linestyle, marker, pair_label) in PAIRS:
             points = series.get((observable, *pair), {})
             if not points:
                 continue
             steps = sorted(points)
             values = [points[s] for s in steps]
-            label = f"{ruler['label']}  {pair_label}"
+            label = f"{curve['label']}  {pair_label}"
             ax_step.plot(
                 steps,
                 values,
-                color=ruler["color"],
+                color=curve["color"],
                 linestyle=linestyle,
                 marker=marker,
                 markersize=5,
@@ -177,7 +184,7 @@ def plot(
                 ax_loss.plot(
                     [p[0] for p in xy],
                     [p[1] for p in xy],
-                    color=ruler["color"],
+                    color=curve["color"],
                     linestyle=linestyle,
                     marker=marker,
                     markersize=5,
@@ -223,10 +230,10 @@ def plot(
     meta = summary["bundle_metadata"]
     config = meta["model_config"]
     fig.suptitle(
-        f"Two rulers over a {meta['total_steps_planned']}-step AdamW run — "
+        f"Raw and preconditioned chi_pos, {meta['total_steps_planned']}-step AdamW run — "
         f"Llama dim={config['dim']} x {config['n_layers']} layers x {config['n_heads']} heads, "
         f"{meta['num_parameters']:,} params, {meta['dataset_id']}",
-        fontsize=12,
+        fontsize=11,
     )
     handles, labels = ax_step.get_legend_handles_labels()
     fig.tight_layout(rect=(0, 0.24, 1, 0.94))
@@ -237,7 +244,7 @@ def plot(
         bbox_to_anchor=(0.5, 0.155),
         fontsize=8.5,
         frameon=False,
-        ncols=2,  # column-major fill puts the raw ruler in one column, P in the other
+        ncols=2,  # column-major fill puts the raw curves in one column, P in the other
     )
     fig.text(
         0.012, 0.012, caption(summary, scale_name), fontsize=7.5, color=TEXT_MUTED, va="bottom"
@@ -311,6 +318,26 @@ def span(values: list[float], spec: str) -> str:
     if format(low, spec) == format(high, spec):
         return format(low, spec)
     return f"{format(low, spec)}-{format(high, spec)}"
+
+
+def plot_overview(directory: Path, rows: list[dict[str, Any]], summary: dict[str, Any]) -> Path:
+    """The common diagnostic figure: the recorded train loss and every observable."""
+    train_loss = {
+        int(c["step"]): c["train_loss"]
+        for c in summary["checkpoints"]
+        if c.get("train_loss") is not None
+    }
+    meta = summary["bundle_metadata"]
+    return plot_observables_over_training(
+        rows,
+        {"train loss": train_loss},
+        directory / "observables_over_training.png",
+        title=f"Llama ({meta['num_parameters']:,} parameters), {meta['total_steps_planned']}-step "
+        "AdamW run: loss and every observable over training",
+        loss_label="train loss (nats per token)",
+        note="Loss: the train loss the run recorded at each checkpoint (run_summary.json). "
+        "A1, A2, B: held-out batches. The _P rows start at step 1 (no optimizer state at step 0).",
+    )
 
 
 # ------------------------------------------------------------------- printing
@@ -417,6 +444,7 @@ def main(argv: list[str] | None = None) -> int:
     print_tables(rows, summary)
     path = plot(directory, rows, summary)
     print(f"\nwrote {path}")
+    print(f"wrote {plot_overview(directory, rows, summary)}")
     return 0
 
 
