@@ -26,6 +26,13 @@ second rank then reproduces the first rank's number bit for bit.
 :func:`ceiling_preconditioner`: a ``P`` that has a ceiling and entries sitting
 at it, so the run also produces the two ``*_capped`` rows. Without it no DDP
 test sees them — a ``P`` without a ceiling has no capped part to all-reduce.
+
+``--update-response`` adds a second eval batch and an explicit update rule
+(:func:`update_response_setup`), so the run also produces the
+``update_response*`` rows and — the rule supplies a second set of weights — the
+realized-change rows. Those involve no probes, so they must agree with a single
+process as they are; what the test sees is whether the dot products use the
+all-reduced gradients and whether the two loss evaluations are all-reduced.
 """
 
 from __future__ import annotations
@@ -54,6 +61,7 @@ from tests.fixtures.tiny_transformer import (  # noqa: E402
 )
 from vatis import analyze  # noqa: E402
 from vatis.core.preconditioner import Preconditioner  # noqa: E402
+from vatis.core.update_response import AdamHyper, OptimizerUpdate  # noqa: E402
 from vatis.distributed.ddp import (  # noqa: E402
     get_rank,
     init_distributed,
@@ -113,6 +121,44 @@ def ceiling_preconditioner(n_params: int) -> Preconditioner:
     return Preconditioner.from_diagonal(diag, descriptor="explicit", ceiling=CEILING)
 
 
+def update_response_setup(
+    bundle: ModelBundle, update_batch: dict[str, torch.Tensor]
+) -> OptimizerUpdate:
+    """An explicit AdamW update rule for ``bundle``, with a successor to step to.
+
+    Seeded moments after three updates, weight decay on, and ``theta_{t+1}`` a
+    seeded small displacement of the model's weights (it does not have to be the
+    step the rule describes: the realized-change rows only compare two sets of
+    weights). Shared by the worker and the single-process baseline of the driver
+    test, like :func:`ceiling_preconditioner`.
+    """
+    gen = torch.Generator().manual_seed(11)
+    params = bundle.params
+    successor_model = TinyTransformer().eval()
+    with torch.no_grad():
+        for new, old in zip(successor_model.parameters(), params, strict=True):
+            new.copy_(old + 1e-3 * torch.randn(old.shape, generator=gen))
+    successor = ModelBundle(
+        model=successor_model,
+        params=list(successor_model.parameters()),
+        forward_fn=bundle.forward_fn,
+        loss_fn=bundle.loss_fn,
+        valid_mask_fn=bundle.valid_mask_fn,
+        identifier="toy@step1",
+    )
+    return OptimizerUpdate(
+        family="adam",
+        hypers=[AdamHyper(lr=1e-2, beta1=0.9, beta2=0.95, eps=1e-8, weight_decay=0.1)]
+        * len(params),
+        step=3,
+        first_moment=[1e-2 * torch.randn(p.shape, generator=gen) for p in params],
+        second_moment=[1e-3 * torch.rand(p.shape, generator=gen) for p in params],
+        descriptor="adamw_update",
+        update_batch=update_batch,
+        next_weights=lambda: successor,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", required=True)
@@ -140,6 +186,11 @@ def main() -> int:
         "--duplicate-half",
         action="store_true",
         help="batch = two copies of a (batch-size // 2)-sample batch: identical shards on 2 ranks",
+    )
+    parser.add_argument(
+        "--update-response",
+        action="store_true",
+        help="add a second eval batch and an explicit update rule (update-response rows)",
     )
     args = parser.parse_args()
 
@@ -182,11 +233,19 @@ def main() -> int:
             batch = make_tiny_lm_batch(
                 batch_size=args.batch_size, seed=args.seed, pad_fraction=0.25, device="cpu"
             )
+        eval_batches = {"val": batch}
+        update = None
+        if args.update_response:
+            eval_batches["other"] = make_tiny_lm_batch(
+                batch_size=args.batch_size, seed=args.seed + 1, pad_fraction=0.25, device="cpu"
+            )
+            update = update_response_setup(bundle, batch)
         results = analyze(
             model=bundle,
             revisions=["step0"],
-            eval_batches={"val": batch},
+            eval_batches=eval_batches,
             preconditioner=precond,
+            update_response=None if update is None else (lambda ckpt_id: update),
             chi_net_method=args.chi_net_method,
             n_hutchinson=args.n_hutchinson,
             micro_batch_size=args.micro_batch_size,

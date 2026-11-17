@@ -38,6 +38,10 @@ all-reduce of ``chi_net_P_capped`` changed nothing any tier asserts.
 ``test_ddp_shipped_rng_capped_row_equals_the_per_rank_streams`` adds the same row
 under the shipped RNG, against the per-rank streams.
 
+The ``update_response*`` and realized-change rows have their own test
+(``test_ddp_update_response_matches_single_process``): they involve no probes,
+so DDP has to reproduce a single process as it is.
+
 The multi-GPU path remains unvalidated: this is a CPU gloo loopback
 (``CUDA_VISIBLE_DEVICES=""``), because NCCL wants one device per rank.
 """
@@ -63,8 +67,13 @@ from tests.fixtures.tiny_transformer import (
     causal_lm_valid_mask,
     make_tiny_lm_batch,
 )
-from tests.integration._ddp_worker import ShapeKeyedProbe, ceiling_preconditioner
+from tests.integration._ddp_worker import (
+    ShapeKeyedProbe,
+    ceiling_preconditioner,
+    update_response_setup,
+)
 from vatis import analyze
+from vatis.analyzer import REALIZED_CHANGE_OBSERVABLES, UPDATE_RESPONSE_OBSERVABLES
 from vatis.core.chi_net import build_estimator
 from vatis.core.observables import chi_pos
 from vatis.core.preconditioner import Preconditioner
@@ -89,6 +98,7 @@ def _run_ddp_rows(
     preconditioner: bool = False,
     ceiling: bool = False,
     duplicate_half: bool = False,
+    update_response: bool = False,
 ) -> list[list[dict[str, Any]]]:
     """Spawn a 2-rank torchrun pinned to CPU, return every rank's rows (as dicts)."""
     env = os.environ.copy()
@@ -120,6 +130,8 @@ def _run_ddp_rows(
         cmd.append("--ceiling")
     if duplicate_half:
         cmd.append("--duplicate-half")
+    if update_response:
+        cmd.append("--update-response")
     result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
     if result.returncode != 0:
         raise RuntimeError(
@@ -488,3 +500,79 @@ def test_ddp_shipped_rng_capped_row_equals_the_per_rank_streams(
     for observable, want in expected.items():
         rel = abs(ddp[observable] - want) / abs(want)
         assert rel < DDP_REL, (method, observable, ddp[observable], want, rel)
+
+
+@pytest.mark.parametrize("batch_size", [4, 5])
+def test_ddp_update_response_matches_single_process(tmp_path: Path, batch_size: int) -> None:
+    """The update-response and realized-change rows under DDP, against one process.
+
+    No probes enter these rows, so no pinning is needed: the three parts are dot
+    products of the all-reduced gradients with an update every rank rebuilds
+    identically, and the realized change is two token-weighted mean losses that
+    have to be all-reduced over the shards. ``batch_size=5`` is the uneven split,
+    and the batches are padded, so the ranks hold different token counts — a
+    plain average of per-rank losses, or a dot product with a rank's partial
+    gradient, would not reproduce the single-process number.
+    """
+    seed = 0
+    ranks = _run_ddp_rows(
+        tmp_path / f"ddp_response_{batch_size}.json",
+        seed=seed,
+        batch_size=batch_size,
+        n_h=2,
+        method="hutchinson",
+        update_response=True,
+    )
+
+    torch.manual_seed(seed)
+    model = TinyTransformer().eval()
+    bundle = ModelBundle(
+        model=model,
+        params=list(model.parameters()),
+        forward_fn=lambda m, b: m(b["input_ids"]),
+        loss_fn=causal_lm_loss,
+        valid_mask_fn=causal_lm_valid_mask,
+        identifier="toy@step0",
+    )
+    batch = make_tiny_lm_batch(batch_size=batch_size, seed=seed, pad_fraction=0.25, device="cpu")
+    other = make_tiny_lm_batch(
+        batch_size=batch_size, seed=seed + 1, pad_fraction=0.25, device="cpu"
+    )
+    update = update_response_setup(bundle, batch)
+    results = analyze(
+        model=bundle,
+        revisions=["step0"],
+        eval_batches={"val": batch, "other": other},
+        update_response=lambda ckpt_id: update,
+        chi_net_method="hutchinson",
+        n_hutchinson=2,
+        micro_batch_size=1,
+        sink=None,
+        device="cpu",
+    )
+    names = UPDATE_RESPONSE_OBSERVABLES + REALIZED_CHANGE_OBSERVABLES
+    base = {
+        (r.batch_a, r.batch_b, r.observable): r.value
+        for r in results[0].rows
+        if r.observable in names
+    }
+    assert set(base) == {("val", b, name) for b in ("val", "other") for name in names}
+    assert all(value != 0.0 for value in base.values())
+
+    for rank, rows in enumerate(ranks):
+        got = {
+            (r["batch_a"], r["batch_b"], r["observable"]): r["value"]
+            for r in rows
+            if r["observable"] in names
+        }
+        assert set(got) == set(base), rank
+        for key, expected in base.items():
+            # The residual is a difference of two numbers of the size of the
+            # first-order term, so its tolerance is set by that size.
+            scale = abs(base[(key[0], key[1], "update_response_weights")])
+            tolerance = DDP_REL * (scale if key[2] == "loss_change_residual" else abs(expected))
+            assert abs(got[key] - expected) <= tolerance, (rank, key, got[key], expected)
+        counts = {
+            (r["batch_b"], r["n_valid_a"], r["n_valid_b"]) for r in rows if r["observable"] in names
+        }
+        assert len(counts) == 2, counts
