@@ -62,9 +62,10 @@ chi_pos              prose   code      9.449e-10
 
 - Anything about training: one checkpoint, two batches of 64 tokens. The
   Pythia sweep is the example that follows the observables over training.
-- Exact `chi_net` and `chi_pos` values: they are estimates from 8 random probes
-  (`n_hutchinson=8`); another seed or more probes gives somewhat different
-  numbers. `chi_loss` and `delta_loss` are exact.
+- Exact `chi_net`, `chi_net_normalized` and `chi_pos` values: they are
+  estimates from 8 random probes (`n_hutchinson=8`); another seed or more
+  probes gives somewhat different numbers. `chi_loss`, `chi_loss_normalized`
+  and `delta_loss` are exact.
 - Run time on a GPU or on a cold cache: not measured.
 
 ## About the committed outputs
