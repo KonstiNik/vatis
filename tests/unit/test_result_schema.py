@@ -573,7 +573,7 @@ def test_read_results_keeps_columns_it_does_not_know(tmp_path: Path) -> None:
     "relative_path",
     [
         "examples/pythia_sweep/results.parquet",
-        "examples/output/results.parquet",
+        "examples/optimizer_aware_llama/results.parquet",
         "examples/adamw_vs_sgd_reconstruction/results.parquet",
     ],
 )

@@ -1,4 +1,4 @@
-"""``examples/two_rulers_llama.py``: held-out batches follow the bundle's pad convention.
+"""``examples/optimizer_aware_llama/run.py``: held-out batches follow the bundle's pad convention.
 
 The example measures on held-out batches it builds itself from ``.npy`` token
 files. It used to count every target there unconditionally, so for a bundle
@@ -39,13 +39,13 @@ from vatis import Analyzer, load_local_bundle
 
 PAD_ID = 3
 SEQ_LEN = 7
-EXAMPLE_PATH = Path(__file__).resolve().parents[2] / "examples" / "two_rulers_llama.py"
+EXAMPLE_PATH = Path(__file__).resolve().parents[2] / "examples" / "optimizer_aware_llama" / "run.py"
 
 
 @pytest.fixture(scope="module")
 def example() -> ModuleType:
     """The example script, imported as a module (it has no package to import from)."""
-    name = "_two_rulers_llama_under_test"
+    name = "_optimizer_aware_llama_under_test"
     spec = importlib.util.spec_from_file_location(name, EXAMPLE_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
