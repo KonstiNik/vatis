@@ -60,9 +60,10 @@ def test_one_panel_per_observable_plus_the_loss(
     plots: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, steps: list[int]
 ) -> None:
     import matplotlib.pyplot as plt
+    from matplotlib.figure import Figure
 
     saved: list[Any] = []
-    monkeypatch.setattr(plt.Figure, "savefig", lambda fig, *a, **k: saved.append(fig))
+    monkeypatch.setattr(Figure, "savefig", lambda fig, *a, **k: saved.append(fig))
     out = plots.plot_observables_over_training(
         _rows(steps),
         {"x": {s: 3.0 - 0.1 * s for s in steps}, "train loss": {s: 2.0 for s in steps}},
