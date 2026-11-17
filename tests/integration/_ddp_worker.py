@@ -29,7 +29,7 @@ test sees them — a ``P`` without a ceiling has no capped part to all-reduce.
 
 ``--update-response`` adds a second eval batch and an explicit update rule
 (:func:`update_response_setup`), so the run also produces the
-``update_response*`` rows and — the rule supplies a second set of weights — the
+``loss_change_first_order*`` rows and — the rule supplies a second set of weights — the
 realized-change rows. Those involve no probes, so they must agree with a single
 process as they are; what the test sees is whether the dot products use the
 all-reduced gradients and whether the two loss evaluations are all-reduced.

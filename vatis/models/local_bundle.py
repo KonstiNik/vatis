@@ -1395,7 +1395,7 @@ class LocalBundleSource:
         analyzer then measures the first-order loss change under the update
         the optimizer took at that step, ``grad L^B . (theta_{t+1} - theta_t)``,
         split into the parts carried by the step's own gradient, by the
-        gradient history and by weight decay (the ``update_response*`` rows;
+        gradient history and by weight decay (the ``loss_change_first_order*`` rows;
         definitions in :mod:`vatis.core.update_response` and ``docs/SPEC.md``
         §"The response to the update that was taken").
 
@@ -1457,7 +1457,7 @@ class LocalBundleSource:
         selected ``steps``), both weight files are stored as fp32 or wider and
         the source itself was opened with ``dtype="fp32"``,
         the factory hands the analyzer ``theta_{t+1}``, and three more rows are
-        measured: ``update_response_weights = grad L^B . (theta_{t+1} -
+        measured: ``loss_change_first_order_weights = grad L^B . (theta_{t+1} -
         theta_t)`` from the two weight files, ``loss_change = L_B(theta_{t+1}) -
         L_B(theta_t)`` and their difference ``loss_change_residual``. With bf16
         (or fp16) weight files — or with a source that loads the weights as
@@ -1500,7 +1500,7 @@ class LocalBundleSource:
                         f"param_names.json ({_abbrev(unlisted)}; the source was opened with "
                         "allow_unlisted_params). They are in no gradient vector and in no "
                         "saved optimizer state: if the run trained them, their part of the "
-                        "update is missing from every update_response row while loss_change "
+                        "update is missing from every loss_change_first_order* row while loss_change "
                         "still contains its effect, and if they had gradients when the norm "
                         "was clipped, the clipping factor is wrong. The bundle does not say. "
                         "Pass unlisted_params_frozen=True to confirm that they received no "
@@ -1558,9 +1558,9 @@ class LocalBundleSource:
                 f"{' and '.join(reasons)}. The analyzer would then compare two rounded "
                 "thetas, and the difference of two rounded thetas is dominated by the "
                 "rounding early in training, so the realized loss change and its residual "
-                "(update_response_weights, loss_change, loss_change_residual) are SKIPPED "
+                "(loss_change_first_order_weights, loss_change, loss_change_residual) are SKIPPED "
                 "for this checkpoint. They need fp32 weight files, loaded with "
-                'dtype="fp32". The update_response rows built from the optimizer state '
+                'dtype="fp32". The loss_change_first_order* rows built from the optimizer state '
                 "are still reported.",
                 UserWarning,
                 stacklevel=3,
@@ -1975,7 +1975,7 @@ def _resolve_clip_grad_norm(
                 f"{where}no 'gradient_clip_val' is recorded, so the bundle does not say "
                 "whether the gradient was clipped before the optimizer saw it. Clipping "
                 "leaves no trace in the saved optimizer state and changes every "
-                "update_response row, so it is not assumed either way: pass "
+                "loss_change_first_order* row, so it is not assumed either way: pass "
                 "clip_grad_norm=None if the run did not clip, or clip_grad_norm=<max norm> "
                 "if it clipped the global gradient norm (torch.nn.utils.clip_grad_norm_ "
                 "over all parameters)."
@@ -2044,7 +2044,7 @@ def optimizer_update_from_state(
 ) -> OptimizerUpdate:
     """Turn one saved (pre-step) optimizer state into the update rule of that step.
 
-    The plumbing half of the ``update_response*`` rows; the math is
+    The plumbing half of the ``loss_change_first_order*`` rows; the math is
     :class:`vatis.core.update_response.OptimizerUpdate`. Hyper-parameters are
     read per parameter from the saved ``param_groups`` (what the optimizer ran
     with), never from ``metadata.json``; the metadata's optimizer name is only a
@@ -2124,7 +2124,7 @@ def optimizer_update_from_state(
                 "semantics both are the learning rate this step applies; a difference "
                 "means one of them is not (a scheduler stepped between the two writes, or "
                 "the state and the checkpoint do not belong together), and every "
-                "update_response row is proportional to it."
+                "loss_change_first_order* row is proportional to it."
             )
 
     hypers: list[AdamHyper] | list[SGDHyper]

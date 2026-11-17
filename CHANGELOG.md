@@ -40,14 +40,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `source.update_response()`). For every eval batch `B` it adds the first-order
   loss change under the update the optimizer applied at the checkpoint's step,
   `∇L^B · (θ_{t+1} − θ_t)`, rebuilt from the pre-step optimizer state and split
-  into three parts: `update_response_grad` (the step's own gradient, through
-  the second moment *after* it absorbed that gradient), `update_response_hist`
-  (momentum history), `update_response_wd` (weight decay), and their sum
-  `update_response`. Covered: `torch.optim.AdamW`, `Adam` and `SGD`, with
+  into three parts: `loss_change_first_order_grad` (the step's own gradient, through
+  the second moment *after* it absorbed that gradient), `loss_change_first_order_hist`
+  (momentum history), `loss_change_first_order_wd` (weight decay), and their sum
+  `loss_change_first_order`. Covered: `torch.optim.AdamW`, `Adam` and `SGD`, with
   per-group learning rates and weight decays, at every checkpoint including
   step 0; other optimizers, `amsgrad` and `maximize` are refused. Where a
   bundle holds consecutive steps with fp32 weight files, three more rows are
-  measured: `update_response_weights` (the same dot product from the stored
+  measured: `loss_change_first_order_weights` (the same dot product from the stored
   weight difference), `loss_change` (the realized change) and
   `loss_change_residual`; with bf16 weight files these are skipped with a
   warning. Gradient clipping is never assumed: it is read from `metadata.json`
@@ -181,8 +181,8 @@ The labels are the single source of truth for what enters the loss
 ### Known limitations
 - `delta_loss_P` is **not** the first-order loss change of the AdamW step:
   momentum, weight decay and the step's own second-moment update are excluded.
-  The `update_response*` rows measure that change (see "Added").
-- The `update_response*` rows rebuild the step from a gradient vatis recomputes
+  The `loss_change_first_order*` rows measure that change (see "Added").
+- The `loss_change_first_order*` rows rebuild the step from a gradient vatis recomputes
   on the stored batch. `loss_change` and `loss_change_residual` are resolved
   only down to the round-off of the fp32 forward pass (measured `1e-8` to
   `1e-7` on an 11M-parameter model). Gradient clipping must be stated; dropout, mixed

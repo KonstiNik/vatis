@@ -38,7 +38,7 @@ all-reduce of ``chi_net_P_capped`` changed nothing any tier asserts.
 ``test_ddp_shipped_rng_capped_row_equals_the_per_rank_streams`` adds the same row
 under the shipped RNG, against the per-rank streams.
 
-The ``update_response*`` and realized-change rows have their own test
+The ``loss_change_first_order*`` and realized-change rows have their own test
 (``test_ddp_update_response_matches_single_process``): they involve no probes,
 so DDP has to reproduce a single process as it is.
 
@@ -569,7 +569,7 @@ def test_ddp_update_response_matches_single_process(tmp_path: Path, batch_size: 
         for key, expected in base.items():
             # The residual is a difference of two numbers of the size of the
             # first-order term, so its tolerance is set by that size.
-            scale = abs(base[(key[0], key[1], "update_response_weights")])
+            scale = abs(base[(key[0], key[1], "loss_change_first_order_weights")])
             tolerance = DDP_REL * (scale if key[2] == "loss_change_residual" else abs(expected))
             assert abs(got[key] - expected) <= tolerance, (rank, key, got[key], expected)
         counts = {

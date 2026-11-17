@@ -176,7 +176,7 @@ Three things to know before using it:
   is the geometry factor only: momentum and weight decay are excluded, and it is
   built from the second moment *before* the step
   ([`docs/SPEC.md` → What `delta_loss_P` is not](docs/SPEC.md)). The step that
-  was taken has its own rows, `update_response*` — see the next section.
+  was taken has its own rows, `loss_change_first_order*` — see the next section.
 - Coordinates that never received a non-zero gradient sit at `P = 1/ε` and can
   dominate `chi_net_P` — on held-out data, and equally on the update batch
   itself when it contains a token the run has not seen before (`P` is the
@@ -204,11 +204,11 @@ analyzer.run(source.model_specs())
 
 | observable | meaning |
 |------------|---------|
-| `update_response` | ∇_θ Lᴮ · (θ_{t+1} − θ_t), with the update rebuilt from the optimizer state saved before the step |
-| `update_response_grad` / `_hist` / `_wd` | its three parts: the step's own gradient, the gradient history (momentum), weight decay |
-| `update_response_weights` | the same dot product from the two stored weight files |
+| `loss_change_first_order` | ∇_θ Lᴮ · (θ_{t+1} − θ_t), with the update rebuilt from the optimizer state saved before the step |
+| `loss_change_first_order_grad` / `_hist` / `_wd` | its three parts: the step's own gradient, the gradient history (momentum), weight decay |
+| `loss_change_first_order_weights` | the same dot product from the two stored weight files |
 | `loss_change` | L_B(θ_{t+1}) − L_B(θ_t), the realized change |
-| `loss_change_residual` | `loss_change − update_response_weights` |
+| `loss_change_residual` | `loss_change − loss_change_first_order_weights` |
 
 The rows sit on the pair (update batch, `B`) for every eval batch `B`. They are
 loss changes — learning rate included, negative when the loss falls — for
@@ -229,8 +229,8 @@ Two things to know before using it:
 - **The gradient is recomputed, not read.** The rows describe the step taken
   only if one optimizer step on the stored batch at the stored weights is what
   the run did (no dropout, the same loss, token-weighted gradient
-  accumulation). Where the realized rows exist, `update_response` and
-  `update_response_weights` must agree; if they do not, that assumption fails
+  accumulation). Where the realized rows exist, `loss_change_first_order` and
+  `loss_change_first_order_weights` must agree; if they do not, that assumption fails
   for your bundle
   ([`docs/SPEC.md` → The response to the update that was taken](docs/SPEC.md)).
   A residual near the round-off of the forward pass (about `1e-8` to `1e-7` on

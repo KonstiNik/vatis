@@ -5,7 +5,7 @@ geometry: how does the loss on ``B`` respond to the *hypothetical* update
 ``-eta * P_t grad L^A``. This module answers the other question: how does it
 respond, to first order, to the update the optimizer **took**,
 
-    update_response(A, B) = grad L^B . dtheta,        dtheta = theta_{t+1} - theta_t,
+    loss_change_first_order(A, B) = grad L^B . dtheta,        dtheta = theta_{t+1} - theta_t,
 
 with ``dtheta`` rebuilt from the optimizer state saved *before* the step
 (``docs/SPEC.md`` §"The response to the update that was taken"). The update is a

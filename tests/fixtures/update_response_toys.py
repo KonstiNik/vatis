@@ -1,6 +1,6 @@
 """Real optimizer steps, recorded, for the update-response tests.
 
-Everything the ``update_response*`` rows claim is a statement about what a
+Everything the ``loss_change_first_order*`` rows claim is a statement about what a
 ``torch.optim`` optimizer did to the weights, so the reference in these tests is
 always the optimizer itself: a real ``step()`` on a real model, with the weights
 and the ``state_dict()`` captured immediately before it and the weights again

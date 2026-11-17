@@ -230,7 +230,7 @@ of which `delta_loss_P` is the first dot product with `P_t` in place of
 `P_{t+1}` and without its prefactor. Treat `chi_pos_P` as a statement about the
 *geometry* the optimizer imposes. `−η · delta_loss_P` is the first-order
 prediction for the *hypothetical* update `−η P_t ∇L^A`. **Do not use it as the
-loss change of the step that was taken** — that is what the `update_response*`
+loss change of the step that was taken** — that is what the `loss_change_first_order*`
 rows measure, term by term (next section).
 
 How far apart the two are was measured on a real bundle (an 11M-parameter
@@ -254,16 +254,16 @@ is one bundle: do not read the percentages as constants.
 pre-step `P` exists at step 0 (the optimizer state is empty), so the P rows
 start at the first checkpoint after it. Yet the first update is the most
 non-SGD one: `v̂_1 = g_0²`, so it is essentially sign descent,
-`Δθ ≈ −η · sign(g_0)`. The `update_response*` rows do cover it.
+`Δθ ≈ −η · sign(g_0)`. The `loss_change_first_order*` rows do cover it.
 
-#### The response to the update that was taken (`update_response*` rows)
+#### The response to the update that was taken (`loss_change_first_order*` rows)
 
 `Analyzer(update_response=...)` measures what `delta_loss_P` is not: the
 first-order loss change under the update the optimizer applied at the
 checkpoint's step, for the update batch and for every other eval batch `B`,
 
 ```
-update_response(A, B) = ∇L^B · Δθ          Δθ = θ_{t+1} − θ_t,   A = the batch step t consumed
+loss_change_first_order(A, B) = ∇L^B · Δθ          Δθ = θ_{t+1} − θ_t,   A = the batch step t consumed
 ```
 
 `Δθ` is rebuilt from what the checkpoint saved **before** the step — the
@@ -276,21 +276,21 @@ the number of updates already applied:
 v_{t+1} = β2 v_t + (1−β2) g²                    the second moment after it absorbed g
 P_{t+1} = 1 / (√(v_{t+1} / (1−β2^{t+1})) + ε)   the P the step used (not the pre-step P_t)
 
-update_response_grad = − η (1−β1)/(1−β1^{t+1}) · ∇L^B · P_{t+1} g      the step's own gradient
-update_response_hist = − η  β1   /(1−β1^{t+1}) · ∇L^B · P_{t+1} m_t    the gradient history
-update_response_wd   = − η λ · ∇L^B · θ_t                              decoupled weight decay
-update_response      = the sum of the three
+loss_change_first_order_grad = − η (1−β1)/(1−β1^{t+1}) · ∇L^B · P_{t+1} g      the step's own gradient
+loss_change_first_order_hist = − η  β1   /(1−β1^{t+1}) · ∇L^B · P_{t+1} m_t    the gradient history
+loss_change_first_order_wd   = − η λ · ∇L^B · θ_t                              decoupled weight decay
+loss_change_first_order      = the sum of the three
 ```
 
 | observable | value | measured |
 | --- | --- | --- |
-| `update_response_grad` | part of `∇L^B · Δθ` carried by the step's own gradient | every checkpoint |
-| `update_response_hist` | part carried by the first moment / momentum buffer saved before the step | every checkpoint |
-| `update_response_wd` | part carried by weight decay | every checkpoint |
-| `update_response` | their sum: the first-order loss change of the step, from the saved state | every checkpoint |
-| `update_response_weights` | `∇L^B · (θ_{t+1} − θ_t)` from the two stored weight files | step `t+1` stored, fp32 weight files |
+| `loss_change_first_order_grad` | part of `∇L^B · Δθ` carried by the step's own gradient | every checkpoint |
+| `loss_change_first_order_hist` | part carried by the first moment / momentum buffer saved before the step | every checkpoint |
+| `loss_change_first_order_wd` | part carried by weight decay | every checkpoint |
+| `loss_change_first_order` | their sum: the first-order loss change of the step, from the saved state | every checkpoint |
+| `loss_change_first_order_weights` | `∇L^B · (θ_{t+1} − θ_t)` from the two stored weight files | step `t+1` stored, fp32 weight files |
 | `loss_change` | `L_B(θ_{t+1}) − L_B(θ_t)`, the realized change | same |
-| `loss_change_residual` | `loss_change − update_response_weights`: what first order leaves over | same |
+| `loss_change_residual` | `loss_change − loss_change_first_order_weights`: what first order leaves over | same |
 
 ```python
 source = load_local_bundle(run_dir, "my_project.models:build_model")
@@ -307,7 +307,7 @@ analyzer.run(source.model_specs())
   and are negative when the step lowers the loss on `B`. `delta_loss` and
   `delta_loss_P` are gradient products without the learning rate and with the
   opposite sign convention; the comparable quantity is `−η · delta_loss_P`,
-  which equals `update_response_grad` only where `P_t = P_{t+1}`, the
+  which equals `loss_change_first_order_grad` only where `P_t = P_{t+1}`, the
   prefactor `(1−β1)/(1−β1^{t+1})` is one and the gradient was not clipped. It
   is a different quantity, not an estimate of this one: where the two are set
   side by side below, the ratio says how far apart the hypothetical update and
@@ -401,7 +401,7 @@ gradient the optimizer saw. vatis cannot verify that from one checkpoint:
   `allow_unlisted_params` whose model has parameters `param_names.json` does
   not name). They are in no gradient vector and in no saved optimizer state.
   If the run trained them, their part of the step is missing from every
-  `update_response*` row while `loss_change` still contains its effect; if
+  `loss_change_first_order*` row while `loss_change` still contains its effect; if
   they merely had gradients when the norm was clipped, the clipping factor is
   wrong. A bundle does not say, so `update_response()` **refuses** such a
   bundle unless the caller confirms with `unlisted_params_frozen=True` that
@@ -421,8 +421,8 @@ gradient the optimizer saw. vatis cannot verify that from one checkpoint:
   run's `θ_{t+1}`*.
 
 Where the bundle holds the next step in fp32, that contract is checkable, and
-the rows check it: `update_response` (rebuilt from the saved state) and
-`update_response_weights` (the stored weight difference, no formula) are two
+the rows check it: `loss_change_first_order` (rebuilt from the saved state) and
+`loss_change_first_order_weights` (the stored weight difference, no formula) are two
 routes to the same number. **If they disagree by more than rounding, one of the
 assumptions above does not hold for that bundle.** "Rounding" includes the
 optimizer's own: the rule is evaluated in fp64, the run stepped in fp32, and a
@@ -437,7 +437,7 @@ applied one).
 files are stored as fp32 or wider and the source loads them as fp32
 (`load_local_bundle(dtype="fp32")`, the default), the three realized rows are
 measured:
-`update_response_weights`, `loss_change` and `loss_change_residual`. The
+`loss_change_first_order_weights`, `loss_change` and `loss_change_residual`. The
 residual is taken against the *stored* weight difference, not against the
 rebuilt update, so it contains the loss surface's higher orders and nothing
 about the optimizer formula. With bf16 (or fp16) weight files, or with a source
@@ -491,7 +491,7 @@ rows look like, not as constants.
 the state saved *after* the step (`m_{t+1}`, `v_{t+1}`), which involves no
 recomputed gradient:
 
-| step | `update_response` | `_grad` | `_hist` | `_wd` | applied update (post-step state) | two bf16 weight files | `−η · delta_loss_P` |
+| step | `loss_change_first_order` | `_grad` | `_hist` | `_wd` | applied update (post-step state) | two bf16 weight files | `−η · delta_loss_P` |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 0 | −0.07932 | −0.07932 | 0 | −9.6e−8 | −0.07932 (differs by 5e−6) | −0.07922 (0.13%) | no `P` at step 0 |
 | 1 | −1.09819 | −0.57660 | −0.52158 | −8.2e−7 | −1.09818 (4e−6) | −1.09736 (0.07%) | −1.27180 (16% larger) |
@@ -508,7 +508,7 @@ computed from such files. On a held-out batch of 8 × 512 tokens the same four
 steps gave the same agreement (4e−6 … 5e−5), with `−η · delta_loss_P` 2%, 37%
 and 25% larger at steps 1–3. Later in the same run `−η · delta_loss_P` on the
 update batch was 38%, 92% and 189% larger at steps 4, 6 and 8, and about 65,
-15, 11.5 and 9.5 times `update_response` at steps 20, 49, 122 and 299 (how
+15, 11.5 and 9.5 times `loss_change_first_order` at steps 20, 49, 122 and 299 (how
 much of that the coordinates at the `1/ε` ceiling carry was not examined).
 
 *Bundles with fp32 weight files* (the same model; pad-masked loss; gradient
@@ -516,7 +516,7 @@ norm clipped at 1.0, stated with `clip_grad_norm=1.0` because the bundles record
 the value but not the algorithm; AdamW with peak rate 2e-3, SGD with momentum
 0.9 and peak rate 1.0, both with a warm-up from 1e-5):
 
-| run | step | `η` | clip factor | `update_response` | `_grad` | `_hist` | `update_response_weights` (rel. diff.) | `loss_change` | `loss_change_residual` | `−η · delta_loss_P` |
+| run | step | `η` | clip factor | `loss_change_first_order` | `_grad` | `_hist` | `loss_change_first_order_weights` (rel. diff.) | `loss_change` | `loss_change_residual` | `−η · delta_loss_P` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | AdamW | 0 | 1.0e−5 | 1 | −0.010192 | −0.010192 | 0 | −0.010192 (1.4e−5) | −0.010194 | −2.1e−6 | no `P` at step 0 |
 | AdamW | 1 | 3.0e−5 | 1 | −0.026263 | −0.016011 | −0.010252 | −0.026263 (3e−7) | −0.026279 | −1.7e−5 | −0.156016 (5.9×) |
@@ -735,7 +735,7 @@ number of valid (non-pad, non-ignored) tokens.
   parallelism. `OpacusEstimator` (stub only). Custom non-CE losses for
   `chi_loss`. Per-sample variance observables beyond the cross-sample alignment
   matrix. Models that don't fit on one GPU. Non-diagonal `P`. Momentum and
-  weight decay in `P` (they are in the `update_response*` rows instead, see
+  weight decay in `P` (they are in the `loss_change_first_order*` rows instead, see
   "The response to the update that was taken"); update rules other than
   AdamW, Adam and SGD there. **Optimizer states in third-party formats**: only the native bundle
   schema is read — there is no loader for the optimizer states published with
@@ -1136,7 +1136,7 @@ for ckpt in source:                                    # or drive the loop yours
   received a gradient. An `eps` / `beta2` override is written into the descriptor, e.g.
   `adamw(eps=0.001)`.
 - **`source.update_response()` rebuilds the step each checkpoint took** from
-  the same saved state, for the `update_response*` rows ("The response to the
+  the same saved state, for the `loss_change_first_order*` rows ("The response to the
   update that was taken"). It reads two more optional run-level fields of
   `metadata.json`:
 
@@ -1194,7 +1194,7 @@ The update-response rows extend it the same way and add no column: seven more
 batch), with `n_hutchinson`, `hutchinson_seed` and `wallclock_s` null. The four
 rows rebuilt from the optimizer state carry the update rule's descriptor in the
 `preconditioner` column (`"adamw_update"`, `"adam_update"`, `"sgd_update"`);
-`update_response_weights`, `loss_change` and `loss_change_residual` carry
+`loss_change_first_order_weights`, `loss_change` and `loss_change_residual` carry
 `"none"`. A pair that has only these rows (the update batch against an eval
 batch that is not in `cross_pairs`) pivots to a line with empty `chi_*` cells.
 
@@ -1442,7 +1442,7 @@ cross-validation test tier (gated, skipped in CI).
   - `tests/golden/` — marked `@pytest.mark.golden`; runs only when the `-m`
     expression names `golden`. Trains a tiny transformer for ~100 AdamW steps,
     writes a bundle, and runs the raw and preconditioned observables over it end to end.
-    A second gate does the same for the `update_response*` rows on a bundle
+    A second gate does the same for the `loss_change_first_order*` rows on a bundle
     with consecutive fp32 checkpoints, against the weight files themselves.
   - `tests/integration/` — gated behind `pytest -m integration`, skipped in CI.
     Verifies HF loading on a small hub checkpoint and the DDP path — including
@@ -1470,9 +1470,9 @@ cross-validation test tier (gated, skipped in CI).
 | `δL^P` | `delta_loss_P` | `∇_θL^B · P ∇_θL^A` |
 | `χ_pos^P` | `chi_pos_P` | `δL^P / (χ_loss · χ_net^P)` — spectral position on the preconditioned kernel |
 | — | `delta_loss_P_capped`, `chi_net_P_capped` | the same two quantities with `P` restricted to the coordinates at its ceiling (`1/ε`) |
-| `∇L^B · Δθ` | `update_response`, `update_response_grad` / `_hist` / `_wd` | first-order loss change on `B` under the step that was taken, rebuilt from the pre-step optimizer state, and its three parts |
-| `∇L^B · (θ_{t+1} − θ_t)` | `update_response_weights` | the same from two stored weight files |
-| — | `loss_change`, `loss_change_residual` | `L_B(θ_{t+1}) − L_B(θ_t)`, and that minus `update_response_weights`: the realized change, and what the first-order term from the stored weight difference leaves over |
+| `∇L^B · Δθ` | `loss_change_first_order`, `loss_change_first_order_grad` / `_hist` / `_wd` | first-order loss change on `B` under the step that was taken, rebuilt from the pre-step optimizer state, and its three parts |
+| `∇L^B · (θ_{t+1} − θ_t)` | `loss_change_first_order_weights` | the same from two stored weight files |
+| — | `loss_change`, `loss_change_residual` | `L_B(θ_{t+1}) − L_B(θ_t)`, and that minus `loss_change_first_order_weights`: the realized change, and what the first-order term from the stored weight difference leaves over |
 | `Θ` | (not stored) | empirical NTK; never materialized |
 | `N_A`, `N_B` | `n_valid_a`, `n_valid_b` | valid (non-pad) token counts |
 | `n` | `n_hutchinson` | number of Hutchinson probe vectors |
@@ -1496,15 +1496,15 @@ cross-validation test tier (gated, skipped in CI).
 - **`OpacusEstimator` is a stub**, and has no `chi_net_P` path.
 - **`delta_loss_P` is not AdamW's first-order loss change** — momentum, weight
   decay and the step's own second-moment update are not included (see "What
-  `delta_loss_P` is not"). The `update_response*` rows measure that change
+  `delta_loss_P` is not"). The `loss_change_first_order*` rows measure that change
   ("The response to the update that was taken").
-- **The `update_response*` rows rest on a recomputed gradient.** They describe
+- **The `loss_change_first_order*` rows rest on a recomputed gradient.** They describe
   the step that was taken only if one optimizer step on the stored update batch
   at the stored weights is what the run did. Gradient clipping has to be
   stated; dropout, mixed precision, a gradient accumulation that is not
   token-weighted, or bf16-rounded weights make the recomputed gradient differ
   from the one the optimizer saw, and only the comparison with
-  `update_response_weights` — available for consecutive fp32 checkpoints —
+  `loss_change_first_order_weights` — available for consecutive fp32 checkpoints —
   shows it. The realized-change rows need fp32 weight files.
 - **Optimizer state is read from native checkpoint bundles only**, and the
   loader cannot detect a same-shape parameter permutation between

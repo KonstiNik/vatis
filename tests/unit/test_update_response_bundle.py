@@ -151,13 +151,14 @@ def _assert_matches_the_run(
     for step, rows in rows_by_step.items():
         for batch in ("train", "val"):
             reference = _reference(record, step, batch)
-            total = _value(rows, batch, "update_response")
+            total = _value(rows, batch, "loss_change_first_order")
             assert total == pytest.approx(reference, rel=RTOL), (
                 f"step {step}, batch {batch}: update_response = {total!r}, the run did "
                 f"g . dtheta = {reference!r}"
             )
             parts = sum(
-                _value(rows, batch, f"update_response_{part}") for part in ("grad", "hist", "wd")
+                _value(rows, batch, f"loss_change_first_order_{part}")
+                for part in ("grad", "hist", "wd")
             )
             assert total == pytest.approx(parts, rel=1e-12, abs=1e-18)
         for row in rows:
@@ -182,9 +183,9 @@ def test_update_response_is_the_first_order_change_of_the_step_the_run_took(
     _assert_matches_the_run(record, rows_by_step)
     # The history part is absent at the first update and present afterwards; the
     # decay part is there from the start.
-    assert _value(rows_by_step[0], "val", "update_response_hist") == 0.0
-    assert _value(rows_by_step[1], "val", "update_response_hist") != 0.0
-    assert _value(rows_by_step[0], "val", "update_response_wd") != 0.0
+    assert _value(rows_by_step[0], "val", "loss_change_first_order_hist") == 0.0
+    assert _value(rows_by_step[1], "val", "loss_change_first_order_hist") != 0.0
+    assert _value(rows_by_step[0], "val", "loss_change_first_order_wd") != 0.0
 
 
 def test_rows_are_keyed_by_update_batch_and_evaluated_batch(
@@ -274,10 +275,12 @@ def test_realized_change_and_residual_where_the_bundle_holds_the_next_step(
             continue
         recorded = record.steps[step]
         for batch in ("train", "val"):
-            from_weights = _value(rows, batch, "update_response_weights")
+            from_weights = _value(rows, batch, "loss_change_first_order_weights")
             assert from_weights == pytest.approx(_reference(record, step, batch), rel=RTOL)
             # ... and the rebuilt update agrees with the stored one.
-            assert _value(rows, batch, "update_response") == pytest.approx(from_weights, rel=RTOL)
+            assert _value(rows, batch, "loss_change_first_order") == pytest.approx(
+                from_weights, rel=RTOL
+            )
             change = _value(rows, batch, "loss_change")
             residual = _value(rows, batch, "loss_change_residual")
             assert residual == change - from_weights
@@ -292,7 +295,7 @@ def test_realized_change_and_residual_where_the_bundle_holds_the_next_step(
         assert (
             0.0
             < _value(rows, "val", "loss_change_residual")
-            < abs(_value(rows, "val", "update_response_weights"))
+            < abs(_value(rows, "val", "loss_change_first_order_weights"))
         )
 
 
@@ -302,7 +305,7 @@ def test_the_successor_is_found_on_disk_even_when_it_is_not_selected(
     run_dir, record = adamw_run
     rows_by_step = _run(_source(run_dir, steps=[1, 6]))
     assert set(rows_by_step) == {1, 6}
-    assert _value(rows_by_step[1], "val", "update_response_weights") == pytest.approx(
+    assert _value(rows_by_step[1], "val", "loss_change_first_order_weights") == pytest.approx(
         _reference(record, 1, "val"), rel=RTOL
     )
     assert not _has(rows_by_step[6], "loss_change")
@@ -348,7 +351,7 @@ def test_rounded_weight_files_give_no_realized_rows(tmp_path: Path, weight_dtype
     # ... while the rows that ARE reported only use the rounded weights as the
     # point where the gradient is taken, which costs percent, not everything.
     for batch in ("train", "val"):
-        assert _value(rows_by_step[1], batch, "update_response") == pytest.approx(
+        assert _value(rows_by_step[1], batch, "loss_change_first_order") == pytest.approx(
             _reference(record, 1, batch), rel=0.1
         )
 
@@ -381,10 +384,10 @@ def test_the_update_batch_is_found_by_its_tensors_not_by_its_name(
         source,
         eval_batches={"held_out": held_out_batch(), "whatever": source.batch_a_spec()},
     )[2]
-    assert _value(rows, "held_out", "update_response", batch_a="whatever") == pytest.approx(
+    assert _value(rows, "held_out", "loss_change_first_order", batch_a="whatever") == pytest.approx(
         _reference(record, 2, "val"), rel=RTOL
     )
-    assert _value(rows, "whatever", "update_response", batch_a="whatever") == pytest.approx(
+    assert _value(rows, "whatever", "loss_change_first_order", batch_a="whatever") == pytest.approx(
         _reference(record, 2, "train"), rel=RTOL
     )
 
@@ -468,9 +471,9 @@ def test_a_clip_the_bundle_denies_shows_up_against_the_stored_weights(tmp_path: 
     run_dir, record = _write(tmp_path, clip_grad_norm=0.5)
     edit_json(run_dir / "metadata.json", gradient_clip_algorithm=..., gradient_clip_val=None)
     rows = _run(_source(run_dir, steps=[1]))[1]
-    from_weights = _value(rows, "val", "update_response_weights")
+    from_weights = _value(rows, "val", "loss_change_first_order_weights")
     assert from_weights == pytest.approx(_reference(record, 1, "val"), rel=RTOL)
-    assert abs(_value(rows, "val", "update_response") / from_weights - 1.0) > 1e-2
+    assert abs(_value(rows, "val", "loss_change_first_order") / from_weights - 1.0) > 1e-2
 
 
 def test_zero_clip_value_means_not_clipped(tmp_path: Path) -> None:
@@ -507,7 +510,7 @@ def test_step_mismatch_is_refused_or_warned(tmp_path: Path) -> None:
     source = _source(run_dir, steps=[5])
     with pytest.warns(UserWarning, match="used as it is"):
         rows = _run(source, update_response=source.update_response(on_step_mismatch="warn"))[5]
-    assert _value(rows, "val", "update_response") == pytest.approx(
+    assert _value(rows, "val", "loss_change_first_order") == pytest.approx(
         _reference(record, 3, "val"), rel=RTOL
     )
     with pytest.raises(ValueError, match="on_step_mismatch"):
@@ -545,12 +548,12 @@ def test_sgd_with_momentum_through_the_bundle(tmp_path: Path) -> None:
         source, preconditioner=source.preconditioner(), cross_pairs=[("train", "val")]
     )
     _assert_matches_the_run(record, rows_by_step, descriptor="sgd_update")
-    assert _value(rows_by_step[0], "val", "update_response_hist") == 0.0
-    assert _value(rows_by_step[3], "val", "update_response_hist") != 0.0
+    assert _value(rows_by_step[0], "val", "loss_change_first_order_hist") == 0.0
+    assert _value(rows_by_step[3], "val", "loss_change_first_order_hist") != 0.0
     # SGD's gradient part is -lr * delta_loss (dampening 0), next to the cross row.
     for step in (0, 3):
         rows = rows_by_step[step]
-        assert _value(rows, "val", "update_response_grad") == pytest.approx(
+        assert _value(rows, "val", "loss_change_first_order_grad") == pytest.approx(
             -0.05 * _value(rows, "val", "delta_loss"), rel=1e-9
         )
 
@@ -577,8 +580,10 @@ def test_pad_masked_training_loss(tmp_path: Path) -> None:
     counted = []
     for step, rows in rows_by_step.items():
         reference = float(record.steps[step].grad_update @ record.steps[step].delta)
-        assert _value(rows, "train", "update_response") == pytest.approx(reference, rel=RTOL)
-        counted.append(next(r for r in rows if r.observable == "update_response").n_valid_a)
+        assert _value(rows, "train", "loss_change_first_order") == pytest.approx(
+            reference, rel=RTOL
+        )
+        counted.append(next(r for r in rows if r.observable == "loss_change_first_order").n_valid_a)
     # The convention really removed targets (a batch without token 7 keeps all 60).
     assert min(counted) < 60
 
@@ -611,7 +616,7 @@ def test_realized_change_is_a_token_weighted_mean_over_micro_batches(
     )
     assert _value(rows, "uneven", "loss_change") == pytest.approx(reference, rel=1e-4, abs=1e-7)
     _loss, grad = record.loss_and_grad(recorded.params_before, uneven)
-    assert _value(rows, "uneven", "update_response") == pytest.approx(
+    assert _value(rows, "uneven", "loss_change_first_order") == pytest.approx(
         float(grad @ recorded.delta), rel=RTOL
     )
 
@@ -631,7 +636,7 @@ def test_other_optimizers_are_refused_through_the_bundle(tmp_path: Path) -> None
 
 def test_response_observables_need_an_update_response() -> None:
     with pytest.raises(ValueError, match="no update_response was given"):
-        Analyzer(eval_batches={"a": held_out_batch()}, observables=["update_response"])
+        Analyzer(eval_batches={"a": held_out_batch()}, observables=["loss_change_first_order"])
     with pytest.raises(TypeError, match="update_response"):
         Analyzer(eval_batches={"a": held_out_batch()}, update_response="adamw")  # type: ignore[arg-type]
 
@@ -639,8 +644,8 @@ def test_response_observables_need_an_update_response() -> None:
 def test_observables_can_be_selected(adamw_run: tuple[Path, TrainingRecord]) -> None:
     run_dir, _record = adamw_run
     source = _source(run_dir, steps=[1])
-    rows = _run(source, observables=["delta_loss", "update_response", "loss_change"])[1]
-    assert {r.observable for r in rows} == {"delta_loss", "update_response", "loss_change"}
+    rows = _run(source, observables=["delta_loss", "loss_change_first_order", "loss_change"])[1]
+    assert {r.observable for r in rows} == {"delta_loss", "loss_change_first_order", "loss_change"}
 
 
 def test_default_observables_without_an_update_response_are_unchanged(
@@ -659,8 +664,8 @@ def test_factory_returning_none_skips_the_rows(adamw_run: tuple[Path, TrainingRe
         source,
         update_response=lambda ckpt_id: None if ckpt_id.endswith("step0") else build(ckpt_id),
     )
-    assert not _has(rows_by_step[0], "update_response")
-    assert _has(rows_by_step[1], "update_response")
+    assert not _has(rows_by_step[0], "loss_change_first_order")
+    assert _has(rows_by_step[1], "loss_change_first_order")
     with pytest.raises(TypeError, match="expected an OptimizerUpdate or None"):
         _run(source, update_response=lambda ckpt_id: "adamw")
 
@@ -676,7 +681,7 @@ def test_rows_reach_the_parquet_sink(
     picked = {
         (row["revision"], row["batch_b"]): row["value"]
         for row in table
-        if row["observable"] == "update_response"
+        if row["observable"] == "loss_change_first_order"
     }
     assert set(picked) == {
         ("step1", "train"),
@@ -686,7 +691,7 @@ def test_rows_reach_the_parquet_sink(
     }
     assert picked[("step2", "val")] == pytest.approx(_reference(record, 2, "val"), rel=RTOL)
     descriptors = {row["observable"]: row["preconditioner"] for row in table}
-    assert descriptors["update_response_hist"] == "adamw_update"
+    assert descriptors["loss_change_first_order_hist"] == "adamw_update"
     assert descriptors["loss_change"] == "none"
     assert descriptors["delta_loss"] == "none"
 
@@ -742,8 +747,10 @@ def test_an_explicit_rule_works_on_any_model_bundle() -> None:
     loss = lm_loss(model(batch["input_ids"]), batch)
     grads = torch.autograd.grad(loss, params)
     l1 = float(sum(g.double().abs().sum() for g in grads))
-    assert _value(rows, "A", "update_response", batch_a="A") == pytest.approx(-lr * l1, rel=1e-4)
-    assert _value(rows, "A", "update_response_hist", batch_a="A") == 0.0
+    assert _value(rows, "A", "loss_change_first_order", batch_a="A") == pytest.approx(
+        -lr * l1, rel=1e-4
+    )
+    assert _value(rows, "A", "loss_change_first_order_hist", batch_a="A") == 0.0
     assert not _has(rows, "loss_change")
 
     # A rule that does not say which batch it consumed cannot be placed.
@@ -787,7 +794,7 @@ def test_a_source_that_rounds_the_weights_on_load_gives_no_realized_rows(
     assert not any(_has(rows, name) for name in REALIZED_CHANGE_OBSERVABLES)
     # The formula rows are reported, from theta_t and a gradient at bf16 precision.
     for batch in ("train", "val"):
-        assert _value(rows, batch, "update_response") == pytest.approx(
+        assert _value(rows, batch, "loss_change_first_order") == pytest.approx(
             _reference(record, 1, batch), rel=0.1
         )
 
@@ -903,7 +910,7 @@ def test_every_eval_batch_is_fetched_once_per_checkpoint(
     for (step, rows), batch in zip(rows_by_step.items(), drawn, strict=True):
         recorded = record.steps[step]
         _loss, grad = record.loss_and_grad(recorded.params_before, batch)
-        assert _value(rows, "val", "update_response") == pytest.approx(
+        assert _value(rows, "val", "loss_change_first_order") == pytest.approx(
             float(grad @ recorded.delta), rel=RTOL
         )
         assert _value(rows, "val", "delta_loss", batch_a="val") == pytest.approx(
@@ -955,14 +962,14 @@ def test_theta_next_is_loaded_and_evaluated_only_for_the_rows_that_need_it(
         rows = _run(source, update_response=factory, observables=observables)[1]
         return loads, forwards, {r.observable for r in rows}
 
-    formula = ["delta_loss", "update_response", "update_response_hist"]
+    formula = ["delta_loss", "loss_change_first_order", "loss_change_first_order_hist"]
     loads, base_forwards, names = measure(formula)
     assert loads == 0 and names == set(formula)
 
     # The stored weight difference needs theta_{t+1} but no forward pass.
-    loads, n_forwards, names = measure([*formula, "update_response_weights"])
+    loads, n_forwards, names = measure([*formula, "loss_change_first_order_weights"])
     assert loads == 1 and n_forwards == base_forwards
-    assert names == {*formula, "update_response_weights"}
+    assert names == {*formula, "loss_change_first_order_weights"}
 
     # The realized change needs two forward passes per micro-batch: 2 micro-batches
     # of the 4-row update batch and 4 of the 8-row held-out batch, at both thetas.

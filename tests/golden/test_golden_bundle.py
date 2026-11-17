@@ -562,13 +562,14 @@ def test_golden_update_response(tmp_path: Path, architecture: str) -> None:
                 assert rows[(*key, observable)].preconditioner == "adamw_update"
             for observable in REALIZED_CHANGE_OBSERVABLES:
                 assert ((*key, observable) in rows) == has_successor, (step, name, observable)
-            total = rows[(*key, "update_response")].value
+            total = rows[(*key, "loss_change_first_order")].value
             parts = sum(
-                rows[(*key, f"update_response_{part}")].value for part in ("grad", "hist", "wd")
+                rows[(*key, f"loss_change_first_order_{part}")].value
+                for part in ("grad", "hist", "wd")
             )
             assert total == pytest.approx(parts, rel=1e-12, abs=1e-18)
             if step == 0:
-                assert rows[(*key, "update_response_hist")].value == 0.0
+                assert rows[(*key, "loss_change_first_order_hist")].value == 0.0
             if not has_successor:
                 continue
 
@@ -582,7 +583,7 @@ def test_golden_update_response(tmp_path: Path, architecture: str) -> None:
                     for n, g in grads.items()
                 )
             )
-            from_weights = rows[(*key, "update_response_weights")].value
+            from_weights = rows[(*key, "loss_change_first_order_weights")].value
             change = rows[(*key, "loss_change")].value
             residual = rows[(*key, "loss_change_residual")].value
             worst_formula = max(worst_formula, abs(total / reference - 1.0))
@@ -598,9 +599,9 @@ def test_golden_update_response(tmp_path: Path, architecture: str) -> None:
             hypothetical = "      n/a" if p_row is None else f"{-LR * p_row.value:+.5f}"
             lines.append(
                 f"  step {step:>2} on {name:<12}: first order {total:+.5f} = grad "
-                f"{rows[(*key, 'update_response_grad')].value:+.5f} + hist "
-                f"{rows[(*key, 'update_response_hist')].value:+.5f} + wd "
-                f"{rows[(*key, 'update_response_wd')].value:+.5f} | from the weight files "
+                f"{rows[(*key, 'loss_change_first_order_grad')].value:+.5f} + hist "
+                f"{rows[(*key, 'loss_change_first_order_hist')].value:+.5f} + wd "
+                f"{rows[(*key, 'loss_change_first_order_wd')].value:+.5f} | from the weight files "
                 f"{from_weights:+.5f} | -eta*delta_loss_P {hypothetical} | realized "
                 f"{change:+.5f}, residual {residual:+.5f}"
             )

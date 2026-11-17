@@ -150,10 +150,10 @@ P_CAPPED_OBSERVABLES: tuple[str, ...] = (
 # (``"adamw_update"``, ...). Unlike ``delta_loss`` these are loss changes: they
 # carry the learning rate and the sign (negative = the loss on B goes down).
 UPDATE_RESPONSE_OBSERVABLES: tuple[str, ...] = (
-    "update_response_grad",
-    "update_response_hist",
-    "update_response_wd",
-    "update_response",
+    "loss_change_first_order_grad",
+    "loss_change_first_order_hist",
+    "loss_change_first_order_wd",
+    "loss_change_first_order",
 )
 
 # Measured only where the source can also supply ``theta_{t+1}``: the same
@@ -161,7 +161,7 @@ UPDATE_RESPONSE_OBSERVABLES: tuple[str, ...] = (
 # step realized on B, and their difference (what first order leaves over).
 # No optimizer formula enters them, so they are tagged ``"none"``.
 REALIZED_CHANGE_OBSERVABLES: tuple[str, ...] = (
-    "update_response_weights",
+    "loss_change_first_order_weights",
     "loss_change",
     "loss_change_residual",
 )
@@ -1175,17 +1175,17 @@ class Analyzer:
 
         values: dict[str, dict[str, float]] = {
             name: {
-                "update_response_grad": t.grad,
-                "update_response_hist": t.hist,
-                "update_response_wd": t.wd,
-                "update_response": t.total,
+                "loss_change_first_order_grad": t.grad,
+                "loss_change_first_order_hist": t.hist,
+                "loss_change_first_order_wd": t.wd,
+                "loss_change_first_order": t.total,
             }
             for name, t in terms.items()
         }
 
         requested = set(self.observables)
         need_loss = bool(requested & {"loss_change", "loss_change_residual"})
-        need_weights = bool(requested & {"update_response_weights", "loss_change_residual"})
+        need_weights = bool(requested & {"loss_change_first_order_weights", "loss_change_residual"})
         successor = (
             update.next_weights()
             if update.next_weights is not None and (need_loss or need_weights)
@@ -1203,7 +1203,7 @@ class Analyzer:
                     from_weights = float(
                         weight_delta_dot_fp64(grads[name], successor.params, bundle.params)
                     )
-                    values[name]["update_response_weights"] = from_weights
+                    values[name]["loss_change_first_order_weights"] = from_weights
                 if need_loss:
                     change = self._mean_loss(successor, raw) - self._mean_loss(bundle, raw)
                     values[name]["loss_change"] = change
