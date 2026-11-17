@@ -31,6 +31,7 @@ matplotlib.use("Agg")
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import pyarrow.parquet as pq
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # examples/, for _helpers
 from _helpers import step_from_revision  # noqa: E402
 
