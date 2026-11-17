@@ -198,7 +198,7 @@ def run_sweep(args: argparse.Namespace) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     # Repeats in the outer loop: a drift in the load of a shared machine then
     # hits every mode alike instead of one mode's block of runs.
-    for repeat in range(args.repeats):
+    for repeat in range(args.first_repeat, args.first_repeat + args.repeats):
         for mode in MODES:
             cmd = [
                 sys.executable,
@@ -348,6 +348,13 @@ def main() -> int:
     sweep = sub.add_parser("sweep", help="every mode x repeat, each in its own process")
     common(sweep)
     sweep.add_argument("--repeats", type=int, default=3)
+    sweep.add_argument(
+        "--first-repeat",
+        type=int,
+        default=0,
+        help="number of the first repeat. For sweeps that are interleaved by calling "
+        "this script once per repeat: without it every record would say repeat 0",
+    )
     sweep.add_argument("--out", required=True)
     table = sub.add_parser("table", help="markdown table of a results file")
     table.add_argument("results")

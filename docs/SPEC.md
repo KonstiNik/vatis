@@ -345,14 +345,14 @@ analyzer.run(source.model_specs())
     with; a value of 1 does not say whether clipping was off or merely did not
     engage (the threshold is in the bundle's metadata or in the caller's
     `clip_grad_norm`).
-  - Both exist at step 0 (the rate is in the saved param groups before any
-    update; the factor needs only the gradient). Under DDP both are formed from
-    the all-reduced gradient and the rule every rank rebuilds, so all ranks
-    hold the same values and rank 0 writes them.
-- **They exist at step 0.** An empty optimizer state is a well-defined starting
-  point for an update (`m_0 = v_0 = 0`, so the first step is
-  `−η g/(|g| + ε)`), unlike for a pre-step `P`. The first update is in the
-  rows even though it has no P rows.
+  - Under DDP both are formed from the all-reduced gradient and the rule every
+    rank rebuilds, so all ranks hold the same values and rank 0 writes them.
+- **All of these rows exist at step 0**, the step rows included. An empty
+  optimizer state is a well-defined starting point for an update
+  (`m_0 = v_0 = 0`, so the first step is `−η g/(|g| + ε)`), unlike for a
+  pre-step `P`; the rate is in the saved param groups before any update, and
+  the clip factor needs only the gradient. The first update is in the rows
+  even though it has no P rows.
 - **Step numbering.** The saved step counter `t` counts the updates already
   applied; the step being described is update number `t + 1`, and both bias
   corrections take that exponent. A counter that differs from the checkpoint
@@ -419,7 +419,9 @@ gradient the optimizer saw. vatis cannot verify that from one checkpoint:
   no gradient on the update batch, so it settles the cases it can: if the
   saved state would not move such a parameter anyway (no weight decay on it
   and no momentum history), both readings agree and the rows are exact;
-  otherwise the rows are **refused**, naming the parameter. For Adam and AdamW
+  otherwise the rows are **refused**, naming the parameter. An update batch on
+  which no backward pass runs at all (no valid token) is refused as well: it
+  gives no gradient and no record of who received one. For Adam and AdamW
   a parameter that was skipped at an earlier step also shows in the state —
   its step counter lags, or it has no state at all — and that was already
   refused.
@@ -470,8 +472,10 @@ about the optimizer formula. With bf16 (or fp16) weight files, or with a source
 that loads the weights as bf16 or fp16, these rows are
 **skipped with a warning**: the difference of two rounded sets of weights is
 dominated by the rounding early in training (measured below), and a residual
-computed from it would be an artefact. A checkpoint with no stored successor
-has no such rows, silently. `update_response(realized=False)` switches them off.
+computed from it would be an artefact. The analyzer applies the same check to
+the two models it is handed, so a rule built by hand (any callable as
+`next_weights`) cannot get realized rows from a model held narrower than fp32
+either. A checkpoint with no stored successor has no such rows, silently. `update_response(realized=False)` switches them off.
 Both losses are evaluated forward-only, as token-weighted means over
 micro-batches and DDP ranks, with the logits upcast to fp64 before the loss, so
 the cross entropy itself adds no fp32 round-off to the difference of two nearly
@@ -517,8 +521,16 @@ live tensors summed at fixed moments). In words:
   batch, on top of the `S` state vectors, which stay on the CPU. At 11M
   parameters a buffer is 42 MB; it scales with the model, so at a billion
   parameters it is 4 GB per evaluation batch — arithmetic, not a measurement.
-- The fp64 reductions are chunked: at most seven fp64 temporaries of one chunk
-  (`2²⁵` elements at most) are alive, never a parameter-sized fp64 vector.
+- The fp64 reductions are chunked, so their temporaries are bounded by the
+  chunk and not by the model. A chunk is one parameter tensor, or `2²⁵`
+  elements of it if it is larger; the clip norm runs over the flat gradient in
+  chunks of `2²⁵` elements. No single fp64 allocation exceeds one chunk and
+  fewer than 20 chunks are allocated at any moment (14 measured for the AdamW
+  rule; `test_the_reductions_the_analyzer_calls_allocate_per_chunk_not_per_model`
+  watches the allocations of the calls the analyzer makes, on a model of 64
+  chunks). Two consequences: a chunk of `2²⁵` elements is 268 MB in fp64
+  (arithmetic), and for a model below `2²⁵` parameters the clip norm's chunk
+  is the whole gradient, which is then upcast to fp64 once.
 - Under DDP every rank rebuilds the same update from the all-reduced
   gradients; only the two loss evaluations (and the record of which parameters
   received no gradient) are all-reduced. Every rank holds the buffers above.
@@ -541,10 +553,12 @@ exactly each column is: `examples/benchmark/update_response/`.
 | GPU, peak allocated memory, MB | AdamW | 1173 | 1213 (+40) | 1214 (+40) |
 | | SGD | 1173 | 1213 (+40) | 1214 (+40) |
 
-- The CPU is a shared 16-core machine (8 threads used) and its wall-clock
-  follows the load: the upper ends of the ranges are runs at a higher load. In
-  the quiet runs the formula rows add 0.1 to 0.2 s per checkpoint (about 2%)
-  and the realized rows 1.4 to 2.2 s (×1.2 to ×1.3). On the GPU (one RTX 3090
+- The CPU is a shared 16-core machine (8 threads used). The first two of the
+  five repeats were slower than the last three (the upper ends of the ranges);
+  the recorded load average does not clearly say why. In the last three the
+  formula rows add 0 to 0.2 s per checkpoint (AdamW +0.12 to +0.18 s, SGD
+  −0.02 to +0.09 s) and the realized rows 1.4 to 2.2 s (×1.2 to ×1.3). On the
+  GPU (one RTX 3090
   Ti) the formula rows add 0.1 to 0.2 s and the realized rows 0.2 to 0.4 s per
   checkpoint; relative to a 0.6 to 0.8 s checkpoint that is ×1.1 to ×1.5,
   because at this size the fixed costs of a checkpoint dominate. With
@@ -1313,7 +1327,7 @@ n_valid_a          int64
 n_valid_b          int64
 observable         str           # "chi_loss" | "chi_loss_normalized" | "chi_net" | ...
 value              float64
-n_hutchinson       int32         # null if not applicable
+n_hutchinson       int32         # the n_hutchinson the run was made with, on every row
 hutchinson_seed    int64         # null if not applicable
 wallclock_s        float64
 preconditioner     str           # "none" on raw rows; the P descriptor on P rows

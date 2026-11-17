@@ -1,55 +1,48 @@
-# What the rows of the step that was taken cost — 11M-parameter Llama bundles
+# What the rows of the step that was taken cost — 11M-parameter Llama
 
-Measured with `update_response_cost.py` (this directory). Two native bundles of
-the same 11M-parameter Llama (10,981,440 parameters; one fp32 parameter vector
-is 42 MB), one trained with AdamW and one with SGD with momentum, both with
-fp32 weight files, a pad-masked loss and gradient-norm clipping at 1.0 (stated
-with `--clip-grad-norm 1.0`). Three modes:
+Measured with `update_response_cost.py` in this directory, on two bundles of the
+same Llama (10,981,440 parameters; one fp32 parameter vector is 42 MB): one
+trained with AdamW, one with SGD with momentum. Both have fp32 weight files, a
+pad-masked loss and gradient-norm clipping at 1.0 (stated with
+`--clip-grad-norm 1.0`).
 
 | mode | what runs |
 |---|---|
-| `baseline` | the existing raw rows only — no update rule |
-| `formula` | + `update_response=source.update_response(realized=False)`: the `loss_change_first_order*` rows and the two step rows |
-| `realized` | + the realized rows (`loss_change_first_order_weights`, `loss_change`, `loss_change_residual`) |
+| `baseline` | the analysis without an update rule |
+| `formula` | + the `loss_change_first_order*` rows and the step rows (`update_response(realized=False)`) |
+| `realized` | + `loss_change_first_order_weights`, `loss_change`, `loss_change_residual` |
 
-Every measurement is one process that analyzes four checkpoints (steps 1, 2,
-661, 6611) with the checkpoint's own update batch (32 × 512 tokens) and held-out
-batches of 8 × 512 tokens as eval batches. No preconditioner, no cross pairs.
+Each measurement is one process that analyzes four checkpoints (steps 1, 2, 661,
+6611) with the update batch (32 × 512 tokens) and held-out batches of 8 × 512
+tokens. No preconditioner, no cross pairs.
 
-**What is reported.** Wall-clock is `time.perf_counter()` around
-`Analyzer.run`, divided by the four checkpoints; it includes loading each
-checkpoint from disk. Peak RSS is the peak resident set size of the whole
-process (`ru_maxrss`: interpreter, torch and the model included); "peak − start"
-subtracts the resident size just before the bundle was opened. Peak GPU memory
-is `torch.cuda.max_memory_allocated()` of the process after the run, reset
-before it: this process's own tensors, not other processes on the card and not
-the allocator's cache. Each cell is the median over the runs with the smallest
-and the largest value in brackets.
+**Columns.** Wall-clock is `time.perf_counter()` around `Analyzer.run`, per
+checkpoint, loading included. Peak RSS is the peak resident memory of the whole
+process (`ru_maxrss`). Peak GPU memory is `torch.cuda.max_memory_allocated()`,
+reset before the run: this process's tensors only. A cell is the median over
+the runs, with the smallest and largest value in brackets.
 
-**How far to trust it.** The machine and the card are shared. On the CPU the
-wall-clock follows the machine's load (the 1-minute load average is recorded
-with every run and given below), so a difference of a few percent between two
-modes is inside the spread and is not a result; the memory columns are much
-more stable. The countable costs behind these numbers — forward and backward
-passes, buffers held — are pinned exactly, on toy bundles, by
-`tests/unit/test_update_response_cost.py`.
+**Limits.**
 
-**Which tree.** The tables were measured before the result-file columns and
-the `hutchinson` default of `dev` were merged into this branch, and were not
-regenerated: the merge does not change what the script measures (it names the
-estimator, `chi_net_method="hutchinson"`, and the passes it counts are the
-same). Checked on the merged tree for the AdamW bundle on the GPU, three runs
-per mode: 0.6 / 0.7 / 0.9 s per checkpoint (×1.23 and ×1.52 against ×1.21 and
-×1.50 below; the machine was less loaded, 1-minute load average 0.7 – 2.0),
-peak GPU memory 1173 / 1213 / 1214 MB as
-below, peak RSS +109 MB and +142 MB against +115 MB and +138 MB.
-
-**Not measured:** models larger than 11M parameters, more than one GPU, DDP,
-and bf16 forward passes. At this size the fixed costs of a checkpoint (loading
-it, Python overhead) are a large part of the wall-clock, so the *ratios* below
-should not be carried over to a large model; the *counts* (no extra backward
-pass; two extra forward passes per micro-batch for the realized rows; one more
-parameter-sized vector per evaluation batch) do carry over.
+- The machine and the card are shared. A wall-clock difference of a few percent
+  is not a result; the memory columns are much more stable.
+- Not measured: larger models, more than one GPU, DDP, bf16. At this size
+  loading and Python overhead are a large part of the wall-clock, so the ratios
+  do not carry over to a large model. The counts do — no extra backward pass,
+  two forward passes per micro-batch for the realized rows, one parameter-sized
+  vector per evaluation batch — and `tests/unit/test_update_response_cost.py`
+  pins them.
+- The tables were measured before the result-file columns and the `hutchinson`
+  default were merged into this branch. The merge does not change what the
+  script measures: it names the estimator, and the passes are the same. A check
+  after the merge is in `results_gpu_after_merge.jsonl` (AdamW bundle, GPU,
+  three runs per mode): 0.6 / 0.7 / 0.9 s per checkpoint (×1.23 and ×1.52) and
+  1173 / 1213 / 1214 MB of GPU memory, i.e. the memory of the table below and
+  ratios within its spread.
+- The `adamw` and `sgd` CPU runs were interleaved by calling the script once
+  per repeat, so the `repeat` field of those records in `results_cpu.jsonl` is
+  0 throughout; which repeat a record belongs to follows only from the order of
+  the lines. The script now takes `--first-repeat` for such runs.
 
 ## CPU
 
@@ -76,31 +69,21 @@ parameter-sized vector per evaluation batch) do carry over.
 
 Reading the CPU table (8 torch threads on a shared 16-core machine):
 
-- **The wall-clock follows the machine's load, and the spread is larger than
-  most differences.** The `adamw` and `sgd` runs were interleaved repeat by
-  repeat. The first two repeats ran at a 1-minute load average of 8 to 10.6 and
-  took 10 to 14 s per checkpoint; the last three ran at about 8 (this
-  benchmark's own threads) and took 7.4 to 9.6 s. The two side sweeps
-  (`adamw-4-eval-batches`, `adamw-nh8`) were run before that, not interleaved,
-  at loads of 8.3 to 12.2.
-- **Formula rows.** In the three quiet repeats they add 0.1 to 0.2 s per
-  checkpoint to 7.4 s (about 2%), for both optimizers. Over all runs that is
-  inside the spread. In the `adamw-nh8` sweep (two runs per mode) the mode with
-  the rule even came out faster than the one without: that is the spread, not
-  an effect.
-- **Realized rows.** In the quiet repeats they add 1.4 to 2.2 s per checkpoint
-  (×1.2 to ×1.3): two more forward passes per micro-batch, and the second
-  checkpoint read from disk.
+- **Wall-clock.** Of the five `adamw` and `sgd` repeats the first two were
+  slower (10 to 14 s per checkpoint) than the last three (7.4 to 9.6 s). The
+  recorded load average does not separate them clearly (7.7 to 10.6 against 7.4
+  to 8.7), so the cause is not established. In the last three repeats the
+  formula rows add 0 to 0.2 s per checkpoint to 7.4 s (AdamW +0.12 to +0.18 s,
+  SGD −0.02 to +0.09 s) and the realized rows 1.4 to 2.2 s (×1.2 to ×1.3). Over
+  all runs the formula rows are inside the spread: in `adamw-nh8` the mode with
+  the rule came out faster than the one without.
 - **AdamW rule against SGD rule.** No difference in wall-clock that this
-  measurement resolves (formula rows, quiet repeats: 7.5 to 7.6 s against 7.5
-  to 7.6 s; without the rule both bundles take 7.4 s).
-- **Memory.** Peak RSS rises by 105 MB (AdamW) and 90 MB (SGD) with the formula
-  rows. The counts say three and two buffers of 42 MB (126 MB and 84 MB): one
-  kept gradient plus two or one state vectors. RSS is not a fine enough
-  instrument to separate the two optimizers (the ranges overlap). The realized
-  rows add nothing further to the peak. **With four evaluation batches instead
-  of two the rule adds 188 MB instead of 105 MB**: memory grows with the number
-  of evaluation batches (the counts say five buffers, 210 MB).
+  measurement resolves.
+- **Memory.** With the formula rows peak RSS rises by 105 MB (AdamW) and 90 MB
+  (SGD); the counts say 126 MB and 84 MB (one kept gradient plus two or one
+  state vectors of 42 MB). The realized rows add nothing further to the peak.
+  With four evaluation batches instead of two the rule adds 188 MB (counts:
+  210 MB): memory grows with the number of evaluation batches.
 
 ## GPU
 
@@ -125,28 +108,22 @@ Reading the CPU table (8 torch threads on a shared 16-core machine):
 | adamw-nh8 (adamw) | realized | 2 | 1.8 (1.8 – 1.8) | ×1.18 | 1341 (1337 – 1346) | +135 | 812 | 1216 (1216 – 1216) | +42 |
 
 
-Reading the GPU table (one RTX 3090 Ti, shared; no run failed with an
-allocation error, none was repeated):
+Reading the GPU table (one shared RTX 3090 Ti; no run failed with an allocation
+error and none was repeated):
 
-- **Wall-clock.** The formula rows add 0.1 to 0.2 s per checkpoint (AdamW
-  bundle 0.8 → 1.0 s, SGD bundle 0.6 → 0.7 s), the realized rows 0.2 to 0.4 s
-  (1.2 s and 0.8 s). With `n_hutchinson = 8` the analysis without the rule takes
-  1.5 s per checkpoint and the additions are about the same number of seconds
-  (1.6 s and 1.8 s), so the ratio falls as the `χ_net` estimate gets more
-  expensive. One run is an outlier (4.2 s per checkpoint: the first `formula`
-  run on the AdamW bundle); the medians are not affected.
-- **AdamW rule against SGD rule.** On the card both cost the same memory. In
-  wall-clock the AdamW bundle is slower in every mode including the one without
-  the rule (0.8 s against 0.6 s), so that difference is not the rule's; the
-  rule's own addition is 0.2 s (AdamW) against 0.1 s (SGD) per checkpoint for
-  the formula rows, which is at the resolution of this measurement. On the host
-  the AdamW rule holds two state vectors and the SGD rule one (peak RSS +115 MB
-  against +36 MB).
-- **GPU memory grows with the number of evaluation batches.** With two eval
-  batches the rule adds 40 MB at the peak, with four it adds 127 MB: one kept
-  gradient (42 MB) per evaluation batch beyond the first. The optimizer state
-  does not show here because it stays on the CPU.
-- **The realized rows do not raise the peak GPU memory** beyond the formula
-  rows at this size. The second model (42 MB of weights) is on the card only
-  during the realized pass, which is forward-only; the peak is reached earlier,
-  during a backward pass.
+- **Wall-clock.** The formula rows add 0.1 to 0.2 s per checkpoint and the
+  realized rows 0.2 to 0.4 s. With `n_hutchinson = 8` the baseline takes 1.5 s
+  and the additions stay about the same in seconds, so the ratio falls as the
+  `χ_net` estimate gets more expensive. One `formula` run on the AdamW bundle
+  took 4.2 s per checkpoint; the medians are not affected.
+- **AdamW rule against SGD rule.** The same GPU memory. The AdamW sweep is
+  slower in every mode, the baseline included (0.8 s against 0.6 s); it ran
+  first, at a higher machine load, and in the check after the merge its
+  baseline is 0.6 s as well. No difference between the two rules is resolved.
+  On the host the AdamW rule holds two state vectors and the SGD rule one (peak
+  RSS +115 MB against +36 MB).
+- **Memory.** With two evaluation batches the rule adds 40 MB of GPU memory at
+  the peak, with four it adds 127 MB: one kept gradient (42 MB) per further
+  evaluation batch. The optimizer state stays on the CPU. The realized rows do
+  not raise the peak: the second model is on the card only during the
+  forward-only realized pass, and the peak is reached during a backward pass.

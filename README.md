@@ -212,16 +212,18 @@ analyzer.run(source.model_specs())
 | `loss_change` | L_B(θ_{t+1}) − L_B(θ_t), the realized change |
 | `loss_change_residual` | `loss_change − loss_change_first_order_weights` |
 | `update_lr`, `update_clip_factor` | the learning rate the step applied and the factor its gradient was clipped by (1 if not clipped), on the update batch's own pair |
+| `update_lr_min`, `update_lr_max` | written instead of `update_lr` when parameter groups have different learning rates: the smallest and the largest |
 
 The rows sit on the pair (update batch, `B`) for every eval batch `B`. They are
 loss changes — learning rate included, negative when the loss falls — for
-AdamW, Adam and SGD bundles, at every checkpoint including step 0. The last
-three need the next step in the bundle and **fp32 weight files loaded as fp32**;
-with bf16 files (or `load_local_bundle(dtype="bf16")`) they are skipped with a
+AdamW, Adam and SGD bundles, at every checkpoint including step 0.
+`loss_change_first_order_weights`, `loss_change` and `loss_change_residual`
+need the next step in the bundle and **fp32 weight files loaded as fp32**; with
+bf16 files (or `load_local_bundle(dtype="bf16")`) they are skipped with a
 warning, because the difference of two rounded sets of weights is mostly
 rounding.
 
-Two things to know before using it:
+Three things to know before using it:
 
 - **Gradient clipping has to be stated.** It changes the update and leaves no
   trace in the saved optimizer state, so vatis never assumes it either way. A
@@ -233,11 +235,20 @@ Two things to know before using it:
   only if one optimizer step on the stored batch at the stored weights is what
   the run did (no dropout, the same loss, token-weighted gradient
   accumulation). Where the realized rows exist, `loss_change_first_order` and
-  `loss_change_first_order_weights` must agree; if they do not, that assumption fails
-  for your bundle
+  `loss_change_first_order_weights` must agree; if they do not, that assumption
+  fails for your bundle
   ([`docs/SPEC.md` → The response to the update that was taken](docs/SPEC.md)).
-  A residual near the round-off of the forward pass (about `1e-8` to `1e-7` on
-  an 11M-parameter model in fp32) is noise.
+  "Agree" means to about `1e-5` relative: on the fp32 bundles measured here
+  (an 11M-parameter Llama, AdamW and SGD) the two differ by `1e-8` to `1.5e-5`.
+  It is worse only for a step far below the resolution of fp32 weights: at the
+  first warm-up step of the SGD run (learning rate `1e-5`) the stored weights
+  lost 1.6% of the step.
+- **Small residuals are noise.** `loss_change_residual` cannot be resolved
+  below the round-off of the fp32 forward pass. That floor was `1e-8` to `1e-7`
+  for this model with batches of 32 × 512 and 8 × 512 tokens; it depends on the
+  model and the batch size. To measure your own, evaluate
+  `L_B(θ_{t+1}) − L_B(θ_t)` at a couple of steps with the whole model cast to
+  fp64 and compare it with the `loss_change` row: their difference is the floor.
 
 ## Output
 
