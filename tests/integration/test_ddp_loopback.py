@@ -79,10 +79,12 @@ from tests.fixtures.tiny_transformer import (
 from tests.integration._ddp_worker import (
     ADAMW_BETA2,
     ADAMW_EPS,
+    GatedTiny,
     ShapeKeyedProbe,
     adamw_preconditioner,
     adamw_second_moment,
     ceiling_preconditioner,
+    gate_batch,
     update_response_setup,
 )
 from vatis import analyze
@@ -119,6 +121,8 @@ def _run_ddp_rows(
     adamw: bool = False,
     micro_batch_size: int | None = None,
     distribution: str | None = None,
+    gated: bool = False,
+    timeout: float = 300,
 ) -> list[list[dict[str, Any]]]:
     """Spawn a 2-rank torchrun pinned to CPU, return every rank's rows (as dicts)."""
     env = os.environ.copy()
@@ -158,7 +162,9 @@ def _run_ddp_rows(
         cmd += ["--micro-batch-size", str(micro_batch_size)]
     if distribution is not None:
         cmd += ["--hutchinson-distribution", distribution]
-    result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
+    if gated:
+        cmd.append("--gated")
+    result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(
             "torchrun failed:\n--- stdout ---\n"
@@ -797,6 +803,101 @@ def test_ddp_stderr_is_the_root_of_the_summed_rank_variances(tmp_path: Path, met
     assert set(other) == set(ddp)
     for observable, row in ddp.items():
         assert other[observable]["value_probe_stderr"] == row["value_probe_stderr"], observable
+
+
+def test_ddp_ranks_agree_on_which_parameters_received_a_gradient(tmp_path: Path) -> None:
+    """A parameter that is in the graph on one rank's shard only.
+
+    ``GatedTiny.gate`` gets a gradient from the one marked sequence of the
+    update batch, which lies in rank 0's shard; on rank 1 autograd returns
+    ``None`` for it. The saved state moves the gate (momentum, weight decay), so
+    a rank that believed it had received no gradient would refuse to rebuild the
+    step. The record of who received a gradient is therefore all-reduced: both
+    ranks must proceed, and write the single-process numbers.
+
+    Without that all-reduce rank 1 raises while rank 0 goes on to the next
+    collective call; the run then fails or hangs, and the timeout turns a hang
+    into a failure.
+    """
+    seed, batch_size = 0, 4
+    ranks = _run_ddp_rows(
+        tmp_path / "ddp_gated.json",
+        seed=seed,
+        batch_size=batch_size,
+        n_h=2,
+        method="hutchinson",
+        update_response=True,
+        gated=True,
+        timeout=180,
+    )
+
+    def single_process(gated_rows: tuple[int, ...]) -> dict[tuple[str, str, str], float]:
+        torch.manual_seed(seed)
+        model = GatedTiny().eval()
+        bundle = ModelBundle(
+            model=model,
+            params=list(model.parameters()),
+            forward_fn=lambda m, b: m(b["input_ids"]),
+            loss_fn=causal_lm_loss,
+            valid_mask_fn=causal_lm_valid_mask,
+            identifier="toy@step0",
+        )
+        batch = gate_batch(
+            make_tiny_lm_batch(batch_size=batch_size, seed=seed, pad_fraction=0.25, device="cpu"),
+            gated_rows,
+        )
+        other = gate_batch(
+            make_tiny_lm_batch(
+                batch_size=batch_size, seed=seed + 1, pad_fraction=0.25, device="cpu"
+            ),
+            (),
+        )
+        update = update_response_setup(bundle, batch)
+        results = analyze(
+            model=bundle,
+            revisions=["step0"],
+            eval_batches={"val": batch, "other": other},
+            update_response=lambda ckpt_id: update,
+            chi_net_method="hutchinson",
+            n_hutchinson=2,
+            micro_batch_size=1,
+            sink=None,
+            device="cpu",
+        )
+        return {
+            (r.batch_a, r.batch_b, r.observable): r.value
+            for r in results[0].rows
+            if r.observable in UPDATE_RESPONSE_OBSERVABLES
+        }
+
+    # The premise: with no marked sequence at all the rule IS refused, because
+    # the saved state moves the gate. So a rank deciding on its own shard would
+    # refuse on rank 1.
+    with pytest.raises(ValueError, match="receives no gradient on the update batch"):
+        single_process(())
+    # ... and the marked sequence is in rank 0's shard only.
+    assert shard_batch({"x": torch.arange(batch_size)}, rank=0, world_size=2)[0]["x"].tolist() == [
+        0,
+        1,
+    ]
+
+    base = single_process((0,))
+    assert len(base) == 2 * len(UPDATE_RESPONSE_OBSERVABLES)
+    for rank, rows in enumerate(ranks):
+        got = {
+            (r["batch_a"], r["batch_b"], r["observable"]): r["value"]
+            for r in rows
+            if r["observable"] in UPDATE_RESPONSE_OBSERVABLES
+        }
+        assert set(got) == set(base), rank
+        for key, expected in base.items():
+            # The momentum part is the gradient dotted with this rule's seeded
+            # random first moment: a sum of terms of random sign, far smaller
+            # than the terms. The fp32 all-reduce of the gradient shows in it at
+            # 1.05e-6 of its own size here (3.4e-9 absolute), so the bound is
+            # taken against the largest part of the pair.
+            scale = max(abs(base[(key[0], key[1], name)]) for name in UPDATE_RESPONSE_OBSERVABLES)
+            assert abs(got[key] - expected) <= DDP_REL * scale, (rank, key, got[key], expected)
 
 
 def test_ddp_rows_of_the_step_taken_follow_the_column_rule(tmp_path: Path) -> None:

@@ -34,6 +34,11 @@ realized-change rows. Those involve no probes, so they must agree with a single
 process as they are; what the test sees is whether the dot products use the
 all-reduced gradients and whether the two loss evaluations are all-reduced.
 
+``--gated`` (with ``--update-response``) uses :class:`GatedTiny` and marks one
+sequence of the update batch (:func:`gate_batch`): the model then has a
+parameter that is in the graph on one rank's shard only. Whether the ranks agree
+that it received a gradient is what the all-reduce of that record is for.
+
 ``--adamw`` (with ``--preconditioner``) uses :func:`adamw_preconditioner`
 instead: a ``P`` built by ``Preconditioner.adamw`` from a seeded second moment
 with zeros in it, so the rows carry ``preconditioner_eps`` /
@@ -126,6 +131,43 @@ def ceiling_preconditioner(n_params: int) -> Preconditioner:
     return Preconditioner.from_diagonal(diag, descriptor="explicit", ceiling=CEILING)
 
 
+# A sequence that starts with this token switches the gate of :class:`GatedTiny` on.
+GATE_TOKEN = 7
+
+
+class GatedTiny(torch.nn.Module):
+    """The tiny transformer plus one parameter that only some data reaches.
+
+    ``gate`` scales the logits of the sequences that start with ``GATE_TOKEN``.
+    A batch without such a sequence leaves it out of the graph altogether:
+    autograd then returns ``None`` for it, not zeros.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.inner = TinyTransformer()
+        self.gate = torch.nn.Parameter(torch.tensor(0.5))
+
+    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+        logits: torch.Tensor = self.inner(input_ids)
+        hit = input_ids[:, 0] == GATE_TOKEN
+        if bool(hit.any()):
+            logits = logits * (1.0 + self.gate * hit.to(logits.dtype)[:, None, None])
+        return logits
+
+
+def gate_batch(batch: dict[str, torch.Tensor], rows: tuple[int, ...]) -> dict[str, torch.Tensor]:
+    """A copy of ``batch`` in which exactly the sequences ``rows`` start with ``GATE_TOKEN``.
+
+    The first input token is no target of the shifted loss, so the labels stay.
+    """
+    ids = batch["input_ids"].clone()
+    first = ids[:, 0]
+    first[first == GATE_TOKEN] = GATE_TOKEN + 1
+    first[list(rows)] = GATE_TOKEN
+    return {**batch, "input_ids": ids}
+
+
 def update_response_setup(
     bundle: ModelBundle, update_batch: dict[str, torch.Tensor]
 ) -> OptimizerUpdate:
@@ -139,7 +181,7 @@ def update_response_setup(
     """
     gen = torch.Generator().manual_seed(11)
     params = bundle.params
-    successor_model = TinyTransformer().eval()
+    successor_model = type(bundle.model)().eval()
     with torch.no_grad():
         for new, old in zip(successor_model.parameters(), params, strict=True):
             new.copy_(old + 1e-3 * torch.randn(old.shape, generator=gen))
@@ -230,6 +272,11 @@ def main() -> int:
         action="store_true",
         help="add a second eval batch and an explicit update rule (update-response rows)",
     )
+    parser.add_argument(
+        "--gated",
+        action="store_true",
+        help="with --update-response: a parameter that only rank 0's shard gives a gradient to",
+    )
     args = parser.parse_args()
 
     if args.pin_probes:
@@ -240,7 +287,7 @@ def main() -> int:
     init_distributed()
     try:
         torch.manual_seed(args.seed)
-        model = TinyTransformer().eval()
+        model = (GatedTiny() if args.gated else TinyTransformer()).eval()
         for p in model.parameters():
             p.requires_grad_(True)
         bundle = ModelBundle(
@@ -279,6 +326,10 @@ def main() -> int:
             eval_batches["other"] = make_tiny_lm_batch(
                 batch_size=args.batch_size, seed=args.seed + 1, pad_fraction=0.25, device="cpu"
             )
+            if args.gated:
+                # Sequence 0 is in rank 0's shard; no other sequence has the token.
+                batch = eval_batches["val"] = gate_batch(batch, (0,))
+                eval_batches["other"] = gate_batch(eval_batches["other"], ())
             update = update_response_setup(bundle, batch)
         results = analyze(
             model=bundle,
