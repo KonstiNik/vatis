@@ -8,7 +8,7 @@ benchmarks, each in its own subdirectory with its committed results:
 |---|---|---|---|
 | [`single_gpu/`](single_gpu/results_pythia-160m.md) | wallclock + peak memory vs `(method, n_hutchinson, batch_size)` | pythia-160m | 1× A100 (MIG 3g.20gb slice) |
 | [`ddp_scaling/`](ddp_scaling/DDP_SCALING_RESULTS.md) | strong / weak DDP scaling efficiency across ranks | pythia-1.4b | 1–4× A100 (40 GB) |
-| [`accuracy/`](accuracy/accuracy_pythia-14m.png) | χ_net estimator variance vs `n_hutchinson` (both methods) | pythia-14m | 1× A100 |
+| [`accuracy/`](accuracy/accuracy_pythia-14m.png) | χ_net estimator variance vs `n_hutchinson` (both methods) | pythia-14m | 1× A100 (June 2026); re-run on 1× RTX 3090 Ti (November 2026) |
 
 Each subdirectory holds its sweep script, an sbatch job, the committed result
 (`*.md` / `*.json`), and a plot (`*.png`).
@@ -65,10 +65,16 @@ subdirectory (CPU-only; needs `vatis[examples]` for matplotlib).
   variate is meant to lower the variance in the high-`χ_pos` regime. The
   committed sweep (`accuracy_pythia-14m.json`, where `χ_pos` is tiny) does not
   show it: run on the same probes, both estimators return practically the same
-  value for every seed. The file predates the current probe draw and records
-  `ref_n_h = 4096` although `accuracy_sweep.sbatch` passes 2048, so it cannot be
-  regenerated bit for bit from the committed job script.
+  value for every seed. The file was regenerated in November 2026 with the
+  current code on an RTX 3090 Ti, with the settings recorded in it
+  (`ref_n_h = 4096`; `accuracy_sweep.sbatch` passes 2048).
 
+> The `single_gpu/` and `ddp_scaling/` results are from June 2026 and were not
+> re-run (no A100s here). With the current code, `chi_net` and `chi_pos` would be
+> a different random probe draw for the same seed (`chi_loss` and `delta_loss`
+> would not change), and the timings may be higher, because the probes are now
+> drawn on the CPU.
+>
 > Numbers are hardware-specific and meant as orientation, not guarantees. For a
 > consumer-GPU smoke check and the end-to-end deployment-example findings, see
 > [`../BENCHMARK.md`](../BENCHMARK.md).

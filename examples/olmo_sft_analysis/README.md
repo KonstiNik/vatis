@@ -92,6 +92,11 @@ model fit a single ~93 GiB GPU; the rationale is what you adapt for your own mod
 
 ## Resources (measured: 1× H100, ~93 GiB)
 
+The figures and numbers below are from June 2026 and were not re-run (a 7B
+model on an H100 is out of reach here). With the current code, `chi_net` and
+`chi_pos` would be a different random probe draw for the same seed, and the run
+may take longer, because the probes are now drawn on the CPU.
+
 From `resources.json` / `gpu_activity.png` for the shipped config (code +
 English self-pairs **plus** the cross pair, `seq_len=1024`):
 
