@@ -76,8 +76,9 @@ imports) → `spectral_position.png`, `lnp_components.png`, `gpu_activity.png`:
 
 ## What it shows
 
-`analyze_results.py` draws three figures from the run's `results.parquet` and
-`resources.json` (both regenerable and not committed):
+The three committed figures are the result of this example; the run's result
+file (`results.parquet`) and resource log (`resources.json`) are not committed.
+`analyze_results.py` draws the figures from those two files:
 
 - [`spectral_position.png`](spectral_position.png) — `chi_pos` for the code and
   English self-pairs plus the cross pair `chi_pos(english, code)`.
