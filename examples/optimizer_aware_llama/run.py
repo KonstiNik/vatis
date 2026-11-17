@@ -5,13 +5,13 @@ script is the **expensive compute step**. It reads a checkpoint bundle written b
 the training stack, runs the raw and AdamW rulers over every checkpoint on the
 GPU, and writes
 
-- ``examples/output/results.parquet``  — the canonical long-format result table
-- ``examples/output/run_summary.json`` — run metadata the parquet has no column
+- ``examples/optimizer_aware_llama/results.parquet``  — the canonical long-format result table
+- ``examples/optimizer_aware_llama/run_summary.json`` — run metadata the parquet has no column
   for (per-checkpoint train loss / lr from the bundle, the performance table,
   the P = I re-check, the epsilon-ceiling diagnostic, the data-fallback flag)
-- ``examples/output/performance.csv``  — the performance table on its own
+- ``examples/optimizer_aware_llama/performance.csv``  — the performance table on its own
 
-Phase 2 (``examples/two_rulers_llama_evaluate.py``) turns those two files into
+Phase 2 (``examples/optimizer_aware_llama/evaluate.py``) turns those two files into
 the figure and the printed tables. It imports no vatis code, which is what keeps
 the parquet honest as *the* contract with downstream consumers.
 
@@ -21,7 +21,7 @@ the training stack pins one torch build, vatis another, and the **on-disk bundle
 is the entire interface**. Run the training script first; it prints the exact
 invocation for this one.
 
-    python examples/two_rulers_llama.py --bundle <run>/bundle \
+    python examples/optimizer_aware_llama/run.py --bundle <run>/bundle \
         --eval-batches <run>/eval_batches --device cuda
 
 What is measured, and why it is shaped this way:
@@ -74,7 +74,7 @@ from typing import Any
 import numpy as np
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from vatis.analyzer import Analyzer  # noqa: E402
 from vatis.core.preconditioner import (  # noqa: E402
@@ -104,7 +104,7 @@ RAW_TO_P = {
     "chi_pos": "chi_pos_P",
 }
 
-DEFAULT_OUT = Path(__file__).parent / "output"
+DEFAULT_OUT = Path(__file__).parent
 
 
 # --------------------------------------------------------------- model factory
@@ -909,7 +909,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"wrote {out_dir / 'performance.csv'}")
     print(f"wrote {out_dir / 'run_summary.json'}")
     print("\nNext (phase 2, cheap, no vatis imports -- figure + tables):")
-    print(f"  python examples/two_rulers_llama_evaluate.py --dir {out_dir}")
+    print(f"  python examples/optimizer_aware_llama/evaluate.py --dir {out_dir}")
     return 0 if not nonfinite and identity["passed"] else 1
 
 

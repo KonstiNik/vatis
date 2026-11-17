@@ -29,10 +29,10 @@ This script is the expensive half: it runs vatis over the bundle and writes
   needs is a row: the learning rate and the clip factor of each step included)
 - ``<out>/run_summary.json`` the settings of the run
 
-``examples/adamw_vs_sgd_reconstruction_evaluate.py`` turns those into the table
+``examples/adamw_vs_sgd_reconstruction/evaluate.py`` turns those into the table
 and the figure and imports no vatis code.
 
-    python examples/adamw_vs_sgd_reconstruction.py --bundle <run>/bundle \\
+    python examples/adamw_vs_sgd_reconstruction/run.py --bundle <run>/bundle \\
         --eval-batches <run>/eval_batches --clip-grad-norm 1.0 --device cuda
 
 What the bundle has to provide: fp32 weight files, and for every step used the
@@ -61,14 +61,14 @@ from typing import Any
 import numpy as np
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from vatis.analyzer import Analyzer  # noqa: E402
 from vatis.data.collate import shifted_lm_targets  # noqa: E402
 from vatis.models import load_local_bundle  # noqa: E402
 from vatis.sinks.parquet import ParquetSink  # noqa: E402
 
-DEFAULT_OUT = Path(__file__).parent / "adamw_vs_sgd_reconstruction"
+DEFAULT_OUT = Path(__file__).parent
 DEFAULT_LLAMA_PATH = "/workspace/antonio_code"
 UPDATE_BATCH = "update_batch"
 HELD_OUT = "held_out"
@@ -252,7 +252,7 @@ def main() -> int:
     (args.out / "run_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(f"{len(steps)} checkpoints in {wall:.1f} s on {summary['device_name']}")
     print(f"wrote {args.out / 'results.parquet'} and {args.out / 'run_summary.json'}")
-    print(f"next: python examples/adamw_vs_sgd_reconstruction_evaluate.py --dir {args.out}")
+    print(f"next: python examples/adamw_vs_sgd_reconstruction/evaluate.py --dir {args.out}")
     return 0
 
 

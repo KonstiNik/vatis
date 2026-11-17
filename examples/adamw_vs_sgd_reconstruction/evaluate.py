@@ -1,6 +1,6 @@
 """Which update rule reconstructs the step an AdamW run took? Phase 2: table + figure.
 
-Reads what ``examples/adamw_vs_sgd_reconstruction.py`` wrote and produces
+Reads what ``examples/adamw_vs_sgd_reconstruction/run.py`` wrote and produces
 
 - ``<dir>/table.md``            every prediction next to the truth, per step and batch
 - ``<dir>/reconstruction.png``  the ratio prediction / truth, one panel per batch
@@ -24,7 +24,7 @@ Each prediction is reported as a ratio to the truth and as a difference from it.
 A ratio of 1 is a perfect reconstruction of the *first-order* change; how far the
 first-order change itself is from the realized one is the last column.
 
-    python examples/adamw_vs_sgd_reconstruction_evaluate.py \\
+    python examples/adamw_vs_sgd_reconstruction/evaluate.py \\
         --dir examples/adamw_vs_sgd_reconstruction
 """
 
@@ -42,7 +42,7 @@ matplotlib.use("Agg")  # headless — no display backend
 import matplotlib.pyplot as plt  # noqa: E402
 import pyarrow.parquet as pq  # noqa: E402
 
-DEFAULT_DIR = Path(__file__).parent / "adamw_vs_sgd_reconstruction"
+DEFAULT_DIR = Path(__file__).parent
 UPDATE_BATCH = "update_batch"
 BATCHES = {UPDATE_BATCH: "the step's own update batch", "held_out": "a held-out batch"}
 
