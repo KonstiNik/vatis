@@ -45,6 +45,10 @@ Doing (2) first is the more cautious path: if a simpler feature doesn't produce 
 
 Code: `examples/spectral_tail_experiment.py` (compute), `examples/spectral_tail_evaluate.py` (plots).
 Results: `examples/spectral_tail/results_pythia-{14m,31m,70m,160m,410m}.parquet`.
+These files and the figures are from April 2026 and were not re-run (that would
+mean downloading about 34 GB of checkpoints). They have the original 11 result
+columns. With the current code, `chi_net` and `chi_pos` would be a different
+random probe draw for the same seed; `chi_loss` and `delta_loss` would not change.
 Figures: `examples/spectral_tail/figures/`.
 Key plots: `figures/chi_pos_signal_vs_controls_pythia-410m.png`, `figures/chi_pos_cross_scale_python_x_cpp.png`.
 

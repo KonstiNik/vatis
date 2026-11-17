@@ -761,8 +761,9 @@ What the committed data show: in the accuracy sweep
 sequence length 64, `micro_batch_size = 8`, 100 seeds per setting, both
 estimators run with the same seeds and therefore the same probes) the two
 estimators return practically the same value for every seed — they differ by
-less than 0.2% of one standard deviation at every `n_hutchinson` from 1 to 64 —
-so their spread is the same. The single-seed Pythia-160m table
+at most 0.2% of one standard deviation at every `n_hutchinson` from 1 to 64 —
+so their spread is the same. (The file was regenerated in November 2026 with
+the current probe draw, on an RTX 3090 Ti; the June file showed the same.) The single-seed Pythia-160m table
 (`examples/benchmark/single_gpu/results_pythia-160m.md`; a synthetic random-token
 batch, the whole batch as one micro-batch) agrees: `chi_net`
 matches to the five digits it prints at `B` = 4, 8 and 16. `χ_pos` is of order
