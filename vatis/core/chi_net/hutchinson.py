@@ -39,7 +39,7 @@ from vatis.data.collate import iter_micro_batches
 
 
 class HutchinsonEstimator(ChiNetEstimator):
-    """Plain Hutchinson trace estimator. The always-works fallback.
+    """Plain Hutchinson trace estimator. The default; applies to every model.
 
     Args:
         n_hutchinson: number of probe vectors per micro-batch.

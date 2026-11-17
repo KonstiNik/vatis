@@ -856,7 +856,7 @@ def main(argv: list[str] | None = None) -> int:
         "config": {
             "device": str(args.device),
             "dtype": args.dtype,
-            "chi_net_method": args.chi_net_method,
+            "chi_net_method": args.chi_net_method or "hutchinson",  # the resolved name
             "n_hutchinson": args.n_hutchinson,
             "micro_batch_size": args.micro_batch_size,
             "seed": args.seed,

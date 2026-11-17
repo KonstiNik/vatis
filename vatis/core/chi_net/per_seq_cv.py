@@ -172,7 +172,7 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
 
         Each per-sample grad is a flat fp32 vector of length ``n_params``;
         we hold ``b_total`` of them at once when ``compute_alignment_matrix``
-        is True (the default).
+        is True (it is False by default).
         """
         return int(b_total) * int(n_params) * 4
 

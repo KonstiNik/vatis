@@ -21,8 +21,8 @@ def select_chi_net_method(b_total: int, requested: str | None) -> str:
 
     An explicit request always wins; without one the method is ``"hutchinson"``
     at every batch size. Through 0.2.x the default for ``B <= 32`` was
-    ``"per_sequence_cv"``; that estimator costs ``B`` extra backwards and is now
-    opt-in only (see ``docs/SPEC.md``, "Default estimator").
+    ``"per_sequence_cv"``; that estimator is now opt-in only (see
+    ``docs/SPEC.md``, "Default estimator").
 
     Args:
         b_total: total batch size (sum across ranks if DDP). No longer affects

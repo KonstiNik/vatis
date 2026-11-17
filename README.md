@@ -242,9 +242,11 @@ correction is expected to matter.
 
 Cost: per micro-batch of `M` sequences, `per_sequence_cv` runs one forward and
 `n_h + M` backwards; `hutchinson` runs `n_h` forwards and `n_h` backwards. In
-the committed Pythia-160m table (`B` = 4, 8, 16) the wall-clock of the two is
-about equal at 32 probes, `per_sequence_cv` is slower at 8 probes and faster at
-128, and its peak memory is higher (4.5–6.2 GB against 3.4–4.4 GB).
+the committed Pythia-160m table (`B` = 4, 8, 16, measured with the whole batch
+as one micro-batch) the wall-clock of the two is about equal at 32 probes,
+`per_sequence_cv` is slower at 8 probes and faster at 128, and its peak memory
+is higher (4.5–6.2 GB against 3.4–4.4 GB). Run time and memory at other
+micro-batch sizes and on larger models have not been measured.
 
 ## `micro_batch_size` is not only a memory setting
 
