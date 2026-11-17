@@ -111,6 +111,7 @@ from vatis.core.chi_net.base import (
     ChiNetResult,
     ForwardFn,
     LossFn,
+    ProbeSpread,
     ValidMaskFn,
 )
 from vatis.core.preconditioner import (
@@ -279,6 +280,15 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
                     cap_floor = precond.capped_weight_floor
         n_valid_total = 0
         n_backwards = 0
+        # Estimated variance of each returned number under the probe draw. Only
+        # the Hutchinson residual is sampled -- the loss-direction term is exact
+        # -- so a micro-batch contributes the variance of the mean of its
+        # per-probe residual values, and the independently probed micro-batches
+        # add (see ``ChiNetResult.chi_net_var``). ``None`` with a single probe.
+        estimate_var = self.n_hutchinson >= 2
+        var_acc = torch.zeros((), dtype=torch.float64, device=device)
+        var_p_acc = torch.zeros((), dtype=torch.float64, device=device)
+        var_c_acc = torch.zeros((), dtype=torch.float64, device=device)
 
         # Per-sample grads collected across micro-batches (only populated when
         # the alignment matrix is requested). Each entry is a flat fp32 vector.
@@ -392,6 +402,9 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
             hutch_acc = torch.zeros((), dtype=torch.float64, device=device)
             hutch_acc_p = torch.zeros((), dtype=torch.float64, device=device)
             hutch_acc_c = torch.zeros((), dtype=torch.float64, device=device)
+            spread = ProbeSpread(device)
+            spread_p = ProbeSpread(device)
+            spread_c = ProbeSpread(device)
             for h in range(self.n_hutchinson):
                 v = make_probe(
                     tuple(logits.shape),
@@ -430,13 +443,19 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
                         coef = float(inner.item()) / u_b_sq
                         correction = correction + coef * g_b_flat_list[b]
                     grad_v_perp = grad_v_flat - correction
-                    hutch_acc = hutch_acc + (grad_v_perp.to(dtype=torch.float64) ** 2).sum()
+                    residual = (grad_v_perp.to(dtype=torch.float64) ** 2).sum()
+                    hutch_acc = hutch_acc + residual
+                    spread.add(residual)
                     if precond is not None:
-                        hutch_acc_p = hutch_acc_p + weighted_sum_sq_fp64(grad_v_perp, precond.diag)
+                        residual_p = weighted_sum_sq_fp64(grad_v_perp, precond.diag)
+                        hutch_acc_p = hutch_acc_p + residual_p
+                        spread_p.add(residual_p)
                         if cap_floor is not None:
-                            hutch_acc_c = hutch_acc_c + weighted_sum_sq_fp64(
+                            residual_c = weighted_sum_sq_fp64(
                                 grad_v_perp, precond.diag, min_weight=cap_floor
                             )
+                            hutch_acc_c = hutch_acc_c + residual_c
+                            spread_c.add(residual_c)
                 else:
                     # O(P) path: project the probe in OUTPUT space,
                     # w = (I - P) v, then a single backward yields
@@ -461,15 +480,19 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
                         allow_unused=True,
                     )
                     n_backwards += 1
-                    hutch_acc = hutch_acc + _sum_sq(grads_v, device)
+                    residual = _sum_sq(grads_v, device)
+                    hutch_acc = hutch_acc + residual
+                    spread.add(residual)
                     if p_views is not None:
-                        hutch_acc_p = hutch_acc_p + weighted_sum_sq_grads(
-                            grads_v, p_views, device=device
-                        )
+                        residual_p = weighted_sum_sq_grads(grads_v, p_views, device=device)
+                        hutch_acc_p = hutch_acc_p + residual_p
+                        spread_p.add(residual_p)
                         if cap_floor is not None:
-                            hutch_acc_c = hutch_acc_c + weighted_sum_sq_grads(
+                            residual_c = weighted_sum_sq_grads(
                                 grads_v, p_views, device=device, min_weight=cap_floor
                             )
+                            hutch_acc_c = hutch_acc_c + residual_c
+                            spread_c.add(residual_c)
 
             chi_net_micro = (hutch_acc / float(self.n_hutchinson)) + exact_loss_direction
             chi_net_acc = chi_net_acc + chi_net_micro
@@ -481,6 +504,11 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
                 chi_net_p_capped_acc = chi_net_p_capped_acc + (
                     (hutch_acc_c / float(self.n_hutchinson)) + exact_loss_direction_c
                 )
+            # A spread that recorded nothing (no P; no entry at the ceiling,
+            # where the capped part is exactly zero for every probe) adds zero.
+            var_acc = spread.add_variance_of_mean_to(var_acc)
+            var_p_acc = spread_p.add_variance_of_mean_to(var_p_acc)
+            var_c_acc = spread_c.add_variance_of_mean_to(var_c_acc)
 
             # Tally valid output positions for normalization.
             if vmask is None:
@@ -519,6 +547,11 @@ class PerSequenceControlVariateEstimator(ChiNetEstimator):
             extras=extras,
             chi_net_p=chi_net_p,
             chi_net_p_capped=chi_net_p_capped,
+            chi_net_var=var_acc if estimate_var else None,
+            chi_net_p_var=(var_p_acc if estimate_var and chi_net_p_acc is not None else None),
+            chi_net_p_capped_var=(
+                var_c_acc if estimate_var and chi_net_p_capped_acc is not None else None
+            ),
         )
 
 
