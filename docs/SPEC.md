@@ -291,6 +291,9 @@ loss_change_first_order      = the sum of the three
 | `loss_change_first_order_weights` | `∇L^B · (θ_{t+1} − θ_t)` from the two stored weight files | step `t+1` stored, fp32 weight files |
 | `loss_change` | `L_B(θ_{t+1}) − L_B(θ_t)`, the realized change | same |
 | `loss_change_residual` | `loss_change − loss_change_first_order_weights`: what first order leaves over | same |
+| `update_lr` | the learning rate `η` the step applied | every checkpoint, on the update batch's own pair; only if all parameter groups share one rate |
+| `update_lr_min`, `update_lr_max` | the smallest and the largest rate of any parameter group | instead of `update_lr`, when the groups' rates differ |
+| `update_clip_factor` | the factor the gradient was scaled by before the optimizer saw it | every checkpoint, on the update batch's own pair |
 
 ```python
 source = load_local_bundle(run_dir, "my_project.models:build_model")
@@ -324,6 +327,28 @@ analyzer.run(source.model_specs())
   rule's descriptor in the `preconditioner` column (`"adamw_update"`,
   `"adam_update"`, `"sgd_update"`); the three realized-change rows involve no
   optimizer formula and carry `"none"`.
+- **The step's learning rate and clip factor are rows too**, so that a result
+  file can be read without the bundle: the comparison with `−η · delta_loss_P`
+  needs `η`, and the gradient part contains the clip factor. They are written
+  once per checkpoint, on the update batch's own pair (`batch_a = batch_b =`
+  the update batch), tagged with the update rule's descriptor.
+  - `update_lr` is the rate saved in the optimizer state. It is written **only
+    when every parameter was updated with the same rate**. When parameter
+    groups have different rates there is no "learning rate of the step", and
+    none is made up: `update_lr` is absent and `update_lr_min` /
+    `update_lr_max` give the smallest and the largest rate of any group
+    instead (with more than two groups the ones in between are in the bundle,
+    not in the file).
+  - `update_clip_factor` is `min(1, c / (‖g‖ + 1e-6))` for a run that clipped
+    the global gradient norm at `c`, and **exactly 1 for a run that did not
+    clip**. Either way it is the factor the gradient reached the optimizer
+    with; a value of 1 does not say whether clipping was off or merely did not
+    engage (the threshold is in the bundle's metadata or in the caller's
+    `clip_grad_norm`).
+  - Both exist at step 0 (the rate is in the saved param groups before any
+    update; the factor needs only the gradient). Under DDP both are formed from
+    the all-reduced gradient and the rule every rank rebuilds, so all ranks
+    hold the same values and rank 0 writes them.
 - **They exist at step 0.** An empty optimizer state is a well-defined starting
   point for an update (`m_0 = v_0 = 0`, so the first step is
   `−η g/(|g| + ε)`), unlike for a pre-step `P`. The first update is in the
@@ -375,8 +400,9 @@ gradient the optimizer saw. vatis cannot verify that from one checkpoint:
   without the algorithm, is **refused** until you state it:
   `update_response(clip_grad_norm=None)` or `update_response(clip_grad_norm=c)`.
   A statement that contradicts the recorded value is refused too, and so is
-  clipping by value. The clipping factor of a row can be recovered from the
-  update batch's own `delta_loss` row, which is `‖g‖²`.
+  clipping by value. The factor applied at each step is written as the
+  `update_clip_factor` row (it also follows from the update batch's own
+  `delta_loss` row, which is `‖g‖²`).
 - *Rounded weights.* A bf16 weight file holds a rounded `θ_t`, so `g` is the
   gradient at a slightly different point (see "Native checkpoint bundles" for
   how different). The same holds for unrounded files opened with
@@ -461,16 +487,85 @@ complex buffers and fp32 tables, which is why the loader casts parameters
 only), and an fp64 copy of both models doubles the memory of the realized
 rows, which a model near the limit of its device does not have.
 
-**Cost.** No extra backward. The gradients of all eval batches are kept for
-the checkpoint (one parameter-sized fp32 vector each, placed as
-`cross_grad_storage` says), the saved optimizer state stays on the CPU for the
-checkpoint (two parameter-sized vectors for AdamW), and the reductions run in
-fp64 chunks. The realized rows hold a second model and cost two forward passes
-per eval batch — only if they are asked for: `θ_{t+1}` is loaded only when one
-of the three is among `observables`, and the forward passes run only for
-`loss_change` / `loss_change_residual`. Under DDP every rank rebuilds the same
-update from the all-reduced gradients; only the two loss evaluations (and the
-record of which parameters received no gradient) are all-reduced.
+**Cost.** In countable terms, per checkpoint, with `E` evaluation batches,
+`M_k` micro-batches of batch `k`, and `S` the number of state vectors the
+optimizer saved (2 for AdamW, 1 for SGD with momentum, 0 for SGD without). One
+"buffer" is one parameter-sized fp32 vector:
+
+| per checkpoint | without the rule | formula rows | + realized rows |
+| --- | --- | --- | --- |
+| backward passes | `n` | `n` | `n` |
+| forward passes | `f` | `f` | `f + 2 · Σ M_k` |
+| models in memory at once | 1 | 1 | 2 |
+| buffers kept while later batches are processed | 0 | `E − 1 + S` | `E − 1 + S` |
+| buffers kept during the realized pass | — | — | `E + S`, and the second model |
+
+These counts are pinned on toy bundles by
+`tests/unit/test_update_response_cost.py` (forward and backward calls counted,
+live tensors summed at fixed moments). In words:
+
+- **No extra backward pass, ever, and no extra forward pass for the formula
+  rows**: they are dot products of gradients the self pairs already built.
+- **The realized rows cost two forward passes per micro-batch and a second
+  model** — only when asked for: `θ_{t+1}` is loaded only if one of the three
+  rows is among `observables`, and the forward passes run only for
+  `loss_change` / `loss_change_residual`.
+- **Memory grows with the number of evaluation batches.** The gradient of
+  *every* evaluation batch is kept until the end of the checkpoint (placed as
+  `cross_grad_storage` says), where the analysis without the rule keeps none
+  (unless `cross_pairs` asks for them). That is one buffer more per evaluation
+  batch, on top of the `S` state vectors, which stay on the CPU. At 11M
+  parameters a buffer is 42 MB; it scales with the model, so at a billion
+  parameters it is 4 GB per evaluation batch — arithmetic, not a measurement.
+- The fp64 reductions are chunked: at most seven fp64 temporaries of one chunk
+  (`2²⁵` elements at most) are alive, never a parameter-sized fp64 vector.
+- Under DDP every rank rebuilds the same update from the all-reduced
+  gradients; only the two loss evaluations (and the record of which parameters
+  received no gradient) are all-reduced. Every rank holds the buffers above.
+
+**Measured cost** on two 11M-parameter Llama bundles (AdamW and SGD with
+momentum; fp32; four checkpoints per run; eval batches: the update batch of
+32 × 512 tokens and one held-out batch of 8 × 512 tokens; `hutchinson`,
+`n_hutchinson = 2`, `micro_batch_size = 8`; every run in its own process;
+median over five runs with the range in brackets). Script, full tables and what
+exactly each column is: `examples/benchmark/update_response/`.
+
+| device | bundle | without the rule | formula rows | + realized rows |
+| --- | --- | --- | --- | --- |
+| CPU, wall-clock per checkpoint, s | AdamW | 7.4 (7.4 – 11.5) | 7.6 (7.5 – 12.1) | 9.6 (8.9 – 14.2) |
+| | SGD | 7.6 (7.4 – 11.9) | 7.6 (7.4 – 11.9) | 9.0 (8.8 – 14.2) |
+| CPU, peak resident memory, MB | AdamW | 2551 | 2656 (+105) | 2645 (+94) |
+| | SGD | 2535 | 2626 (+90) | 2634 (+99) |
+| GPU, wall-clock per checkpoint, s | AdamW | 0.8 (0.7 – 1.0) | 1.0 (0.7 – 4.2) | 1.2 (0.9 – 1.2) |
+| | SGD | 0.6 (0.6 – 0.6) | 0.7 (0.7 – 0.8) | 0.8 (0.8 – 0.9) |
+| GPU, peak allocated memory, MB | AdamW | 1173 | 1213 (+40) | 1214 (+40) |
+| | SGD | 1173 | 1213 (+40) | 1214 (+40) |
+
+- The CPU is a shared 16-core machine (8 threads used) and its wall-clock
+  follows the load: the upper ends of the ranges are runs at a higher load. In
+  the quiet runs the formula rows add 0.1 to 0.2 s per checkpoint (about 2%)
+  and the realized rows 1.4 to 2.2 s (×1.2 to ×1.3). On the GPU (one RTX 3090
+  Ti) the formula rows add 0.1 to 0.2 s and the realized rows 0.2 to 0.4 s per
+  checkpoint; relative to a 0.6 to 0.8 s checkpoint that is ×1.1 to ×1.5,
+  because at this size the fixed costs of a checkpoint dominate. With
+  `n_hutchinson = 8` the GPU analysis without the rule takes 1.5 s per
+  checkpoint and the additions stay about the same in seconds (1.6 s, 1.8 s).
+- **AdamW rule against SGD rule:** no difference in wall-clock that these
+  measurements resolve, and the same GPU memory. The AdamW rule holds two state
+  vectors on the host and the SGD rule one.
+- **Memory grows with the number of evaluation batches, as counted:** with four
+  evaluation batches instead of two the rule adds 127 MB of GPU memory instead
+  of 40 MB (three kept gradients of 42 MB instead of one), and 188 MB of
+  resident memory on the CPU instead of 105 MB.
+- The realized rows do not raise the *peak* GPU memory beyond the formula rows
+  here: the second model is on the card only during the forward-only realized
+  pass, and the peak is reached during a backward pass.
+- Peak resident memory is a coarse instrument (the expected +126 MB and +84 MB
+  for three and two buffers show as +105 MB and +90 MB). GPU memory is
+  `torch.cuda.max_memory_allocated` of the process, reset per run.
+- **Not measured:** models larger than 11M parameters, more than one GPU, DDP,
+  bf16 forward passes. The ratios above should not be carried over to a large
+  model; the counts do carry over.
 
 **Precision.** The rule itself is exact: on an fp64 model the rebuilt update
 equals the one `torch.optim` applied element by element to `1e-10` of its
@@ -478,7 +573,14 @@ largest entry, for AdamW, Adam and SGD (`tests/unit/test_update_response_vs_torc
 Through a bundle everything is fp32 — weights, optimizer state, and the
 analyzer's gradient vector — and the rows agree with the run to about `1e-7`
 relative on the test bundles (`tests/unit/test_update_response_bundle.py`,
-asserted at `1e-5`).
+asserted at `1e-5`). The device changes the fp32 gradient at the `1e-5` level
+and the rows accordingly: on a real 11M-parameter fp32 bundle (thirteen steps,
+two batches) every `loss_change*` row computed on a GPU agreed with the CPU
+value to within `1.1e-7` in absolute terms, `2e-5` to `3e-4` relative on the
+first-order rows (more only for values below `1e-6`); `update_lr` was
+identical and `update_clip_factor` agreed to `3e-7`. A GPU-only test compares
+all new rows between the two devices on a toy bundle, with the gradients on the
+card and offloaded to the host.
 
 **Measured on real bundles** (an 11M-parameter Llama, CPU, fp32 analysis,
 `micro_batch_size=8`; `B` = the step's own update batch of 32 × 512 tokens
@@ -541,6 +643,10 @@ the factors `clip`, `1−τ` and, under Nesterov, `1 + μ(1−τ)`) — and the 
 momentum. On the held-out batch the first-order change
 late in training is small (−0.008 at AdamW step 661) against a residual of
 +0.012: there the realized change (+0.003) has the opposite sign.
+A worked use of these rows — the AdamW rule, the SGD rule applied to the same
+step and `−η · delta_loss_P` against the stored weight difference, at thirteen
+steps of one AdamW run — is in `examples/adamw_vs_sgd_reconstruction/`.
+
 **The noise floor of `loss_change`**, measured on this model: computed with the
 whole model in fp64, `loss_change` differed from the fp32-forward value by at
 most `1.3e-8` on the update batch (32 × 512 tokens) and by at most `8.3e-8` on
@@ -800,8 +906,13 @@ examples/
     ├── _build_eval_batch.py       # builds the fixed eval batch fixture
     ├── single_gpu/                # single-GPU (method, n_h, B) sweep + plots
     ├── ddp_scaling/               # multi-GPU strong/weak scaling worker + results
-    └── accuracy/                  # estimator-variance vs n_hutchinson sweep + plots
+    ├── accuracy/                  # estimator-variance vs n_hutchinson sweep + plots
+    └── update_response/           # cost of the rows of the step taken (CPU + GPU, 11M Llama)
 ```
+
+`examples/adamw_vs_sgd_reconstruction.py` (+ `_evaluate.py`, and their committed
+output under `examples/adamw_vs_sgd_reconstruction/`) is a small worked use of
+the `loss_change_first_order*` rows on a real AdamW bundle.
 
 The deployment example (`examples/pythia_sweep.py`) is the canonical "does vatis
 work end-to-end on real weights" check. Running the example/benchmark scripts
@@ -1189,10 +1300,13 @@ which `P` a row's value was computed with: `"none"` on the raw rows — includin
 descriptor (`"adamw"`, `"sgd"`, ...) on the P rows. A run without a
 preconditioner emits exactly the rows it always did.
 
-The update-response rows extend it the same way and add no column: seven more
-`observable` values on the pair `(batch_a, batch_b)` = (update batch, evaluated
-batch), with `n_hutchinson`, `hutchinson_seed` and `wallclock_s` null. The four
-rows rebuilt from the optimizer state carry the update rule's descriptor in the
+The rows of the step that was taken extend it the same way and add no column:
+seven more `observable` values on the pair `(batch_a, batch_b)` = (update batch,
+evaluated batch), with `n_hutchinson`, `hutchinson_seed` and `wallclock_s` null,
+plus the step's learning rate and clip factor (`update_lr` — or `update_lr_min`
+and `update_lr_max` — and `update_clip_factor`) on the update batch's own pair.
+The rows rebuilt from the optimizer state (`loss_change_first_order` and its
+three parts, and the step rows) carry the update rule's descriptor in the
 `preconditioner` column (`"adamw_update"`, `"adam_update"`, `"sgd_update"`);
 `loss_change_first_order_weights`, `loss_change` and `loss_change_residual` carry
 `"none"`. A pair that has only these rows (the update batch against an eval

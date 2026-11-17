@@ -59,11 +59,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   opened with `allow_unlisted_params` whose model has unlisted parameters,
   unless `update_response(unlisted_params_frozen=True)` confirms they were not
   trained. The realized rows are also skipped when the source loads the weights
-  as bf16 / fp16. No extra backward; no result-file column was added (the rows are new
+  as bf16 / fp16. The learning rate and the clip factor of each step are
+  written as rows too (`update_lr` — or `update_lr_min` / `update_lr_max` when
+  parameter groups have different rates — and `update_clip_factor`).
+  No extra backward; no result-file column was added (the rows are new
   `observable` values, tagged `"adamw_update"` / `"adam_update"` /
   `"sgd_update"` or `"none"` in the `preconditioner` column).
 - `vatis.core.update_response` (`OptimizerUpdate`, `AdamHyper`, `SGDHyper`):
   the update rule on its own, usable with any `ModelBundle`.
+- `examples/adamw_vs_sgd_reconstruction.py` (+ `_evaluate.py`): for a few steps
+  of an AdamW bundle, how well the optimizer's rule, the SGD rule applied to
+  the same step and `−η · delta_loss_P` reconstruct the first-order loss change
+  of the step that was taken, with the table and figure of one 11M-parameter
+  run. `examples/benchmark/update_response/`: what those rows cost in
+  wall-clock and peak memory on the CPU and on a GPU (no extra backward pass;
+  two forward passes per micro-batch for the realized rows; one more
+  parameter-sized vector per evaluation batch).
 - Parquet rows carry a **`preconditioner`** column (appended last): `"none"` on
   raw rows, the `P` descriptor on the new rows.
 - A warning when a published `chi_pos` / `chi_pos_P` leaves `[−1, 1]` by more

@@ -209,6 +209,7 @@ analyzer.run(source.model_specs())
 | `loss_change_first_order_weights` | the same dot product from the two stored weight files |
 | `loss_change` | L_B(θ_{t+1}) − L_B(θ_t), the realized change |
 | `loss_change_residual` | `loss_change − loss_change_first_order_weights` |
+| `update_lr`, `update_clip_factor` | the learning rate the step applied and the factor its gradient was clipped by (1 if not clipped), on the update batch's own pair |
 
 The rows sit on the pair (update batch, `B`) for every eval batch `B`. They are
 loss changes — learning rate included, negative when the loss falls — for
@@ -303,6 +304,9 @@ been measured, so do not read a number for your model off this table.
   format, distributed semantics, scope.
 - `examples/` — runnable sweeps plus the single-GPU / DDP-scaling / accuracy
   benchmarks under `examples/benchmark/`.
+  `examples/adamw_vs_sgd_reconstruction.py` uses the rows of the step that was
+  taken on a real bundle (a small check on one run, with its measured table);
+  `examples/benchmark/update_response/` measures what those rows cost.
 - The LNP decomposition is derived in the paper:
   [arXiv:2605.31244](https://arxiv.org/abs/2605.31244).
 ```
