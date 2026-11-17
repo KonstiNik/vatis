@@ -18,9 +18,18 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "Analyzer": ("vatis.analyzer", "Analyzer"),
     "analyze": ("vatis.analyzer", "analyze"),
     "EvalBatchSpec": ("vatis.data.batches", "EvalBatchSpec"),
+    "load_local_bundle": ("vatis.models.local_bundle", "load_local_bundle"),
+    "Preconditioner": ("vatis.core.preconditioner", "Preconditioner"),
 }
 
-__all__ = ["Analyzer", "EvalBatchSpec", "__version__", "analyze"]
+__all__ = [
+    "Analyzer",
+    "EvalBatchSpec",
+    "Preconditioner",
+    "__version__",
+    "analyze",
+    "load_local_bundle",
+]
 
 
 def __getattr__(name: str) -> object:  # pragma: no cover - thin shim

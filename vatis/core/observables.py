@@ -28,10 +28,15 @@ from vatis.core.normalization import (
     valid_token_mask,
 )
 
-# A small floor on chi_loss * chi_net to avoid 0/0 in chi_pos when both
-# components are degenerate (e.g. uniform predictions on labels with all-zero
-# loss gradients).
-_CHI_POS_DENOM_EPS = 1e-30
+# chi_pos is degenerate only when its denominator is exactly zero — chi_loss and
+# chi_net are both non-negative, so ``chi_loss * chi_net == 0`` means one of them
+# vanished (no valid tokens, or a Jacobian that is identically zero) and the
+# ratio has no value. There used to be an *absolute* 1e-30 floor here, which had
+# two failure modes of its own: a legitimately tiny-over-tiny ratio was reported
+# as 0, and (with the fp32 arithmetic this function used to do) an out-of-range
+# product underflowed to 0 or overflowed to inf and was also reported as 0. Both
+# looked exactly like a true zero.
+_CHI_POS_DEGENERATE = 0.0
 
 
 def chi_loss_cross_entropy_unnormalized(
@@ -203,26 +208,58 @@ def chi_pos(
     normalized chi_net cancel exactly. So we can pass either the raw
     (unnormalized) values or the normalized values; the result is the same.
 
+    **The division runs in fp64.** The callers already hold fp64 Python floats
+    (the analyzer accumulates in fp64), and this function used to cast them down
+    to fp32 before dividing — which cost ~6e-08 relative for nothing and, worse,
+    put the fp32 *range* in the way: ``chi_pos(1.0, 1e30, 1e30)`` returned
+    ``0.0`` instead of ``1e-60`` because the product overflowed fp32 to ``inf``.
+    Not reachable with realistic magnitudes (``chi_loss * chi_net`` sits around
+    1e1..1e8 even with an AdamW ``P`` at the ``1/eps`` ceiling), but the failure
+    *shape* — a zero indistinguishable from a true zero — is the one this repo
+    keeps getting bitten by, so it is removed rather than documented.
+
     Args:
         delta_loss_value: scalar (tensor or float).
         chi_loss_value: scalar (tensor or float).
         chi_net_value: scalar (tensor or float).
 
     Returns:
-        A 0-dim fp32 tensor on CPU holding chi_pos.
+        A 0-dim fp64 tensor on CPU holding chi_pos. ``0.0`` when the denominator
+        is exactly zero (see :data:`_CHI_POS_DEGENERATE`); non-finite inputs are
+        allowed to propagate rather than being masked, because a NaN that reaches
+        the sink is a bug worth seeing.
     """
-    delta = _to_scalar_fp32(delta_loss_value)
-    cl = _to_scalar_fp32(chi_loss_value)
-    cn = _to_scalar_fp32(chi_net_value)
+    delta = _to_scalar_fp64(delta_loss_value)
+    cl = _to_scalar_fp64(chi_loss_value)
+    cn = _to_scalar_fp64(chi_net_value)
     denom = cl * cn
-    if abs(float(denom)) < _CHI_POS_DENOM_EPS:
-        # NaN here would mask real bugs; return 0 instead, the analyzer will
-        # log this row with chi_loss == 0 too so the user can see what happened.
-        return torch.zeros((), dtype=torch.float32)
-    return torch.tensor(float(delta / denom), dtype=torch.float32)
+    if float(denom) == 0.0:
+        return torch.tensor(_CHI_POS_DEGENERATE, dtype=torch.float64)
+    return torch.tensor(float(delta / denom), dtype=torch.float64)
 
 
-def _to_scalar_fp32(value: torch.Tensor | float) -> torch.Tensor:
+def chi_pos_exceeds_cauchy_schwarz(value: float, *, slack: float = 0.5) -> bool:
+    """Whether ``chi_pos`` has left the ``[-1, 1]`` range its definition guarantees.
+
+    ``|chi_pos| <= 1`` is a Cauchy-Schwarz consequence, for the self pair
+    (``u^T Theta u <= ||u||^2 lambda_max <= ||u||^2 Tr Theta``) and for the cross
+    pair (``|u_B^T J_B J_A^T u_A| <= ||J_B^T u_B|| ||J_A^T u_A|| <=
+    chi_loss^{AB} chi_net^{AB}``). It therefore cannot be violated by a correct
+    measurement, only by an *inconsistency* between the three components — most
+    plausibly a ``loss_fn`` that is not mean-reduced over the same valid tokens
+    ``chi_loss`` normalizes by (a sum-reduced CE inflates ``chi_pos`` by the square
+    of the valid-token count *per micro-batch* — ``N^2`` only when the whole batch
+    is one micro-batch), or an ``ignore_index`` mismatch between the analyzer and
+    the loss.
+
+    ``slack`` exists because ``chi_net`` is a *stochastic* estimate: at small
+    ``n_hutchinson`` a legitimate ``chi_pos`` near 1 can overshoot. The default
+    0.5 matches the bound the golden gate already asserts.
+    """
+    return abs(value) > 1.0 + slack
+
+
+def _to_scalar_fp64(value: torch.Tensor | float) -> torch.Tensor:
     if isinstance(value, torch.Tensor):
-        return value.detach().to(dtype=torch.float32).cpu()
-    return torch.tensor(float(value), dtype=torch.float32)
+        return value.detach().to(dtype=torch.float64).cpu()
+    return torch.tensor(float(value), dtype=torch.float64)

@@ -442,19 +442,40 @@ def test_heavy_padding_matches_perspic_on_valid_subset(vatis_method: str) -> Non
     )
 
 
+# Probe count of the two tight-tolerance tests below.
+#
+# They assert ``chi_net`` (and ``chi_pos``) within 0.3% of perspic on one fixed
+# seed, on the premise that the Hutchinson noise is far below that bound. That
+# premise has to be true for the test to mean anything, and at the previous
+# ``n = 16384`` it was not: for the shared toy MLP the Rademacher standard
+# deviation of the estimate, ``sqrt(2 * sum_{i != j} A_ij**2 / n) / Tr(A)`` with
+# ``A = J J^T``, is 42.65% / sqrt(n) = 0.333% at ``n = 16384`` -- *above* the
+# tolerance. Measured over 32 seeds it was 0.28-0.34% for both estimators, with
+# 11-13 of 32 seeds outside the bound; the test passed or failed by which seed
+# it happened to pin. At ``n = 262144`` the same formula gives 0.083%, so the
+# unchanged 0.3% tolerance sits at 3.6 standard deviations and a failure is
+# evidence of a bias, as the docstrings claim. Measured at this ``n`` over seeds
+# 1-6 (the tests pin seed 0): self-pair ``chi_net`` deviates by at most 0.20%
+# (hutchinson) / 0.13% (per_sequence_cv), cross-pair ``chi_pos`` by at most
+# 0.08%. The tolerance itself is untouched. Cost: the four tight cases take
+# about ten minutes single-threaded.
+TIGHT_N_HUTCHINSON = 262_144
+
+
 @pytest.mark.parametrize("vatis_method", ["hutchinson", "per_sequence_cv"])
-def test_all_observables_tight_tolerance_at_n16384(vatis_method: str) -> None:
-    """Drive Hutchinson noise below 0.3% with n=16384 and confirm all four
+def test_all_observables_tight_tolerance_at_n262144(vatis_method: str) -> None:
+    """Drive Hutchinson noise below 0.3% with a large ``n`` and confirm all four
     observables match perspic to that bound.
 
     The looser cross-validation tests use ``rel=0.02`` to absorb the
     Hutchinson noise floor at ``n=2048``. That hides any constant-factor
-    bias smaller than ~2%. This test cranks ``n_hutchinson`` to 16384 — at
-    which point the noise floor is far below 0.3% on the toy MLP — and
-    asserts the tight bound. If this test fails, it is a real bug
-    (perspic is the reference); do not loosen the tolerance to make it
-    pass. The test uses functorch only (the cleaner perspic backend) and
-    a single fixed seed/batch to keep it deterministic and quick.
+    bias smaller than ~2%. This test cranks ``n_hutchinson`` to
+    :data:`TIGHT_N_HUTCHINSON` — at which point the noise floor is well below
+    0.3% on the toy MLP (see the comment on that constant; it was *not* at the
+    original ``n = 16384``) — and asserts the tight bound. If this test fails,
+    it is a real bug (perspic is the reference); do not loosen the tolerance to
+    make it pass. The test uses functorch only (the cleaner perspic backend) and
+    a single fixed seed/batch to keep it deterministic.
     """
     model, x, y = _build_shared_model_and_batch()
     snapshot = _snapshot(model)
@@ -463,7 +484,9 @@ def test_all_observables_tight_tolerance_at_n16384(vatis_method: str) -> None:
     p = _perspic_run(model, criterion, x, y, engine="functorch")
 
     _restore(model, snapshot)
-    v = _vatis_run(model, x, y, chi_net_method=vatis_method, n_hutchinson=16384, seed=0)
+    v = _vatis_run(
+        model, x, y, chi_net_method=vatis_method, n_hutchinson=TIGHT_N_HUTCHINSON, seed=0
+    )
 
     rel_tol = 3e-3
     abs_tol = 1e-6
@@ -477,8 +500,8 @@ def test_all_observables_tight_tolerance_at_n16384(vatis_method: str) -> None:
         f"delta_loss mismatch (method={vatis_method}): "
         f"vatis={v['delta_loss']} vs perspic={p['grad_norm_squared']}"
     )
-    # chi_net carries Hutchinson variance; n=16384 must drive it under
-    # the tight bound on the toy MLP.
+    # chi_net carries Hutchinson variance; TIGHT_N_HUTCHINSON must drive it
+    # under the tight bound on the toy MLP.
     assert v["chi_net_normalized"] == pytest.approx(p["chi_net"], rel=rel_tol, abs=abs_tol), (
         f"chi_net mismatch (method={vatis_method}): "
         f"vatis={v['chi_net_normalized']} vs perspic={p['chi_net']}"
@@ -583,12 +606,12 @@ def test_cross_chi_pos_matches_perspic(perspic_engine: str, vatis_method: str) -
 
 
 @pytest.mark.parametrize("vatis_method", ["hutchinson", "per_sequence_cv"])
-def test_cross_observables_tight_tolerance_at_n16384(vatis_method: str) -> None:
+def test_cross_observables_tight_tolerance_at_n262144(vatis_method: str) -> None:
     """High-n cross-pair test to catch constant-factor normalization bugs.
 
-    Same logic as the self-pair tight-tolerance test: n=16384 drives the
-    Hutchinson noise floor far below 0.3% on the toy MLP, so any remaining
-    disagreement is a real bug, not noise.
+    Same logic as the self-pair tight-tolerance test: ``TIGHT_N_HUTCHINSON``
+    probes drive the Hutchinson noise floor well below 0.3% on the toy MLP, so
+    any remaining disagreement is a real bug, not noise.
     """
     model, x_a, y_a, x_b, y_b = _build_two_batches()
     snapshot = _snapshot(model)
@@ -604,7 +627,7 @@ def test_cross_observables_tight_tolerance_at_n16384(vatis_method: str) -> None:
         x_b,
         y_b,
         chi_net_method=vatis_method,
-        n_hutchinson=16384,
+        n_hutchinson=TIGHT_N_HUTCHINSON,
         seed=0,
     )
 

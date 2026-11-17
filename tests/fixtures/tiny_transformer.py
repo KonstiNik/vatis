@@ -148,8 +148,11 @@ def make_tiny_lm_batch(
     do its micro-batches and DDP shards — which is what makes token-weighted
     aggregation distinguishable from sequence-weighted aggregation. The rule
     is a fixed staircase rather than a random draw so that this holds for
-    every way of cutting the batch into contiguous pieces. ``input_ids`` do
-    not depend on ``pad_fraction``.
+    every contiguous cut of a batch with at most ``n_pad + 1`` sequences (the
+    batches the tests use); in a larger batch the sequences beyond that are
+    all unpadded and pieces made only of them have equal counts.
+    ``pad_fraction`` is therefore the largest padded share of a sequence, not
+    the mean. ``input_ids`` do not depend on ``pad_fraction``.
     """
     g = torch.Generator(device="cpu")
     g.manual_seed(seed)
