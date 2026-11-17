@@ -973,7 +973,8 @@ batch are not recorded in the file.
 `χ_net` is estimated with random probes, so the same run with another `seed`
 returns another number. `value_probe_stderr` is the standard error of the row's
 `value` under that draw, with the batch, the weights, the micro-batch cut and
-the number of ranks held fixed.
+the number of ranks held fixed. The name says what it covers: the error from
+the probes, and nothing else.
 
 **Definition.** Both estimators draw `n = n_hutchinson` probes per micro-batch
 and report, for micro-batch `m`, the mean of `n` independent per-probe values
@@ -1093,7 +1094,10 @@ Two earlier column sets exist: the first eleven columns (every release through
   preconditioned rows and that column were introduced together, so a file
   without it holds raw rows only. Files are not rewritten. The fill goes by
   column, not by a list of known file generations, so a file with any leading
-  part of the current column set is handled the same way.
+  part of the current column set is handled the same way. The standard-error
+  column was called `value_stderr` only in versions of this change that were
+  never merged, so no file carries that name and `read_results` has no alias
+  for it.
 
 ```python
 from vatis.sinks import read_results

@@ -441,10 +441,10 @@ def _write_old_file(path: Path, columns: list[tuple[str, pa.DataType]], n_rows: 
 OLD_GENERATIONS = {
     "before_preconditioner": ORIGINAL_COLUMNS,
     "before_provenance": ORIGINAL_COLUMNS + PRECONDITIONER_COLUMN,
-    # Never released or merged: the column set of the first version of the change
-    # that added the provenance columns, before the last two were appended. It is
-    # here because nothing special is needed for it -- ``read_results`` fills
-    # whatever columns a file lacks -- not because such files are known to exist.
+    # Not a column set any released or merged version wrote: the current columns
+    # without the last two. It is here because ``read_results`` fills by column
+    # rather than from a list of known generations, so any leading part of the
+    # current set has to work -- not because such files are known to exist.
     "before_run_settings": ORIGINAL_COLUMNS + PRECONDITIONER_COLUMN + NEW_COLUMNS[:6],
 }
 
