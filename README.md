@@ -195,6 +195,23 @@ spec); the `preconditioner` column says which `P` the `_P` values used. The
 schema is the contract between vatis and any downstream analysis — see
 [`docs/SPEC.md` → Result format](docs/SPEC.md).
 
+Each row also says how it was obtained and how far to trust it:
+
+| column | meaning |
+|---|---|
+| `chi_net_method` | the `χ_net` estimator that ran (`hutchinson` / `per_sequence_cv`) |
+| `n_ranks` | number of processes of the run; a multi-rank `χ_net` depends on it |
+| `preconditioner_eps`, `preconditioner_beta2` | `ε` and `β2` of an AdamW `P` (null on other rows) |
+| `preconditioner_capped_fraction` | fraction of the coordinates of `P` at its `1/ε` ceiling (null without a ceiling) |
+| `value_stderr` | standard error of `value` from the random probes (null for `chi_loss` / `delta_loss`, which are not sampled, and with a single probe) |
+
+`value_stderr` is the probe sampling error of that run — same batch, same
+micro-batch cut. It is not a data-sampling error, and for `chi_pos` and cross
+pairs it is a first-order propagation
+([`docs/SPEC.md` → Standard error of the sampled values](docs/SPEC.md)). Files
+written before these columns existed still load; `vatis.sinks.read_results`
+returns old and new files in one column set.
+
 ## Multi-GPU
 
 ```bash
