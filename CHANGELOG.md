@@ -37,7 +37,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   instead of clipping `P`.
 - Parquet rows carry a **`preconditioner`** column (appended last): `"none"` on
   raw rows, the `P` descriptor on the new rows.
-- **Six more result columns**, appended after `preconditioner`; null where one
+- **Eight more result columns**, appended after `preconditioner`; null where one
   does not apply to a row. No existing column or value changes.
   - `chi_net_method` (str): the `χ_net` estimator that ran for the row's batch.
   - `n_ranks` (int32): the number of processes (DDP world size) of the run.
@@ -52,6 +52,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     sampling error at the micro-batch cut and rank count of the run, not a
     data-sampling error; for `chi_pos` and cross pairs it is a first-order
     propagation (`docs/SPEC.md` → "Standard error of the sampled values").
+  - `micro_batch_size` (int32): the `micro_batch_size` the run was made with.
+  - `hutchinson_distribution` (str): the distribution the probes were drawn
+    from (`rademacher` / `gaussian`).
+
+  `chi_net_method`, `n_ranks`, `micro_batch_size` and `hutchinson_distribution`
+  describe the run and are on every row, like `n_hutchinson`.
 - `vatis.sinks.read_results(path_or_paths)`: reads result files of any earlier
   column set into the current one (and concatenates several), so files written
   before a column existed stay usable next to new ones.

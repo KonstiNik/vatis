@@ -870,10 +870,12 @@ preconditioner_eps              float64   # eps of an AdamW P; null on every oth
 preconditioner_beta2            float64   # beta2 of an AdamW P; null on every other row
 preconditioner_capped_fraction  float64   # fraction of P's coordinates at its ceiling; null without one
 value_stderr       float64       # probe standard error of `value`; null where nothing is sampled
+micro_batch_size   int32         # the micro_batch_size the run was made with
+hutchinson_distribution  str     # the distribution of the probes: "rademacher" | "gaussian"
 ```
 
 Columns are only ever appended, and a column that does not apply to a row is
-null. The six after `preconditioner` are described under "Provenance columns"
+null. The eight after `preconditioner` are described under "Provenance columns"
 and "Standard error of the sampled values" below; files written before they
 existed are covered under "Files written with an earlier column set".
 
@@ -942,8 +944,29 @@ These say how a row was obtained. They do not change any value.
   carry almost all of `chi_net_P`. Null on raw rows and for a `P` without a
   ceiling.
 
-The bias-correction step `t`, `micro_batch_size` and the probe distribution are
-not recorded in the file.
+- **`micro_batch_size`** — the `micro_batch_size` the run was made with. One
+  probe spans a micro-batch, so the sampled values, and above all their
+  standard error, are specific to it ("`micro_batch_size` is a noise setting").
+  It is the setting, not the realized sizes: the last micro-batch of a batch
+  holds what is left, a batch smaller than the setting is a single micro-batch,
+  and under DDP each rank cuts its own shard — so the actual cut follows from
+  this column, `n_ranks` and the number of sequences in the batch.
+- **`hutchinson_distribution`** — the distribution the probes were drawn from
+  (`"rademacher"` or `"gaussian"`), as reported by the estimator that ran. The
+  two give different draws for the same seed and different variances.
+
+**Which rows carry what.** `chi_net_method`, `n_ranks`, `micro_batch_size` and
+`hutchinson_distribution` describe the run, exactly like `n_hutchinson`, and
+are written on **every** row — also on `chi_loss` and `delta_loss` rows, whose
+values no probe enters, so that any subset of a file still says which run it
+came from. A cross pair carries the values of its two batches; the micro-batch
+size and the distribution are settings of the whole run and therefore the same
+for both (only the estimator can differ between the batches of a pair, see
+above). The three `preconditioner_*` columns are on the `_P` / `_P_capped` rows
+only, and `value_stderr` on the sampled rows only.
+
+The bias-correction step `t` of an AdamW `P` and the number of sequences in a
+batch are not recorded in the file.
 
 #### Standard error of the sampled values (`value_stderr`)
 
@@ -991,7 +1014,8 @@ the batch touches) is zero for every probe draw and has `value_stderr = 0`.
 - **Specific to the micro-batch cut and the number of ranks.** One probe spans
   a whole micro-batch, so the spread includes the cross-sequence terms
   ("`micro_batch_size` is a noise setting"). The column reports the error of the
-  run that was made; another `micro_batch_size` or `n_ranks` has another.
+  run that was made; another `micro_batch_size` or `n_ranks` has another. Both
+  are recorded on the row.
 - **Itself an estimate, from `n` values per micro-batch.** Its square is
   unbiased, but with few probes and few micro-batches it is coarse: at `n = 2`
   one micro-batch contributes a one-degree-of-freedom estimate. The per-probe
@@ -1018,12 +1042,12 @@ the batch touches) is zero for every probe draw and has `value_stderr = 0`.
   4 probes per micro-batch and 0.5–1.6% below with 16. Average repeated
   measurements with equal weights, or with weights fixed beforehand. (Reproduce
   with `python scripts/value_stderr_seed_study.py weighting --seeds 800`.)
-- **Specific to the probe distribution, which the file does not record.** One
-  Gaussian probe has variance `2‖A‖²_F`, one Rademacher probe
-  `2Σ_{i≠j}A²_ij` (`A` the micro-batch's Gram matrix): with Gaussian probes the
-  diagonal counts as well, so the same run has a larger standard error. The
-  column reports the error of the distribution that was used, but two files
-  written with different `hutchinson_distribution` cannot be told apart.
+- **Specific to the probe distribution.** One Gaussian probe has variance
+  `2‖A‖²_F`, one Rademacher probe `2Σ_{i≠j}A²_ij` (`A` the micro-batch's Gram
+  matrix): with Gaussian probes the diagonal counts as well, so the same run
+  has a larger standard error. The column reports the error of the distribution
+  that was used, which the row records in `hutchinson_distribution`; do not
+  pool rows of the two distributions as if they had one noise level.
 - **Not independent between rows that share probes.** `chi_net`, `chi_net_P`,
   `chi_net_P_capped`, `chi_pos` and `chi_pos_P` of one batch come from the same
   probes, and a cross pair's rows from the probes of its two batches; their
@@ -1067,7 +1091,9 @@ Two earlier column sets exist: the first eleven columns (every release through
   column the file predates is filled with null — not recorded is not a value —
   with one exception: `preconditioner` is filled with `"none"`, because the
   preconditioned rows and that column were introduced together, so a file
-  without it holds raw rows only. Files are not rewritten.
+  without it holds raw rows only. Files are not rewritten. The fill goes by
+  column, not by a list of known file generations, so a file with any leading
+  part of the current column set is handled the same way.
 
 ```python
 from vatis.sinks import read_results
