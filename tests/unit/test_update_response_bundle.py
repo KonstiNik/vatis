@@ -745,3 +745,24 @@ def test_an_explicit_rule_works_on_any_model_bundle() -> None:
     assert _value(rows, "A", "update_response", batch_a="A") == pytest.approx(-lr * l1, rel=1e-4)
     assert _value(rows, "A", "update_response_hist", batch_a="A") == 0.0
     assert not _has(rows, "loss_change")
+
+    # A rule that does not say which batch it consumed cannot be placed.
+    import dataclasses
+
+    anonymous = dataclasses.replace(rule, update_batch=None)
+    with pytest.raises(ValueError, match="does not carry the batch"):
+        analyze(
+            model=ModelBundle(
+                model=model,
+                params=params,
+                forward_fn=plain_lm_forward,
+                loss_fn=causal_lm_loss,
+                valid_mask_fn=causal_lm_valid_mask,
+                identifier="toy",
+            ),
+            eval_batches={"A": batch},
+            update_response=lambda ckpt_id: anonymous,
+            chi_net_method="hutchinson",
+            n_hutchinson=2,
+            dtype="fp32",
+        )

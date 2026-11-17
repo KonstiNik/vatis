@@ -1101,6 +1101,12 @@ class Analyzer:
         reduced again; only the two loss evaluations of the realized change run
         on the rank's shard and are all-reduced.
         """
+        if update.update_batch is None:
+            raise ValueError(
+                f"checkpoint {ckpt_id!r}: the update rule does not carry the batch the step "
+                "consumed (OptimizerUpdate.update_batch), so the analyzer cannot tell which "
+                "eval batch's gradient the update is built from"
+            )
         matching = [
             name for name, raw in raw_batches.items() if _same_batch(raw, update.update_batch)
         ]
