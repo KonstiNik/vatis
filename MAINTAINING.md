@@ -134,8 +134,8 @@ doubt, check what `main` currently tracks: `git ls-tree -r --name-only main`.
 `vatis/`, `tests/`, `pyproject.toml`, `uv.lock`, `LICENSE`, `CITATION.cff`,
 `README.md`, `.github/`, `.gitignore`, `docs/SPEC.md`, `CONTRIBUTING.md`,
 `CHANGELOG.md`, `.env.example`, `run_config.py`, and the public parts of
-`examples/`: `_helpers.py`, `README.md` (see below), `pythia_sweep/`,
-`benchmark/` and `olmo_sft_analysis/`.
+`examples/`: `_helpers.py`, `_plots.py`, `README.md` (see below),
+`quickstart/`, `pythia_sweep/`, `benchmark/` and `olmo_sft_analysis/`.
 
 `examples/README.md` is the index of the examples. Its last section, "Research
 notes — `dev` branch only", lists the dev-only folders: **delete that section

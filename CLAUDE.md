@@ -281,23 +281,27 @@ vatis/
 ```
 examples/
 ├── _helpers.py                    # shared: tokenize_into_lm_batch, step_from_revision
+├── _plots.py                      # shared: observables_over_training.png (matplotlib only)
 ├── README.md                      # index of the examples (its last section is dev-only)
+├── quickstart/                    # the smallest complete use: pythia-14m, one checkpoint, CPU
+│   └── run.py, README.md          # prints the rows; the README shows the output
 ├── pythia_sweep/                  # canonical example: 13 pythia-14m revisions × prose + code
 │   ├── README.md, details.md      # what it shows; sizing and early-phase findings in full
-│   ├── run.py                     # phase 1: the sweep -> results.parquet + plots
+│   ├── run.py                     # phase 1: the sweep -> results.parquet, run_summary.json (losses) + plots
 │   ├── evaluate.py                # post-processing of results.parquet — derived observables
-│   ├── results.parquet
+│   ├── results.parquet, run_summary.json
 │   ├── chi_loss.png, chi_net.png, delta_loss.png, chi_pos.png
-│   └── cos_similarity.png
+│   └── cos_similarity.png, observables_over_training.png
 ├── benchmark/                     # A100 perf suite: single_gpu / ddp_scaling / accuracy (see benchmark/README.md)
 │   └── update_response/           # what the rows of the step taken cost: wall-clock + peak memory, CPU and GPU, 11M Llama bundles
 ├── adamw_vs_sgd_reconstruction/   # which rule reconstructs the step an AdamW run took?
 │   ├── run.py                     # phase 1 (bundle -> parquet)
-│   ├── evaluate.py                # phase 2: table + figure (no vatis imports)
+│   ├── evaluate.py                # phase 2: table + two figures (no vatis imports)
 │   ├── README.md, details.md      # what it shows; the numbers and reasoning in full
-│   └── results.parquet, run_summary.json, table.md, reconstruction.png   # its committed output
+│   └── results.parquet, run_summary.json, table.md, reconstruction.png, update_parts.png   # its committed output
 ├── spectral_tail/                 # research: spectral tail overlap (4 probes, 5 model scales)
 │   ├── run.py                     # the experiment
+│   ├── probe_texts.py             # the four probe texts
 │   ├── evaluate.py                # evaluation plots (--compute flag for FLOPs x-axis)
 │   ├── README.md, details.md      # findings; hypothesis and probe design
 │   ├── results_pythia-{14m,31m,70m,160m,410m}.parquet
@@ -305,9 +309,12 @@ examples/
 └── optimizer_aware_llama/         # raw and preconditioned observables over a Llama bundle
     ├── README.md, details.md      # what it shows; sizing, step-0 gap, 1/eps ceiling in full
     ├── run.py                     # phase 1: the raw and preconditioned observables over a bundle
-    ├── evaluate.py                # phase 2: the figure + tables
+    ├── llama_bundle.py            # support: llama_factory (imported by outside code) + measurement batches
+    ├── llama_checks.py            # support: timing, P = I re-check, 1/eps ceiling, run summary
+    ├── evaluate.py                # phase 2: the figures + tables
     ├── results.parquet, run_summary.json, performance.csv
-    └── chi_pos_raw_vs_adamw.png   # chi_pos and chi_pos^P vs step and vs train loss
+    ├── chi_pos_raw_vs_adamw.png   # chi_pos and chi_pos^P vs step and vs train loss
+    └── observables_over_training.png
 ```
 
 The deployment example is the canonical "does vatis work end-to-end on real weights" check. After any significant change to the analyzer or an estimator, **re-run `examples/pythia_sweep/run.py` and check the plots haven't moved unexpectedly**. The plots are an integration test the unit suite can't replicate.

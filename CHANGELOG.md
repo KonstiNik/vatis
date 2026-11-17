@@ -191,6 +191,23 @@ The default estimator:
   and where its committed outputs come from. `examples/BENCHMARK.md` is split
   into `pythia_sweep/README.md` and `optimizer_aware_llama/README.md`, each with
   a `details.md` holding the longer material; nothing was dropped.
+- **The example scripts are easier to read; a quickstart and a common figure.**
+  `examples/quickstart/` is new: about 40 lines that load `pythia-14m` at one
+  checkpoint, call `analyze` once and print the rows (CPU, no plotting); the
+  index now starts there. `examples/_plots.py` draws one diagnostic figure,
+  `observables_over_training.png` (the loss and every observable over the
+  training step), for the Pythia sweep and the Llama example.
+  `pythia_sweep/run.py` also writes `run_summary.json` with the mean
+  cross-entropy of each batch at each checkpoint; its `evaluate.py` has
+  `--help`. The Llama `run.py` reads as load → batches → vatis → results, its
+  support code moved unchanged into `llama_bundle.py` (which now defines
+  `llama_factory`; outside code imports it from there) and `llama_checks.py`.
+  The reconstruction example shows the gradient / momentum / weight-decay
+  split of the AdamW step (`update_parts.png`), has a narrower `table.md`, and
+  its `run.py` shows the three calls a user needs. The spectral-tail probe
+  texts moved into `probe_texts.py`. Example code no longer says "ruler" or
+  "WP0"; the recorded identifier `wp0_two_rulers_llama` and the `WP0_*`
+  environment variables are unchanged. No committed result file changed.
 
 ### Fixed
 - **DDP ranks no longer replay one Hutchinson probe stream.** Every rank seeded

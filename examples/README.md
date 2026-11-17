@@ -5,8 +5,15 @@ evaluate script that draws the figures without importing vatis, the committed
 outputs, and a README that says what question it answers, what it needs, how
 to run it, what it shows and what it does not.
 
-**Start with [`pythia_sweep/`](pythia_sweep/README.md).** It runs from a clean
-checkout, downloads a small public model, and takes about a minute.
+**Start with [`quickstart/`](quickstart/README.md):** about 40 lines that load
+a small public model at one checkpoint, call vatis once and print the result;
+7 s on a CPU once the model is downloaded. **Then
+[`pythia_sweep/`](pythia_sweep/README.md):** the same model over 13 training
+checkpoints, with figures, in about a minute.
+
+Each example that follows a training run also draws
+`observables_over_training.png`: the loss and every observable over the
+training step, with the same layout in every example (`_plots.py`).
 
 The Llama example and the reconstruction example need a **training bundle that
 is not part of this repository**: a checkpoint bundle written by a separate
@@ -17,7 +24,8 @@ READMEs can still be read.
 
 | example | question it answers | what it needs | time (as recorded) |
 |---|---|---|---|
-| [`pythia_sweep/`](pythia_sweep/README.md) | How do the observables of Pythia-14m change over training, and do prose and code gradients help or hurt each other? | the public `EleutherAI/pythia-14m` checkpoints (downloaded); GPU optional | 52–55 s cached, 76 s first run (RTX 3090 Ti) |
+| [`quickstart/`](quickstart/README.md) | What does a use of vatis look like, from start to finish? | `EleutherAI/pythia-14m` at one checkpoint (downloaded); a CPU | 7 s cached (CPU) |
+| [`pythia_sweep/`](pythia_sweep/README.md) | How do the observables of Pythia-14m change over training, and do prose and code gradients help or hurt each other? | the public `EleutherAI/pythia-14m` checkpoints (downloaded); GPU optional | 52–55 s cached, 76 s first run (RTX 3090 Ti; timed before `run.py` also recorded the loss) |
 | [`optimizer_aware_llama/`](optimizer_aware_llama/README.md) | What do `chi_pos` and its AdamW-preconditioned version look like over a real training run? | a checkpoint bundle of an 11M-parameter Llama (not in this repository) and the training repository's model code; a GPU (falls back to the CPU, slowly) | about 100 s (RTX 3090 Ti) |
 | [`adamw_vs_sgd_reconstruction/`](adamw_vs_sgd_reconstruction/README.md) | Which update rule reproduces the step an AdamW run took? | a checkpoint bundle with consecutive fp32 checkpoints (not in this repository) and the training repository's model code (or your own model factory); GPU optional | 11 s (RTX 3090 Ti), 115 s (CPU) |
 | [`olmo_sft_analysis/`](olmo_sft_analysis/README.md) | What do the observables look like on a 7B SFT checkpoint and real chat data, and what does that cost? | `Olmo-3-7B-Think-SFT` and its data (downloaded); one GPU with about 93 GiB; SLURM | about 210 s (1× H100) |

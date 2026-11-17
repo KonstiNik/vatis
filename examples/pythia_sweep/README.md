@@ -21,11 +21,12 @@ text, how the run is sized, the early-phase findings in full — are in
 ## How to run
 
 ```bash
-python examples/pythia_sweep/run.py       # compute → results.parquet + four plots
-python examples/pythia_sweep/evaluate.py  # analyze → cos_similarity.png + a printed table
+python examples/pythia_sweep/run.py       # compute → results.parquet, run_summary.json + four plots
+python examples/pythia_sweep/evaluate.py  # analyze → cos_similarity.png, observables_over_training.png + a printed table
 ```
 
-`evaluate.py` reads only `results.parquet` and imports no vatis code.
+`evaluate.py` reads only `results.parquet` and `run_summary.json` (the loss of
+each batch at each checkpoint) and imports no vatis code.
 
 ## What it shows
 
@@ -51,6 +52,10 @@ the cross `delta_loss` with the size of the two gradients divided out.
 Without the four early checkpoints (steps 1, 8, 64, 512) these curves look
 smooth and monotonic; see [details.md](details.md#revisions-and-early-phase-findings).
 
+The loss of each batch and every observable over training — the diagnostic
+figure every example draws:
+[observables_over_training.png](observables_over_training.png).
+
 ## What it does not show
 
 - Anything beyond one small model: one size (14M parameters), one seed, two
@@ -64,8 +69,16 @@ smooth and monotonic; see [details.md](details.md#revisions-and-early-phase-find
 
 ## About the committed outputs
 
-- Files: `results.parquet` (234 rows), `chi_loss.png`, `chi_net.png`,
-  `delta_loss.png`, `chi_pos.png`, `cos_similarity.png`.
+- Files: `results.parquet` (234 rows), `run_summary.json`, `chi_loss.png`,
+  `chi_net.png`, `delta_loss.png`, `chi_pos.png`, `cos_similarity.png`,
+  `observables_over_training.png`.
+- `run_summary.json` (the loss of each batch at each checkpoint, the mean
+  next-token cross-entropy vatis differentiates) comes from a separate run of
+  the same `run.py` on 17 November 2026 on an RTX 3090 Ti, after `run.py`
+  learned to record the loss. That run's `results.parquet` and four plots were
+  identical to the committed ones, which were kept. The run times quoted above
+  were measured before the loss was added, which costs one more forward pass
+  and one more (cached) load per checkpoint; the new total was not timed.
 - Settings: `chi_net_method="per_sequence_cv"`, `n_hutchinson=32`, batch
   8 × 128 tokens, `micro_batch_size=8` (recorded in the parquet), and seed 0
   (`SEED` in `run.py`; the parquet records a probe seed derived from it per

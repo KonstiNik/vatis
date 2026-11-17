@@ -82,8 +82,8 @@ All ranges, per-step numbers and the reasoning behind points 2 and 3 are in
 After the warm-up the step on the update batch is almost entirely its gradient
 part (1.00–1.06 of the sum from step 661 on). On the held-out batch the
 momentum part has the opposite sign at 7 of the 8 steps from 661 on and is
-often comparable in size to the gradient part (at step 33062: 17.2 and −16.2). The
-weight-decay part is below 0.2% of the sum everywhere except at step 33062 on
+often comparable in size to the gradient part (at step 33062: 17.2 and
+−16.2). The weight-decay part is below 0.2% of the sum everywhere except at step 33062 on
 the held-out batch, where it is 2%.
 
 Every number per step and batch: [table.md](table.md) — the ratios of the

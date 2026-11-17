@@ -60,8 +60,8 @@ is 1.4·10⁻⁷.
   taken.
 - **Why about ten times, late in training.** On the update batch the late step
   is almost entirely its gradient part (the split figure in the README; the
-  numbers are in `table.md`), and that part is 0.06–0.09 of −η·δL_P. The current gradient enters an AdamW step
-  with weight 1 − β₁ = 0.1. In addition, the step is taken with the
+  numbers are in `table.md`), and that part is 0.06–0.09 of −η·δL_P. The
+  current gradient enters an AdamW step with weight 1 − β₁ = 0.1. In addition, the step is taken with the
   preconditioner after the second-moment update by that same gradient, not
   with P_t. By the way AdamW works (this is reasoning, not something read from
   the result file), that preconditioner is smaller than P_t where the gradient
