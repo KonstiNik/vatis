@@ -95,19 +95,25 @@ The labels are the single source of truth for what enters the loss
 - **The update-batch rows of a bundle that records pad masking change**: `batch_a` ignores the targets equal to the recorded `loss_ignore_index` (they used to be counted), and `examples/two_rulers_llama.py` scores its held-out batches the same way. *To do:* re-run analyses of such bundles; bundles without the two fields are read exactly as before.
 - **Contradictory or impossible pad metadata is refused** with `BundleSchemaError` when the bundle is opened, also for uses that never touch the update batch (`mask_pad_in_loss: true` without an index, an index without it, a wrong JSON type, a negative index or one not below the model config's `vocab_size`). *To do:* correct the two fields in `metadata.json`; "Repairing contradictory pad fields" in the SPEC says how, including how the recorded `train_loss` settles which entry is wrong.
 
+The default estimator:
+- **The default `chi_net` estimator is `hutchinson` at every batch size.** Without an explicit `chi_net_method`, a batch of at most 32 sequences used to select `per_sequence_cv`. Such runs now leave out the control-variate correction, so `chi_net` and `chi_pos` (and their `_P` rows) change; where the two estimators were compared on the same probes (the committed Pythia-14m and Pythia-160m results, where `chi_pos` is of order 1e-7) they agreed to about four digits or better. Cost: `hutchinson` runs a forward for every probe and no per-sequence backwards; in the committed Pythia-160m table (measured with the whole batch as one micro-batch) the wall-clock of the two is about equal at 32 probes and `hutchinson` needs less peak memory; other micro-batch sizes and larger models have not been measured. The control variate has not shown a lower variance in any committed measurement (README, "Choosing the χ_net estimator"). Result files written by 0.2.x do not record which estimator produced them; from this release on every row carries it in the `chi_net_method` column (see "Added"). *To do:* pass `chi_net_method="per_sequence_cv"` (CLI: `--chi-net-method per_sequence_cv`) to keep the previous estimator. That restores the estimator, not the 0.2.x numbers: the probe draw changed in this release as well (see "Changed").
+
 ### Changed
 - **Hutchinson probes are drawn on the CPU** and copied to the device, so a seed
   now identifies one probe set on every device, and the default Rademacher draw
   is bit-packed. Consequence: for a given `seed`, `chi_net` (and therefore
   `chi_pos`) with Rademacher probes is a *different draw* than in 0.2.x — same
-  estimator, same expectation, different random numbers. `chi_loss` and
+  estimator, same expectation, different random numbers (a run that relied on
+  the default estimator with at most 32 sequences also changes estimator, see
+  "Changed (breaking)"). `chi_loss` and
   `delta_loss` are bit-identical to 0.2.x, and so is `chi_net` with Gaussian
   probes on a CPU run. `make_probe` refuses a CUDA generator.
 - **Multi-rank (DDP) runs draw different Hutchinson probes for a given `seed`**:
   rank 0 keeps the per-call stream, every other rank now has its own (see
   "Fixed"). `chi_net`, `chi_net_P`, `chi_pos` and `chi_pos_P` (and
   `chi_net_P_capped`) of a run with more than one rank are therefore a different
-  draw than in **every earlier version** — same estimator, same expectation —
+  draw than in **every earlier version** — same estimator (unless the run relied
+  on the default, see "Changed (breaking)"), same expectation —
   and they depend on the number of ranks as well as on the seed. Single-process
   results are unchanged *by this fix* (the CPU-probe entry above still applies
   to them), and so are `chi_loss` and `delta_loss` everywhere. The

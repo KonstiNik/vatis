@@ -213,7 +213,7 @@ class Analyzer:
             ``LocalBundleSource.adamw_preconditioner()``, which reads each
             checkpoint's saved (pre-step) optimizer state.
         chi_net_method: ``"hutchinson"``, ``"per_sequence_cv"``, ``"opacus"``,
-            or ``None`` for auto.
+            or ``None`` for the default, ``"hutchinson"``.
         n_hutchinson: number of probe vectors per micro-batch. With at least
             two, the rows whose value depends on the probes carry its standard
             error in ``value_probe_stderr``; with one there is no spread to estimate
@@ -1019,9 +1019,10 @@ class Analyzer:
                 self._chi_net_p_capped_stderr_cache.get(name_b),
             )
 
-        # Usually one estimator for the whole run; the automatic selection picks
-        # per batch, though, so the two batches of a pair can differ -- then the
-        # row names both, in pair order.
+        # One estimator for the whole run with today's selector (the request, or
+        # the default, for every batch). The estimator is still resolved per
+        # batch, so if two batches of a pair ever differ the row names both, in
+        # pair order, instead of hiding it.
         chi_net_method = _pair_label(
             self._chi_net_method_cache[name_a], self._chi_net_method_cache[name_b]
         )

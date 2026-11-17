@@ -2,8 +2,9 @@
 
 Two panels:
   (left)  relative std (std/mean) across seeds vs n_h, log-log, with a 1/sqrt(n)
-          reference. Both methods should track slope -1/2; per_sequence_cv should
-          sit BELOW hutchinson (lower variance at equal n_h).
+          reference. Both methods should track slope -1/2. In the committed
+          Pythia-14m sweep the two curves coincide (no variance gain from the
+          control variate there).
   (right) chi_net estimate (mean +/- std) vs n_h with the high-n reference line —
           shows the estimates are unbiased (means hit the reference) while the
           error bars shrink with n_h.
