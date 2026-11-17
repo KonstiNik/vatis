@@ -62,8 +62,9 @@ subdirectory (CPU-only; needs `vatis[examples]` for matplotlib).
   a correctness check that observables are rank-count-invariant.
 - **accuracy** — the χ_net estimators are unbiased, so accuracy is governed by
   variance, which falls like ~1/√n_hutchinson. `per_sequence_cv`'s control
-  variate gives lower variance than plain `hutchinson` at the same
-  `n_hutchinson`, most visibly in the high-`χ_pos` regime.
+  variate is meant to lower the variance in the high-`χ_pos` regime. The
+  committed sweep (`accuracy_pythia-14m.json`, where `χ_pos` is tiny) does not
+  show it: both estimators have the same spread at every `n_hutchinson`.
 
 > Numbers are hardware-specific and meant as orientation, not guarantees. For a
 > consumer-GPU smoke check and the end-to-end deployment-example findings, see

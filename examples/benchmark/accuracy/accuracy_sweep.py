@@ -3,8 +3,9 @@
 For a fixed (model, batch), estimate chi_net at a grid of n_hutchinson with many
 random seeds, for both methods. The estimator is unbiased, so its accuracy is
 governed by variance, which should fall like ~1/sqrt(n_h). per_sequence_cv's
-control variate should give LOWER variance than plain hutchinson at the same
-n_h. Writes per-(method, n_h, seed) chi_net values to JSON for plotting.
+control variate was expected to give lower variance than plain hutchinson at
+the same n_h; the committed Pythia-14m sweep shows the same spread for both.
+Writes per-(method, n_h, seed) chi_net values to JSON for plotting.
 
     .venv/bin/python examples/benchmark/accuracy/accuracy_sweep.py \\
         --model EleutherAI/pythia-160m --revision step3000

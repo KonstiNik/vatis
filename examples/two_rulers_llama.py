@@ -308,8 +308,9 @@ def build_analyzer(
 ) -> Analyzer:
     """One place where the estimator configuration is fixed for every pass.
 
-    ``per_sequence_cv`` is the auto-pick for these batch sizes (B <= 32) and the
-    method the golden gate uses, so the example exercises the same path.
+    ``per_sequence_cv`` is this script's default (``--chi-net-method``) and the
+    method the golden gate uses, so the example exercises the same path. It is
+    not vatis's own default, which is ``hutchinson``.
     """
     return Analyzer(
         eval_batches=eval_batches,
@@ -704,7 +705,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  checkpoints     : {len(steps)} {steps}")
     print(f"  device / dtype  : {args.device} / {args.dtype}")
     print(
-        f"  estimator       : {args.chi_net_method or 'auto'} n_hutchinson={args.n_hutchinson} "
+        f"  estimator       : {args.chi_net_method or 'hutchinson (vatis default)'} n_hutchinson={args.n_hutchinson} "
         f"micro_batch_size={args.micro_batch_size} seed={args.seed}"
     )
 
