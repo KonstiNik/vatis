@@ -175,7 +175,8 @@ Three things to know before using it:
 - **`delta_loss_P` is not the first-order loss change of the AdamW step.** `P`
   is the geometry factor only: momentum and weight decay are excluded, and it is
   built from the second moment *before* the step
-  ([`docs/SPEC.md` → What `delta_loss_P` is not](docs/SPEC.md)).
+  ([`docs/SPEC.md` → What `delta_loss_P` is not](docs/SPEC.md)). The step that
+  was taken has its own rows, `update_response*` — see the next section.
 - Coordinates that never received a non-zero gradient sit at `P = 1/ε` and can
   dominate `chi_net_P` — on held-out data, and equally on the update batch
   itself when it contains a token the run has not seen before (`P` is the
@@ -184,6 +185,53 @@ Three things to know before using it:
   those coordinates contribute, so you can see when a value is carried by a
   handful of untouched coordinates
   ([`docs/SPEC.md` → Coordinates at the ceiling](docs/SPEC.md)).
+
+## The step that was taken
+
+`delta_loss_P` answers a question about geometry. To measure how the loss
+responds, to first order, to the update the optimizer really applied at a
+checkpoint — momentum, weight decay and the step's own second-moment update
+included — pass `update_response`:
+
+```python
+analyzer = Analyzer(
+    eval_batches={"train": source.batch_a_spec(), "val": val_batch},
+    update_response=source.update_response(),   # needs the update batch among the eval batches
+    sink="results.parquet",
+)
+analyzer.run(source.model_specs())
+```
+
+| observable | meaning |
+|------------|---------|
+| `update_response` | ∇_θ Lᴮ · (θ_{t+1} − θ_t), with the update rebuilt from the optimizer state saved before the step |
+| `update_response_grad` / `_hist` / `_wd` | its three parts: the step's own gradient, the gradient history (momentum), weight decay |
+| `update_response_weights` | the same dot product from the two stored weight files |
+| `loss_change` | L_B(θ_{t+1}) − L_B(θ_t), the realized change |
+| `loss_change_residual` | `loss_change − update_response_weights` |
+
+The rows sit on the pair (update batch, `B`) for every eval batch `B`. They are
+loss changes — learning rate included, negative when the loss falls — for
+AdamW, Adam and SGD bundles, at every checkpoint including step 0. The last
+three need the next step in the bundle and **fp32 weight files**; with bf16
+files they are skipped with a warning, because the difference of two rounded
+weight files is mostly rounding.
+
+Two things to know before using it:
+
+- **Gradient clipping has to be stated.** It changes the update and leaves no
+  trace in the saved optimizer state, so vatis never assumes it either way. A
+  bundle whose `metadata.json` records `gradient_clip_val` (null, or a value
+  with `gradient_clip_algorithm: "norm"`) is read as recorded; otherwise
+  `update_response()` refuses until you pass `clip_grad_norm=None` or
+  `clip_grad_norm=<max norm>`.
+- **The gradient is recomputed, not read.** The rows describe the step taken
+  only if one optimizer step on the stored batch at the stored weights is what
+  the run did (no dropout, the same loss, token-weighted gradient
+  accumulation). Where the realized rows exist, `update_response` and
+  `update_response_weights` must agree; if they do not, that assumption fails
+  for your bundle
+  ([`docs/SPEC.md` → The response to the update that was taken](docs/SPEC.md)).
 
 ## Output
 
