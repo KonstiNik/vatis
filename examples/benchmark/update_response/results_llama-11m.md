@@ -34,6 +34,16 @@ more stable. The countable costs behind these numbers — forward and backward
 passes, buffers held — are pinned exactly, on toy bundles, by
 `tests/unit/test_update_response_cost.py`.
 
+**Which tree.** The tables were measured before the result-file columns and
+the `hutchinson` default of `dev` were merged into this branch, and were not
+regenerated: the merge does not change what the script measures (it names the
+estimator, `chi_net_method="hutchinson"`, and the passes it counts are the
+same). Checked on the merged tree for the AdamW bundle on the GPU, three runs
+per mode: 0.6 / 0.7 / 0.9 s per checkpoint (×1.23 and ×1.52 against ×1.21 and
+×1.50 below; the machine was less loaded, 1-minute load average 0.7 – 2.0),
+peak GPU memory 1173 / 1213 / 1214 MB as
+below, peak RSS +109 MB and +142 MB against +115 MB and +138 MB.
+
 **Not measured:** models larger than 11M parameters, more than one GPU, DDP,
 and bf16 forward passes. At this size the fixed costs of a checkpoint (loading
 it, Python overhead) are a large part of the wall-clock, so the *ratios* below
