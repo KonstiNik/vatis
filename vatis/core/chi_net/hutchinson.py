@@ -6,8 +6,7 @@ vectors of the same shape as the model output, then accumulate
 is an unbiased estimate of ``Tr(M_b) = ||J_b||_F^2`` per micro-batch, summed
 over the (sub-)batch.
 
-This is the always-works fallback. It is the default for large batches
-(``B >= 32``) where the per-sequence path becomes too expensive.
+It applies to every model and is the default at every batch size.
 
 Preconditioned observables
 ==========================
@@ -32,6 +31,7 @@ from vatis.core.chi_net.base import (
     ChiNetResult,
     ForwardFn,
     LossFn,
+    ProbeSpread,
     ValidMaskFn,
 )
 from vatis.core.preconditioner import Preconditioner, weighted_sum_sq_grads
@@ -40,7 +40,7 @@ from vatis.data.collate import iter_micro_batches
 
 
 class HutchinsonEstimator(ChiNetEstimator):
-    """Plain Hutchinson trace estimator. The always-works fallback.
+    """Plain Hutchinson trace estimator. The default; applies to every model.
 
     Args:
         n_hutchinson: number of probe vectors per micro-batch.
@@ -94,10 +94,21 @@ class HutchinsonEstimator(ChiNetEstimator):
                     cap_floor = precond.capped_weight_floor
         n_valid_total = 0
         n_backwards = 0
+        # Estimated variance of each returned number under the probe draw: the
+        # micro-batches are probed independently, so the variances of their
+        # means add (see ``ChiNetResult.chi_net_var``). Left at ``None`` when one
+        # probe per micro-batch leaves no spread to measure.
+        estimate_var = self.n_hutchinson >= 2
+        var_acc = torch.zeros((), dtype=torch.float64, device=device)
+        var_p_acc = torch.zeros((), dtype=torch.float64, device=device)
+        var_c_acc = torch.zeros((), dtype=torch.float64, device=device)
 
         # We loop over micro-batches; for each, draw n_hutchinson independent
         # probes. Each probe costs one backward through theta.
         for _start, _stop, micro in iter_micro_batches(batch, micro_batch_size):
+            spread = ProbeSpread(device)
+            spread_p = ProbeSpread(device)
+            spread_c = ProbeSpread(device)
             # Forward once per probe (cannot reuse the graph because we want
             # independent random projections — and PyTorch builds a fresh
             # graph each forward anyway).
@@ -131,15 +142,18 @@ class HutchinsonEstimator(ChiNetEstimator):
                         continue
                     grad_sq = grad_sq + (g.to(dtype=torch.float64) ** 2).sum()
                 chi_net_acc = chi_net_acc + grad_sq
+                spread.add(grad_sq)
                 if chi_net_p_acc is not None and p_views is not None:
                     # Same gradient tuple, P-weighted: ||P^{1/2} (J^T v)||^2.
-                    chi_net_p_acc = chi_net_p_acc + weighted_sum_sq_grads(
-                        grads, p_views, device=device
-                    )
+                    grad_sq_p = weighted_sum_sq_grads(grads, p_views, device=device)
+                    chi_net_p_acc = chi_net_p_acc + grad_sq_p
+                    spread_p.add(grad_sq_p)
                     if chi_net_p_capped_acc is not None and cap_floor is not None:
-                        chi_net_p_capped_acc = chi_net_p_capped_acc + weighted_sum_sq_grads(
+                        grad_sq_c = weighted_sum_sq_grads(
                             grads, p_views, device=device, min_weight=cap_floor
                         )
+                        chi_net_p_capped_acc = chi_net_p_capped_acc + grad_sq_c
+                        spread_c.add(grad_sq_c)
 
                 # Tally valid tokens once per probe? No — once per
                 # micro-batch. Use the first probe of the micro-batch.
@@ -149,6 +163,13 @@ class HutchinsonEstimator(ChiNetEstimator):
                         n_valid_total += int(torch.tensor(logits.shape[:-1]).prod().item())
                     else:
                         n_valid_total += int(vmask.sum().item())
+
+            # This micro-batch's contribution to the variances. A spread that
+            # recorded nothing (no P; no entry at the ceiling, where the capped
+            # part is exactly zero for every probe) adds zero.
+            var_acc = spread.add_variance_of_mean_to(var_acc)
+            var_p_acc = spread_p.add_variance_of_mean_to(var_p_acc)
+            var_c_acc = spread_c.add_variance_of_mean_to(var_c_acc)
 
         # The Hutchinson estimator is unbiased for E[||J^T v||^2] = Tr(JJ^T)
         # only after dividing by the number of probes per micro-batch.
@@ -174,4 +195,9 @@ class HutchinsonEstimator(ChiNetEstimator):
             },
             chi_net_p=chi_net_p,
             chi_net_p_capped=chi_net_p_capped,
+            chi_net_var=var_acc if estimate_var else None,
+            chi_net_p_var=(var_p_acc if estimate_var and chi_net_p_acc is not None else None),
+            chi_net_p_capped_var=(
+                var_c_acc if estimate_var and chi_net_p_capped_acc is not None else None
+            ),
         )

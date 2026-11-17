@@ -708,7 +708,7 @@ estimation needs either (a) deterministic basis vectors over the full output
 dim — exact but `O(S·V)` backwards, infeasible for LMs — or (b) random probes
 (Hutchinson) — `O(n)` backwards with controllable variance.
 
-#### Method 1: `HutchinsonEstimator` (default for large `B`)
+#### Method 1: `HutchinsonEstimator` (default)
 
 Plain-torch Hutchinson at micro-batch level. For each micro-batch (sequences
 `[b₁, ..., b_M]`), draw `n_h` independent Rademacher vectors `v ∈ R^(M·S·V)`,
@@ -721,11 +721,10 @@ g, = torch.autograd.grad(projected, model.parameters())
 chi_net_accumulator += g.pow(2).sum()  # accumulates Σ_b ‖J_bᵀ v‖²
 ```
 
-Cost: `n_h` backwards per micro-batch. Variance is `~B×` higher per draw than the
-per-sequence path. **When to use:** large `B` (≥ 32), or when other methods don't
-apply. This is the always-works fallback.
+Cost: `n_h` forwards and `n_h` backwards per micro-batch. **When to use:** always
+applicable; it is the default at every batch size.
 
-#### Method 2: `PerSequenceControlVariateEstimator` (default for small `B`)
+#### Method 2: `PerSequenceControlVariateEstimator` (opt-in)
 
 For each sequence `b`, do **one extra backward** of `L_b` (per-sequence loss)
 w.r.t. `θ`. This gives `g_b = J_bᵀ u_b` where `u_b = ∇_f L_b` is known in closed
@@ -740,12 +739,39 @@ form. From `(g_b, u_b)`:
 These are used as a **control variate** for the Hutchinson estimate of
 `Tr(M_b)`: the loss-direction projection is correlated with the trace, known
 exactly, has zero variance; subtracting its noisy Hutchinson counterpart and
-adding back the exact value reduces total variance — substantially in the
-high-`χ_pos` regime.
+adding back the exact value is meant to reduce the total variance when the loss
+direction overlaps the top eigenmodes of `M_b` (the high-`χ_pos` regime).
 
-Cost per `(ckpt, batch)`: `n_h + B` backwards. Linear in `B`, so unattractive
-for `B > ~64`. **When to use:** moderate `B` (≤ 32), or when the per-sample
-alignment matrix is wanted.
+What the committed data show: in the accuracy sweep
+(`examples/benchmark/accuracy/accuracy_pythia-14m.json`: Pythia-14m, `B = 8`,
+sequence length 64, `micro_batch_size = 8`, 100 seeds per setting, both
+estimators run with the same seeds and therefore the same probes) the two
+estimators return practically the same value for every seed — they differ by
+less than 0.2% of one standard deviation at every `n_hutchinson` from 1 to 64 —
+so their spread is the same. The single-seed Pythia-160m table
+(`examples/benchmark/single_gpu/results_pythia-160m.md`; a synthetic random-token
+batch, the whole batch as one micro-batch) agrees: `chi_net`
+matches to the five digits it prints at `B` = 4, 8 and 16. `χ_pos` is of order
+1e-7 in both, so the loss direction carries almost none of the trace and the
+control-variate correction is negligible there. On the untrained toy fixture a
+comment in `tests/unit/test_chi_net.py` records that the control variate removes
+well under 1% of the standard deviation. There is no committed
+comparison of the two estimators' variance at `micro_batch_size = 1` on a model
+larger than 1.25M parameters, and none in the high-`χ_pos` regime where the
+correction is expected to matter.
+
+Cost: per micro-batch of `M` sequences, `per_sequence_cv` runs one forward and
+`n_h + M` backwards; `hutchinson` runs `n_h` forwards and `n_h` backwards. In
+the committed Pythia-160m table (`B` = 4, 8, 16, measured with the whole batch
+as one micro-batch) the wall-clock of the two is about equal at 32 probes,
+`per_sequence_cv` is slower at 8 probes and faster at 128, and its peak memory
+is higher (4.5–6.2 GB against 3.4–4.4 GB). Run time and memory at other
+micro-batch sizes and on larger models have not been measured.
+
+It is not selected by default (see "Default estimator"). Through `analyze()` and
+the CLI it returns the same set of observables as `hutchinson`; the per-sample
+alignment matrix is only available from a direct
+`PerSequenceControlVariateEstimator(compute_alignment_matrix=True)` call.
 
 #### Method 3: `OpacusEstimator` (opt-in fast path)
 
@@ -755,18 +781,20 @@ packing `B` samples per pass. Falls back with a clear error on tied embeddings
 (Pythia!), unsupported layers, or in-place ops.
 
 **Status:** stub only — `vatis/core/chi_net/opacus.py` raises
-`NotImplementedError`. Not yet implemented; never auto-selected.
+`NotImplementedError`. Not yet implemented; never selected by default.
 
-#### Auto-selection rule
+#### Default estimator
 
 ```python
 def select_chi_net_method(B_total: int, requested: str | None) -> str:
     if requested is not None:
         return requested  # user override always wins
-    if B_total <= 32:
-        return "per_sequence_cv"
     return "hutchinson"
 ```
+
+Through 0.2.x a batch of at most 32 sequences selected `per_sequence_cv`. It has
+not shown a lower variance and needs more peak memory (see Method 2), so the
+default is `hutchinson` at every batch size.
 
 #### `micro_batch_size` is a noise setting, not only a memory setting
 
@@ -833,8 +861,8 @@ number of valid (non-pad, non-ignored) tokens.
   **preconditioned observables** (`chi_pos_P`) for diagonal `P` (`identity`, `explicit`,
   `adamw` sources) alongside the raw one.
   Tokenized data already in model-ready form. DDP across user-specified
-  `num_gpus`. Two `χ_net` estimators (`hutchinson`, `per_sequence_cv`) with
-  auto-selection. Parquet result sink (canonical) plus optional W&B and
+  `num_gpus`. Two `χ_net` estimators (`hutchinson`, the default, and the
+  opt-in `per_sequence_cv`). Parquet result sink (canonical) plus optional W&B and
   TensorBoard. CLI via `python -m vatis run …` that wraps `torchrun`.
 - **Out:** Tokenization (examples tokenize inline; vatis core provides no
   tokenizer). Checkpoint discovery / sweep scheduling. FSDP. Tensor / pipeline
@@ -862,8 +890,8 @@ vatis/
 │   ├── observables.py     # chi_loss, delta_loss, chi_pos (combine χ_net from estimator)
 │   ├── chi_net/
 │   │   ├── base.py        # ChiNetEstimator ABC
-│   │   ├── hutchinson.py  # HutchinsonEstimator (always-works fallback)
-│   │   ├── per_seq_cv.py  # PerSequenceControlVariateEstimator (default for small B)
+│   │   ├── hutchinson.py  # HutchinsonEstimator (default)
+│   │   ├── per_seq_cv.py  # PerSequenceControlVariateEstimator (opt-in)
 │   │   └── opacus.py      # OpacusEstimator (stub)
 │   ├── probes.py          # Rademacher / Gaussian probe vector generation, masking
 │   ├── param_layout.py    # ParameterLayout: the canonical parameter flattening order
@@ -935,7 +963,7 @@ results = analyze(
     observables=None,                           # None = all raw (+ all P if a preconditioner is set)
     preconditioner=None,                        # None | "identity" | Preconditioner | fn(ckpt_id) -> P | None
     update_response=None,                       # None | fn(ckpt_id) -> OptimizerUpdate | None
-    chi_net_method=None,                        # None = auto: per_seq_cv if B≤32 else hutchinson
+    chi_net_method=None,                        # None = hutchinson
     n_hutchinson=32,                            # interpretation depends on method
     hutchinson_distribution="rademacher",       # or "gaussian"
     micro_batch_size=1,                         # least memory AND least noise; raising it raises χ_net variance
@@ -1289,7 +1317,20 @@ n_hutchinson       int32         # null if not applicable
 hutchinson_seed    int64         # null if not applicable
 wallclock_s        float64
 preconditioner     str           # "none" on raw rows; the P descriptor on P rows
+chi_net_method     str           # the chi_net estimator that ran: "hutchinson" | "per_sequence_cv"
+n_ranks            int32         # number of processes (DDP world size); 1 for a single process
+preconditioner_eps              float64   # eps of an AdamW P; null on every other row
+preconditioner_beta2            float64   # beta2 of an AdamW P; null on every other row
+preconditioner_capped_fraction  float64   # fraction of P's coordinates at its ceiling; null without one
+value_probe_stderr       float64       # probe standard error of `value`; null where nothing is sampled
+micro_batch_size   int32         # the micro_batch_size the run was made with
+hutchinson_distribution  str     # the distribution of the probes: "rademacher" | "gaussian"
 ```
+
+Columns are only ever appended, and a column that does not apply to a row is
+null. The eight after `preconditioner` are described under "Provenance columns"
+and "Standard error of the sampled values" below; files written before they
+existed are covered under "Files written with an earlier column set".
 
 The preconditioned observables extend the format minimally: they are new
 `observable` *values* (`delta_loss_P`, `chi_net_P`, `chi_pos_P`, and for a `P`
@@ -1324,6 +1365,7 @@ key = ["checkpoint_id", "batch_a", "batch_b"]
 wide = df.pivot(index=key, columns="observable", values="value")
 wide["preconditioner"] = df[df.preconditioner != "none"].groupby(key).preconditioner.first()
 # columns: chi_loss, chi_net, delta_loss, chi_pos, ..., chi_net_P, delta_loss_P, chi_pos_P, ...
+err = df.pivot(index=key, columns="observable", values="value_probe_stderr")   # same shape, the standard errors
 ```
 
 Do not select the preconditioned values by filtering on `preconditioner`: that
@@ -1332,6 +1374,202 @@ rows (an AdamW step-0 checkpoint) shows up as empty cells in the `_P` columns.
 There is no `chi_net_P_normalized` row: it is `chi_net_P / √(n_valid_a ·
 n_valid_b)` from the same row's own columns, and `chi_pos_P` — like `chi_pos` —
 is invariant under the normalization.
+
+#### Provenance columns
+
+These say how a row was obtained. They do not change any value.
+
+- **`chi_net_method`** — the `χ_net` estimator that actually ran for the row's
+  batch, whatever selected it (an explicit `chi_net_method=...` or the
+  default). It is written on every row of the batch, including the ones the
+  estimator does not enter (`chi_loss`, `delta_loss`), like `n_hutchinson`.
+  The estimator is resolved per batch. With `hutchinson` as the default at
+  every batch size all batches of a run get the same one; should the two
+  batches of a cross pair ever differ, the pair's rows carry both, in pair
+  order: `"per_sequence_cv+hutchinson"`.
+- **`n_ranks`** — the number of processes of the run (the DDP world size), `1`
+  for a single process. Every rank draws its own probe stream for its own
+  shard, so a multi-rank `χ_net` is a different draw than a single-process one
+  and depends on this number as well as on `hutchinson_seed` ("Probe vector
+  details").
+- **`preconditioner_eps`, `preconditioner_beta2`** — on the rows computed with
+  an AdamW `P = 1/(√v̂ + ε)` (the `_P` and `_P_capped` observables), the `ε` and
+  `β2` that `P` was built with: the saved `param_groups` values, or the
+  overrides when `adamw_preconditioner(beta2=..., eps=...)` was given them.
+  Null on raw rows and on the rows of any other `P` (`identity`, `sgd`,
+  `explicit`).
+- **`preconditioner_capped_fraction`** — on the rows computed with a `P` that
+  has a ceiling (`1/ε` for AdamW), the fraction of the coordinates of `P` that
+  sit at it, by the criterion of the `*_capped` rows (`P_i ≥ (1 − 1e-6) ·
+  ceiling`). For AdamW that reads `1/(√v̂ + ε) ≥ (1 − 1e-6)/ε`, i.e.
+  `√v̂ ≲ 1e-6 · ε`: the second moment is zero or negligible against `ε²`, not
+  necessarily exactly zero. It is a property of `P` —
+  *how many* coordinates — and the same on every row of a checkpoint. How much
+  of a value those coordinates carry is a different question, answered by the
+  `*_capped` rows ("Coordinates at the ceiling"): a fraction of `1e-4` can
+  carry almost all of `chi_net_P`. Null on raw rows and for a `P` without a
+  ceiling.
+
+- **`micro_batch_size`** — the `micro_batch_size` the run was made with. One
+  probe spans a micro-batch, so the sampled values, and above all their
+  standard error, are specific to it ("`micro_batch_size` is a noise setting").
+  It is the setting, not the realized sizes: the last micro-batch of a batch
+  holds what is left, a batch smaller than the setting is a single micro-batch,
+  and under DDP each rank cuts its own shard — so the actual cut follows from
+  this column, `n_ranks` and the number of sequences in the batch.
+- **`hutchinson_distribution`** — the distribution the probes were drawn from
+  (`"rademacher"` or `"gaussian"`), as reported by the estimator that ran. The
+  two give different draws for the same seed and different variances.
+
+**Which rows carry what.** `chi_net_method`, `n_ranks`, `micro_batch_size` and
+`hutchinson_distribution` describe the run, exactly like `n_hutchinson`, and
+are written on **every** row — also on `chi_loss` and `delta_loss` rows, whose
+values no probe enters, so that any subset of a file still says which run it
+came from. A cross pair carries the values of its two batches; the micro-batch
+size and the distribution are settings of the whole run and therefore the same
+for both (only the estimator can differ between the batches of a pair, see
+above). The three `preconditioner_*` columns are on the `_P` / `_P_capped` rows
+only, and `value_probe_stderr` on the sampled rows only.
+
+The bias-correction step `t` of an AdamW `P` and the number of sequences in a
+batch are not recorded in the file.
+
+#### Standard error of the sampled values (`value_probe_stderr`)
+
+`χ_net` is estimated with random probes, so the same run with another `seed`
+returns another number. `value_probe_stderr` is the standard error of the row's
+`value` under that draw, with the batch, the weights, the micro-batch cut and
+the number of ranks held fixed. The name says what it covers: the error from
+the probes, and nothing else.
+
+**Definition.** Both estimators draw `n = n_hutchinson` probes per micro-batch
+and report, for micro-batch `m`, the mean of `n` independent per-probe values
+`q_{m,1}, …, q_{m,n}`: `‖Jᵀv‖²` for `hutchinson`, and `‖Jᵀ(I−Π)v‖²` for
+`per_sequence_cv`, whose loss-direction term involves no probe and has no
+spread. (For `chi_net_P` the norms are `P`-weighted; for `chi_net_P_capped`
+they run over the coordinates at the ceiling.) Micro-batches are probed
+independently, and so are the ranks of a DDP run, so the variances of those
+means add:
+
+```
+Var[χ_net]  =  Σ_ranks Σ_m  s_m² / n ,        s_m² = Σ_i (q_{m,i} − mean_m)² / (n − 1)
+value_probe_stderr(chi_net)  =  √Var[χ_net]
+```
+
+`s_m²` is the usual unbiased sample variance, so the variance above is unbiased
+for the variance of the reported `χ_net`. Each rank accumulates the sum over its
+micro-batches and the sums are all-reduced like the estimates themselves.
+
+| row | `value_probe_stderr` |
+|---|---|
+| `chi_net`, `chi_net_P`, `chi_net_P_capped` (self pair) | as above, from that row's own per-probe values |
+| `chi_net_normalized` | that of `chi_net`, divided by `√(n_valid_a · n_valid_b)` |
+| `chi_pos`, `chi_pos_P` | `abs(value) · stderr(χ_net) / χ_net` with the row's own `χ_net` (`χ_net^P`): `δL` and `χ_loss` are not sampled, so the relative error of `χ_net` carries over — to first order |
+| cross-pair `chi_net`, `chi_net_P`, `chi_net_P_capped` | `√(a·b)/2 · √((s_a/a)² + (s_b/b)²)` for the two batches' values `a`, `b` and standard errors `s_a`, `s_b` — the batches are probed with different streams, hence independently; to first order |
+| `chi_loss`, `chi_loss_normalized`, `delta_loss`, `delta_loss_P`, `delta_loss_P_capped` | null — no probe enters these |
+| every row when `n_hutchinson = 1` | null — one value has no spread |
+| `chi_pos` when `χ_net = 0` | null |
+
+A capped part that is exactly zero (no coordinate at the ceiling, or none that
+the batch touches) is zero for every probe draw and has `value_probe_stderr = 0`.
+
+**What the number is not.**
+
+- **Not a data-sampling error.** It says how much the value would move with
+  other probes on the *same* batch, and nothing about another batch from the
+  same distribution. For a deterministic observable it is null, not zero.
+- **Specific to the micro-batch cut and the number of ranks.** One probe spans
+  a whole micro-batch, so the spread includes the cross-sequence terms
+  ("`micro_batch_size` is a noise setting"). The column reports the error of the
+  run that was made; another `micro_batch_size` or `n_ranks` has another. Both
+  are recorded on the row.
+- **Itself an estimate, from `n` values per micro-batch.** Its square is
+  unbiased, but with few probes and few micro-batches it is coarse: at `n = 2`
+  one micro-batch contributes a one-degree-of-freedom estimate. The per-probe
+  values are right-skewed, so `value ± 2·value_probe_stderr` is not a calibrated 95%
+  interval at small `n`.
+- **First order for `chi_pos` and for cross pairs.** The formulas above neglect
+  terms of relative size (relative error of `χ_net`)². Measured on a test model
+  over 4000 seeds: with `χ_net` known to 3–9% the reported variance of
+  `chi_pos` and of the cross-pair rows was 0.95–1.03 of the observed one; with
+  `χ_net` known to only 23% (two probes per micro-batch, five samples in
+  micro-batches of four) the reported variance of `chi_pos` was 0.80 of the
+  observed one, i.e. the standard error about 10% too small. Treat the
+  propagated standard error as approximate once `value_probe_stderr / value` of
+  `chi_net` exceeds about 10%. (Reproduce with
+  `python scripts/value_probe_stderr_seed_study.py propagation --seeds 4000`.)
+- **Not a weight for averaging.** A row's `value` and its `value_probe_stderr` are
+  computed from the same per-probe values, and those are right-skewed: a draw
+  that comes out high also reports a large error. The two are positively
+  correlated, so weighting repeated measurements by `1/value_probe_stderr²` favours
+  the low draws and pulls the average down. Measured over 800 seeds on a test
+  model (`chi_net` of one batch of five samples, Rademacher probes, both
+  estimators, the batch as one micro-batch and as five): correlation 0.31–0.66;
+  the inverse-variance-weighted mean was 3–19% below the plain mean with 2 and
+  4 probes per micro-batch and 0.5–1.6% below with 16. Average repeated
+  measurements with equal weights, or with weights fixed beforehand. (Reproduce
+  with `python scripts/value_probe_stderr_seed_study.py weighting --seeds 800`.)
+- **Specific to the probe distribution.** One Gaussian probe has variance
+  `2‖A‖²_F`, one Rademacher probe `2Σ_{i≠j}A²_ij` (`A` the micro-batch's Gram
+  matrix): with Gaussian probes the diagonal counts as well, so the same run
+  has a larger standard error. The column reports the error of the distribution
+  that was used, which the row records in `hutchinson_distribution`; do not
+  pool rows of the two distributions as if they had one noise level.
+- **Not independent between rows that share probes.** `chi_net`, `chi_net_P`,
+  `chi_net_P_capped`, `chi_pos` and `chi_pos_P` of one batch come from the same
+  probes, and a cross pair's rows from the probes of its two batches; their
+  errors are correlated and must not be combined as independent. Rows of
+  different batches or checkpoints use different streams.
+- **Validated on CPU test models only.** The check against the exact variance
+  covers Rademacher and Gaussian probes; the check against the spread over
+  seeds through `analyze()` uses the default Rademacher probes.
+
+**How it is checked** (`tests/unit/test_value_probe_stderr.py`,
+`tests/integration/test_ddp_loopback.py`): the variance an estimator reports
+equals the spread of its own regenerated probes evaluated on an explicit
+Jacobian; averaged over seeds it equals the exact variance, for Rademacher
+probes (`Σ_m 2Σ_{i≠j}(A_m)²_ij / n`) and for Gaussian ones
+(`Σ_m 2‖A_m‖²_F / n`); the same data under two batch names is probed with
+different streams, which the cross-pair formula relies on; through `analyze()`, the mean of `value_probe_stderr²`
+over 256 seeds equals the sample variance of `value` within four standard
+errors of that comparison, for both estimators and two micro-batch sizes — the
+directly sampled rows in every configuration, the propagated ones where `χ_net`
+is known to a few percent, with the next-order bias of the first-order formula
+allowed for; and on the real two-process path the standard error equals the
+root of the summed per-rank variances.
+
+#### Files written with an earlier column set
+
+Two earlier column sets exist: the first eleven columns (every release through
+0.2.1, before `preconditioner`), and the first twelve. Such files stay usable:
+
+- **The sink never appends to an existing file.** Opening a path that already
+  holds a file replaces it as a whole (see "Known limitations"), so no file ever
+  mixes two column sets, whichever version wrote first.
+- **Reading by column name is unaffected.** `pd.read_parquet` /
+  `pq.read_table` return the columns the file has, so a script that selects
+  columns by name — the scripts under `examples/` do — neither notices the new
+  columns in a new file nor misses them in an old one.
+- **What does not work on its own:** asking an old file for a column it does
+  not have, and concatenating old and new tables with `pyarrow`
+  (`pa.concat_tables` refuses differing schemas unless told to promote).
+- **`vatis.sinks.read_results(path_or_paths)`** returns any vatis result file,
+  or several concatenated, as a `pyarrow` table in the current column set. A
+  column the file predates is filled with null — not recorded is not a value —
+  with one exception: `preconditioner` is filled with `"none"`, because the
+  preconditioned rows and that column were introduced together, so a file
+  without it holds raw rows only. Files are not rewritten. The fill goes by
+  column, not by a list of known file generations, so a file with any leading
+  part of the current column set is handled the same way. The standard-error
+  column was called `value_stderr` only in versions of this change that were
+  never merged, so no file carries that name and `read_results` has no alias
+  for it.
+
+```python
+from vatis.sinks import read_results
+
+df = read_results(["old_run.parquet", "new_run.parquet"]).to_pandas()
+```
 
 ### Distributed semantics
 
@@ -1346,8 +1584,10 @@ is invariant under the normalization.
   rank draws `n` probe vectors **for its own shard** from **its own stream**
   (see "Probe vector details") and estimates the trace over its shard;
   all-reduce sums them, which is correct because `Tr(Θ)` is a sum over rows and
-  the shards partition the rows. For `δL`, each rank computes its partial
-  gradient and all-reduce-sums.
+  the shards partition the rows. The variance each rank's estimator reports
+  for its partial `χ_net` is summed the same way (the streams are independent),
+  and its square root is `value_probe_stderr`. For `δL`, each rank computes its
+  partial gradient and all-reduce-sums.
 - All-reduce happens **once per checkpoint × eval-batch**, never in inner loops.
 - `micro_batch_size=1` is the always-safe fallback, and the least noisy
   setting (see "`micro_batch_size` is a noise setting, not only a memory

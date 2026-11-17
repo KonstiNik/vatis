@@ -61,6 +61,19 @@ class ChiNetResult:
             ``1/eps`` for AdamW), or ``None`` when the preconditioner has no
             ceiling. The estimate is linear in ``P`` at fixed probes, so this
             and the remaining ("live") part add up to ``chi_net_p``.
+        chi_net_var: 0-dim fp64 tensor, the estimated **variance of**
+            ``chi_net`` **under the probe draw**, or ``None`` when it cannot be
+            estimated (one probe per micro-batch, or an estimator that does not
+            report it). ``chi_net`` is a sum over micro-batches of a mean of
+            ``n_hutchinson`` independent per-probe values, so this is the sum
+            over micro-batches of ``s^2 / n_hutchinson``, ``s^2`` the unbiased
+            sample variance of that micro-batch's per-probe values
+            (:class:`ProbeSpread`). It is unbiased for the variance of the
+            returned number at the micro-batch cut it was computed with. The
+            batch is held fixed: this says nothing about data sampling.
+        chi_net_p_var: the same for ``chi_net_p`` (``None`` without a
+            preconditioner, or when ``chi_net_var`` is ``None``).
+        chi_net_p_capped_var: the same for ``chi_net_p_capped``.
     """
 
     chi_net: torch.Tensor
@@ -69,6 +82,56 @@ class ChiNetResult:
     extras: dict[str, Any] = field(default_factory=dict)
     chi_net_p: torch.Tensor | None = None
     chi_net_p_capped: torch.Tensor | None = None
+    chi_net_var: torch.Tensor | None = None
+    chi_net_p_var: torch.Tensor | None = None
+    chi_net_p_capped_var: torch.Tensor | None = None
+
+
+class ProbeSpread:
+    """Running spread of the per-probe values of **one** micro-batch.
+
+    Both estimators report, per micro-batch, the mean of ``n`` independent and
+    identically distributed per-probe values ``q_1 .. q_n`` (plus, for
+    ``per_sequence_cv``, a term that does not depend on the probes). The
+    variance of that mean is estimated without bias by ``s^2 / n`` with
+    ``s^2 = sum_i (q_i - mean)^2 / (n - 1)``; :meth:`variance_of_mean` returns
+    it, or ``None`` for ``n < 2``, where the spread of one value is undefined.
+
+    The sums are kept relative to the first value (``d_i = q_i - q_1``), which
+    removes the cancellation ``sum q^2 - (sum q)^2 / n`` suffers when the
+    spread is small against the mean. Everything stays a 0-dim fp64 tensor on
+    the device, so adding a value costs no host synchronisation.
+    """
+
+    def __init__(self, device: torch.device) -> None:
+        self._n = 0
+        self._shift: torch.Tensor | None = None
+        self._sum = torch.zeros((), dtype=torch.float64, device=device)
+        self._sum_sq = torch.zeros((), dtype=torch.float64, device=device)
+
+    def add(self, value: torch.Tensor) -> None:
+        """Record one per-probe value (a 0-dim tensor)."""
+        v = value.detach().to(dtype=torch.float64)
+        if self._shift is None:
+            self._shift = v
+        d = v - self._shift
+        self._sum = self._sum + d
+        self._sum_sq = self._sum_sq + d * d
+        self._n += 1
+
+    def variance_of_mean(self) -> torch.Tensor | None:
+        """``s^2 / n`` for the values recorded so far; ``None`` below two."""
+        n = self._n
+        if n < 2:
+            return None
+        sample_var = (self._sum_sq - self._sum * self._sum / n) / (n - 1)
+        # Round-off can leave a tiny negative number where every value is equal.
+        return torch.clamp(sample_var, min=0.0) / n
+
+    def add_variance_of_mean_to(self, total: torch.Tensor) -> torch.Tensor:
+        """``total`` plus :meth:`variance_of_mean`; ``total`` itself below two values."""
+        micro_var = self.variance_of_mean()
+        return total if micro_var is None else total + micro_var
 
 
 class ChiNetEstimator(ABC):

@@ -64,7 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--chi-net-method",
         choices=("hutchinson", "per_sequence_cv", "opacus"),
         default=None,
-        help="chi_net estimator. default: auto-select based on batch size.",
+        help="chi_net estimator. default: hutchinson.",
     )
     run.add_argument("--n-hutchinson", type=int, default=32)
     run.add_argument(

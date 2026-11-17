@@ -33,6 +33,11 @@ test sees them — a ``P`` without a ceiling has no capped part to all-reduce.
 realized-change rows. Those involve no probes, so they must agree with a single
 process as they are; what the test sees is whether the dot products use the
 all-reduced gradients and whether the two loss evaluations are all-reduced.
+
+``--adamw`` (with ``--preconditioner``) uses :func:`adamw_preconditioner`
+instead: a ``P`` built by ``Preconditioner.adamw`` from a seeded second moment
+with zeros in it, so the rows carry ``preconditioner_eps`` /
+``preconditioner_beta2`` / ``preconditioner_capped_fraction`` as well.
 """
 
 from __future__ import annotations
@@ -162,6 +167,30 @@ def update_response_setup(
     )
 
 
+# The hyper-parameters of the ``--adamw`` P. ``eps`` is large on purpose: the
+# coordinates with a zero second moment then carry a share of ``chi_net_P``
+# rather than practically all of it.
+ADAMW_EPS, ADAMW_BETA2, ADAMW_STEP = 0.05, 0.95, 10
+
+
+def adamw_second_moment(n_params: int) -> torch.Tensor:
+    """A seeded second moment with a tenth of its entries exactly zero."""
+    gen = torch.Generator().manual_seed(5)
+    exp_avg_sq = torch.exp(torch.randn(n_params, generator=gen) * 2.0)
+    exp_avg_sq[torch.rand(n_params, generator=gen) < 0.1] = 0.0
+    return exp_avg_sq
+
+
+def adamw_preconditioner(n_params: int) -> Preconditioner:
+    """``P = 1 / (sqrt(v_hat) + eps)`` from :func:`adamw_second_moment`.
+
+    Shared by the worker and the single-process side of the driver test.
+    """
+    return Preconditioner.adamw(
+        adamw_second_moment(n_params), step=ADAMW_STEP, beta2=ADAMW_BETA2, eps=ADAMW_EPS
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", required=True)
@@ -170,6 +199,7 @@ def main() -> int:
     parser.add_argument("--n-hutchinson", type=int, default=8)
     parser.add_argument("--micro-batch-size", type=int, default=1)
     parser.add_argument("--chi-net-method", default=None)
+    parser.add_argument("--hutchinson-distribution", default="rademacher")
     parser.add_argument(
         "--pin-probes",
         action="store_true",
@@ -184,6 +214,11 @@ def main() -> int:
         "--ceiling",
         action="store_true",
         help="with --preconditioner: a P with a ceiling and entries at it (adds the capped rows)",
+    )
+    parser.add_argument(
+        "--adamw",
+        action="store_true",
+        help="with --preconditioner: an AdamW P with zero second moments (eps/beta2 columns)",
     )
     parser.add_argument(
         "--duplicate-half",
@@ -222,6 +257,8 @@ def main() -> int:
             n_params = sum(p.numel() for p in model.parameters())
             if args.ceiling:
                 precond = ceiling_preconditioner(n_params)
+            elif args.adamw:
+                precond = adamw_preconditioner(n_params)
             else:
                 gen = torch.Generator().manual_seed(5)
                 diag = torch.exp(torch.randn(n_params, generator=gen) * 2.0)
@@ -250,6 +287,7 @@ def main() -> int:
             preconditioner=precond,
             update_response=None if update is None else (lambda ckpt_id: update),
             chi_net_method=args.chi_net_method,
+            hutchinson_distribution=args.hutchinson_distribution,
             n_hutchinson=args.n_hutchinson,
             micro_batch_size=args.micro_batch_size,
             sink=None,

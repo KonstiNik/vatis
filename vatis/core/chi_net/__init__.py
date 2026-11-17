@@ -17,24 +17,25 @@ __all__ = [
 
 
 def select_chi_net_method(b_total: int, requested: str | None) -> str:
-    """Auto-select the chi_net estimation method based on batch size.
+    """Return the chi_net estimation method to use.
 
-    Per CLAUDE.md, the rule is:
-        - explicit user request always wins
-        - per_sequence_cv for small batches (B <= 32)
-        - hutchinson for everything else
+    An explicit request always wins; without one the method is ``"hutchinson"``
+    at every batch size. Through 0.2.x the default for ``B <= 32`` was
+    ``"per_sequence_cv"``; that estimator is now opt-in only (see
+    ``docs/SPEC.md``, "Default estimator").
 
     Args:
-        b_total: total batch size (sum across ranks if DDP).
-        requested: user-supplied method name, or None for auto.
+        b_total: total batch size (sum across ranks if DDP). No longer affects
+            the result; kept so existing callers keep working.
+        requested: user-supplied method name, or None for the default.
 
     Returns:
-        The selected method name. Never returns "opacus" from auto-selection.
+        The selected method name. ``"opacus"`` and ``"per_sequence_cv"`` are
+        returned only when requested.
     """
+    del b_total
     if requested is not None:
         return requested
-    if b_total <= 32:
-        return "per_sequence_cv"
     return "hutchinson"
 
 
