@@ -45,7 +45,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     AdamW `P`, on the rows computed with it.
   - `preconditioner_capped_fraction` (float64): the fraction of the coordinates
     of `P` at its ceiling (`1/ε` for AdamW), on the rows computed with it.
-  - `value_stderr` (float64): the standard error of `value` under the draw of
+  - `value_probe_stderr` (float64): the standard error of `value` under the draw of
     the Hutchinson probes, on `chi_net`, `chi_net_normalized`, `chi_pos` and
     their `_P` / `_P_capped` counterparts, self and cross pairs; null on
     `chi_loss` / `delta_loss` rows and with `n_hutchinson = 1`. It is the probe

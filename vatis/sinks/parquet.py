@@ -59,7 +59,7 @@ _SCHEMA = pa.schema(
         ("preconditioner_eps", pa.float64()),
         ("preconditioner_beta2", pa.float64()),
         ("preconditioner_capped_fraction", pa.float64()),
-        ("value_stderr", pa.float64()),
+        ("value_probe_stderr", pa.float64()),
         # Two more settings of the run, on every row like ``n_hutchinson``.
         ("micro_batch_size", pa.int32()),
         ("hutchinson_distribution", pa.string()),
@@ -160,10 +160,10 @@ def read_results(
       raw rows carry.
     - every later column (``chi_net_method``, ``n_ranks``,
       ``preconditioner_eps``, ``preconditioner_beta2``,
-      ``preconditioner_capped_fraction``, ``value_stderr``,
+      ``preconditioner_capped_fraction``, ``value_probe_stderr``,
       ``micro_batch_size``, ``hutchinson_distribution``) is filled with
       **null**: the file does not record them, and nothing is inferred. In
-      particular a null ``value_stderr`` in an old file means "not recorded",
+      particular a null ``value_probe_stderr`` in an old file means "not recorded",
       not "exact".
 
     Columns come back in the order of :data:`RESULT_COLUMNS` and in the types

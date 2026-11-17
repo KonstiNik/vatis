@@ -1,4 +1,4 @@
-"""Seed studies behind the figures quoted for ``value_stderr``.
+"""Seed studies behind the figures quoted for ``value_probe_stderr``.
 
 ``docs/SPEC.md`` -> "Standard error of the sampled values" and ``CLAUDE.md``
 quote measured numbers that need more seeds than a test tier should spend.
@@ -7,11 +7,11 @@ everything is seeded, so a re-run on the same torch build prints the same table.
 
 Run from the repository root, with the repository's environment::
 
-    python scripts/value_stderr_seed_study.py propagation --seeds 4000
-    python scripts/value_stderr_seed_study.py weighting --seeds 800
+    python scripts/value_probe_stderr_seed_study.py propagation --seeds 4000
+    python scripts/value_probe_stderr_seed_study.py weighting --seeds 800
 
 ``propagation``
-    The comparison of ``tests/unit/test_value_stderr.py::
+    The comparison of ``tests/unit/test_value_probe_stderr.py::
     test_reported_stderr_matches_the_spread_over_seeds`` with more seeds, on
     the same model, batches, preconditioner and four configurations, and for
     *every* row type in every configuration (the test asserts the first-order
@@ -22,11 +22,11 @@ Run from the repository root, with the repository's environment::
     at 4000 seeds on four CPU threads.
 
 ``weighting``
-    A row's ``value`` and its ``value_stderr`` come from the same per-probe
+    A row's ``value`` and its ``value_probe_stderr`` come from the same per-probe
     values, and for a right-skewed per-probe distribution they are positively
     correlated: a draw that comes out high also reports a large error. Weighting
-    repeated measurements by ``1 / value_stderr**2`` therefore favours the low
-    draws. Per configuration: the correlation of ``value`` and ``value_stderr``
+    repeated measurements by ``1 / value_probe_stderr**2`` therefore favours the low
+    draws. Per configuration: the correlation of ``value`` and ``value_probe_stderr``
     over the seeds, the plain mean of ``chi_net``, and the inverse-variance
     weighted mean. Under a minute at 800 seeds.
 
@@ -48,7 +48,7 @@ for entry in (str(_REPO_ROOT), str(_REPO_ROOT / "tests")):
     if entry not in sys.path:
         sys.path.insert(0, entry)
 
-import tests.unit.test_value_stderr as t  # noqa: E402
+import tests.unit.test_value_probe_stderr as t  # noqa: E402
 
 PAIRS = (("a", "a"), ("b", "b"), ("a", "b"))
 

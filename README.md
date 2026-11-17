@@ -203,11 +203,11 @@ Each row also says how it was obtained and how far to trust it:
 | `n_ranks` | number of processes of the run; a multi-rank `χ_net` depends on it |
 | `preconditioner_eps`, `preconditioner_beta2` | `ε` and `β2` of an AdamW `P` (null on other rows) |
 | `preconditioner_capped_fraction` | fraction of the coordinates of `P` at its ceiling (`1/ε` for AdamW; null without a ceiling) |
-| `value_stderr` | standard error of `value` from the random probes (null for `chi_loss` / `delta_loss`, which are not sampled, and with a single probe) |
+| `value_probe_stderr` | standard error of `value` from the random probes (null for `chi_loss` / `delta_loss`, which are not sampled, and with a single probe) |
 | `micro_batch_size` | the micro-batch size of the run; the sampled values and their standard error are specific to it |
 | `hutchinson_distribution` | the distribution of the probes (`rademacher` / `gaussian`) |
 
-`value_stderr` is the probe sampling error of that run — same batch, same
+`value_probe_stderr` is the probe sampling error of that run — same batch, same
 micro-batch cut. It is not a data-sampling error, and for `chi_pos` and cross
 pairs it is a first-order propagation
 ([`docs/SPEC.md` → Standard error of the sampled values](docs/SPEC.md)). Files

@@ -38,7 +38,7 @@ all-reduce of ``chi_net_P_capped`` changed nothing any tier asserts.
 ``test_ddp_shipped_rng_capped_row_equals_the_per_rank_streams`` adds the same row
 under the shipped RNG, against the per-rank streams.
 
-The provenance columns and ``value_stderr`` have their own section at the end:
+The provenance columns and ``value_probe_stderr`` have their own section at the end:
 every rank's rows name the estimator, the world size, the micro-batch size and
 the probe distribution of the run, the rows of an AdamW
 ``P`` carry its ``eps`` / ``beta2`` / capped fraction, and the standard error of
@@ -515,7 +515,7 @@ def test_ddp_shipped_rng_capped_row_equals_the_per_rank_streams(
         assert rel < DDP_REL, (method, observable, ddp[observable], want, rel)
 
 
-# ------------------------------------------------ provenance columns and value_stderr
+# ------------------------------------------------ provenance columns and value_probe_stderr
 
 _P_ROWS = ("delta_loss_P", "chi_net_P", "chi_pos_P", "delta_loss_P_capped", "chi_net_P_capped")
 
@@ -621,7 +621,7 @@ def test_ddp_rows_record_the_estimator_the_ranks_and_the_adamw_p(
 
 @pytest.mark.parametrize("method", ["hutchinson", "per_sequence_cv"])
 def test_ddp_stderr_is_the_root_of_the_summed_rank_variances(tmp_path: Path, method: str) -> None:
-    """``value_stderr`` of a two-rank run, exactly, on the real ``torchrun`` path.
+    """``value_probe_stderr`` of a two-rank run, exactly, on the real ``torchrun`` path.
 
     Each rank's estimator reports the variance of its own partial ``chi_net``
     (a sum over its micro-batches); the all-reduce must sum those across the
@@ -668,21 +668,21 @@ def test_ddp_stderr_is_the_root_of_the_summed_rank_variances(tmp_path: Path, met
         # comparison at DDP_REL = 1e-6 -- a missing all-reduce cannot pass.
         assert all(part > 0.01 * sum(parts) for part in parts), (observable, parts)
         want = sum(parts) ** 0.5
-        got = ddp[observable]["value_stderr"]
+        got = ddp[observable]["value_probe_stderr"]
         assert abs(got - want) / want < DDP_REL, (method, observable, got, want)
         assert 0.0 < got < ddp[observable]["value"], (observable, got)
 
     def relative(observable: str) -> float:
-        return ddp[observable]["value_stderr"] / abs(ddp[observable]["value"])
+        return ddp[observable]["value_probe_stderr"] / abs(ddp[observable]["value"])
 
     assert relative("chi_net_normalized") == pytest.approx(relative("chi_net"), rel=1e-12)
     assert relative("chi_pos") == pytest.approx(relative("chi_net"), rel=1e-12)
     assert relative("chi_pos_P") == pytest.approx(relative("chi_net_P"), rel=1e-12)
     for observable in ("chi_loss", "chi_loss_normalized", "delta_loss", "delta_loss_P"):
-        assert ddp[observable]["value_stderr"] is None, observable
-    assert ddp["delta_loss_P_capped"]["value_stderr"] is None
+        assert ddp[observable]["value_probe_stderr"] is None, observable
+    assert ddp["delta_loss_P_capped"]["value_probe_stderr"] is None
 
     other = {r["observable"]: r for r in rank_rows[1]}
     assert set(other) == set(ddp)
     for observable, row in ddp.items():
-        assert other[observable]["value_stderr"] == row["value_stderr"], observable
+        assert other[observable]["value_probe_stderr"] == row["value_probe_stderr"], observable

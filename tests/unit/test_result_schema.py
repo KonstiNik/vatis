@@ -7,15 +7,15 @@ Eight columns were appended after ``preconditioner``:
     preconditioner_eps              float64  eps of an AdamW P        (P rows only)
     preconditioner_beta2            float64  beta2 of an AdamW P      (P rows only)
     preconditioner_capped_fraction  float64  share of P at its ceiling (P rows only)
-    value_stderr                    float64  probe standard error of ``value``
+    value_probe_stderr                    float64  probe standard error of ``value``
     micro_batch_size                int32    sequences per backward of the run
     hutchinson_distribution         str      distribution the probes were drawn from
 
 This file pins the names, types and order, which rows carry which of them (the
 four settings of the run -- estimator, rank count, micro-batch size, probe
 distribution -- on every row; the three P columns on the P rows), and that
-files written with an earlier column set stay usable. What ``value_stderr``
-*is* has its own file, ``test_value_stderr.py``.
+files written with an earlier column set stay usable. What ``value_probe_stderr``
+*is* has its own file, ``test_value_probe_stderr.py``.
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ NEW_COLUMNS = [
     ("preconditioner_eps", pa.float64()),
     ("preconditioner_beta2", pa.float64()),
     ("preconditioner_capped_fraction", pa.float64()),
-    ("value_stderr", pa.float64()),
+    ("value_probe_stderr", pa.float64()),
     ("micro_batch_size", pa.int32()),
     ("hutchinson_distribution", pa.string()),
 ]
@@ -391,7 +391,9 @@ def test_a_cross_pair_of_two_estimators_names_both(monkeypatch: pytest.MonkeyPat
     assert {(r.micro_batch_size, r.hutchinson_distribution) for r in rows} == {(2, "rademacher")}
     # Two independent estimates still combine: the pair has a standard error.
     cross = [r for r in rows if r.batch_a != r.batch_b and r.observable == "chi_net"]
-    assert cross and all(r.value_stderr is not None and r.value_stderr > 0 for r in cross)
+    assert cross and all(
+        r.value_probe_stderr is not None and r.value_probe_stderr > 0 for r in cross
+    )
 
 
 def test_n_ranks_is_the_world_size_the_run_saw(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -430,7 +432,7 @@ def _write_old_file(path: Path, columns: list[tuple[str, pa.DataType]], n_rows: 
         "preconditioner_eps": [None, 1e-8, None][:n_rows],
         "preconditioner_beta2": [None, 0.95, None][:n_rows],
         "preconditioner_capped_fraction": [None, 0.25, None][:n_rows],
-        "value_stderr": [0.125] * n_rows,
+        "value_probe_stderr": [0.125] * n_rows,
     }
     schema = pa.schema(columns)
     pq.write_table(pa.Table.from_pydict({n: data[n] for n in schema.names}, schema=schema), path)
@@ -506,7 +508,7 @@ def test_read_results_concatenates_old_and_new_files(tmp_path: Path) -> None:
                 "chi_net",
                 chi_net_method="hutchinson",
                 n_ranks=2,
-                value_stderr=0.125,
+                value_probe_stderr=0.125,
                 micro_batch_size=4,
                 hutchinson_distribution="gaussian",
             )
@@ -523,7 +525,7 @@ def test_read_results_concatenates_old_and_new_files(tmp_path: Path) -> None:
     assert table.num_rows == 6
     assert table.column("chi_net_method").to_pylist() == [None] * 5 + ["hutchinson"]
     assert table.column("n_ranks").to_pylist() == [None] * 5 + [2]
-    assert table.column("value_stderr").to_pylist() == [None] * 5 + [0.125]
+    assert table.column("value_probe_stderr").to_pylist() == [None] * 5 + [0.125]
     assert table.column("micro_batch_size").to_pylist() == [None] * 5 + [4]
     assert table.column("hutchinson_distribution").to_pylist() == [None] * 5 + ["gaussian"]
     assert table.column("preconditioner").to_pylist() == ["none"] * 3 + ["adamw", "none", "none"]

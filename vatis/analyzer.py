@@ -45,7 +45,7 @@ Every row also says how it was obtained: the ``chi_net`` estimator that ran
 and the probe distribution (``micro_batch_size``, ``hutchinson_distribution``),
 and on the rows of an AdamW ``P`` its ``eps`` / ``beta2`` and the fraction of
 its coordinates at the ``1/eps`` ceiling. The rows whose value depends on the Hutchinson probes carry
-``value_stderr``, the standard error of the value under the probe draw: the
+``value_probe_stderr``, the standard error of the value under the probe draw: the
 estimators report the variance of their own estimate
 (``ChiNetResult.chi_net_var``, a sum over micro-batches), the ranks' variances
 are all-reduce-summed like the estimates themselves (the ranks draw independent
@@ -216,7 +216,7 @@ class Analyzer:
             or ``None`` for auto.
         n_hutchinson: number of probe vectors per micro-batch. With at least
             two, the rows whose value depends on the probes carry its standard
-            error in ``value_stderr``; with one there is no spread to estimate
+            error in ``value_probe_stderr``; with one there is no spread to estimate
             it from and the column is null.
         hutchinson_distribution: ``"rademacher"`` (default) or ``"gaussian"``.
         micro_batch_size: number of sequences per backward. Default 1.
@@ -1223,7 +1223,7 @@ class Analyzer:
                     preconditioner_capped_fraction=(
                         None if p_of_row is None else p_of_row.capped_fraction()
                     ),
-                    value_stderr=stderrs.get(name),
+                    value_probe_stderr=stderrs.get(name),
                     micro_batch_size=self.micro_batch_size,
                     hutchinson_distribution=hutchinson_distribution,
                 )

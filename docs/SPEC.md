@@ -869,7 +869,7 @@ n_ranks            int32         # number of processes (DDP world size); 1 for a
 preconditioner_eps              float64   # eps of an AdamW P; null on every other row
 preconditioner_beta2            float64   # beta2 of an AdamW P; null on every other row
 preconditioner_capped_fraction  float64   # fraction of P's coordinates at its ceiling; null without one
-value_stderr       float64       # probe standard error of `value`; null where nothing is sampled
+value_probe_stderr       float64       # probe standard error of `value`; null where nothing is sampled
 micro_batch_size   int32         # the micro_batch_size the run was made with
 hutchinson_distribution  str     # the distribution of the probes: "rademacher" | "gaussian"
 ```
@@ -900,7 +900,7 @@ key = ["checkpoint_id", "batch_a", "batch_b"]
 wide = df.pivot(index=key, columns="observable", values="value")
 wide["preconditioner"] = df[df.preconditioner != "none"].groupby(key).preconditioner.first()
 # columns: chi_loss, chi_net, delta_loss, chi_pos, ..., chi_net_P, delta_loss_P, chi_pos_P, ...
-err = df.pivot(index=key, columns="observable", values="value_stderr")   # same shape, the standard errors
+err = df.pivot(index=key, columns="observable", values="value_probe_stderr")   # same shape, the standard errors
 ```
 
 Do not select the preconditioned values by filtering on `preconditioner`: that
@@ -963,15 +963,15 @@ came from. A cross pair carries the values of its two batches; the micro-batch
 size and the distribution are settings of the whole run and therefore the same
 for both (only the estimator can differ between the batches of a pair, see
 above). The three `preconditioner_*` columns are on the `_P` / `_P_capped` rows
-only, and `value_stderr` on the sampled rows only.
+only, and `value_probe_stderr` on the sampled rows only.
 
 The bias-correction step `t` of an AdamW `P` and the number of sequences in a
 batch are not recorded in the file.
 
-#### Standard error of the sampled values (`value_stderr`)
+#### Standard error of the sampled values (`value_probe_stderr`)
 
 `χ_net` is estimated with random probes, so the same run with another `seed`
-returns another number. `value_stderr` is the standard error of the row's
+returns another number. `value_probe_stderr` is the standard error of the row's
 `value` under that draw, with the batch, the weights, the micro-batch cut and
 the number of ranks held fixed.
 
@@ -986,14 +986,14 @@ means add:
 
 ```
 Var[χ_net]  =  Σ_ranks Σ_m  s_m² / n ,        s_m² = Σ_i (q_{m,i} − mean_m)² / (n − 1)
-value_stderr(chi_net)  =  √Var[χ_net]
+value_probe_stderr(chi_net)  =  √Var[χ_net]
 ```
 
 `s_m²` is the usual unbiased sample variance, so the variance above is unbiased
 for the variance of the reported `χ_net`. Each rank accumulates the sum over its
 micro-batches and the sums are all-reduced like the estimates themselves.
 
-| row | `value_stderr` |
+| row | `value_probe_stderr` |
 |---|---|
 | `chi_net`, `chi_net_P`, `chi_net_P_capped` (self pair) | as above, from that row's own per-probe values |
 | `chi_net_normalized` | that of `chi_net`, divided by `√(n_valid_a · n_valid_b)` |
@@ -1004,7 +1004,7 @@ micro-batches and the sums are all-reduced like the estimates themselves.
 | `chi_pos` when `χ_net = 0` | null |
 
 A capped part that is exactly zero (no coordinate at the ceiling, or none that
-the batch touches) is zero for every probe draw and has `value_stderr = 0`.
+the batch touches) is zero for every probe draw and has `value_probe_stderr = 0`.
 
 **What the number is not.**
 
@@ -1019,7 +1019,7 @@ the batch touches) is zero for every probe draw and has `value_stderr = 0`.
 - **Itself an estimate, from `n` values per micro-batch.** Its square is
   unbiased, but with few probes and few micro-batches it is coarse: at `n = 2`
   one micro-batch contributes a one-degree-of-freedom estimate. The per-probe
-  values are right-skewed, so `value ± 2·value_stderr` is not a calibrated 95%
+  values are right-skewed, so `value ± 2·value_probe_stderr` is not a calibrated 95%
   interval at small `n`.
 - **First order for `chi_pos` and for cross pairs.** The formulas above neglect
   terms of relative size (relative error of `χ_net`)². Measured on a test model
@@ -1028,20 +1028,20 @@ the batch touches) is zero for every probe draw and has `value_stderr = 0`.
   `χ_net` known to only 23% (two probes per micro-batch, five samples in
   micro-batches of four) the reported variance of `chi_pos` was 0.80 of the
   observed one, i.e. the standard error about 10% too small. Treat the
-  propagated standard error as approximate once `value_stderr / value` of
+  propagated standard error as approximate once `value_probe_stderr / value` of
   `chi_net` exceeds about 10%. (Reproduce with
-  `python scripts/value_stderr_seed_study.py propagation --seeds 4000`.)
-- **Not a weight for averaging.** A row's `value` and its `value_stderr` are
+  `python scripts/value_probe_stderr_seed_study.py propagation --seeds 4000`.)
+- **Not a weight for averaging.** A row's `value` and its `value_probe_stderr` are
   computed from the same per-probe values, and those are right-skewed: a draw
   that comes out high also reports a large error. The two are positively
-  correlated, so weighting repeated measurements by `1/value_stderr²` favours
+  correlated, so weighting repeated measurements by `1/value_probe_stderr²` favours
   the low draws and pulls the average down. Measured over 800 seeds on a test
   model (`chi_net` of one batch of five samples, Rademacher probes, both
   estimators, the batch as one micro-batch and as five): correlation 0.31–0.66;
   the inverse-variance-weighted mean was 3–19% below the plain mean with 2 and
   4 probes per micro-batch and 0.5–1.6% below with 16. Average repeated
   measurements with equal weights, or with weights fixed beforehand. (Reproduce
-  with `python scripts/value_stderr_seed_study.py weighting --seeds 800`.)
+  with `python scripts/value_probe_stderr_seed_study.py weighting --seeds 800`.)
 - **Specific to the probe distribution.** One Gaussian probe has variance
   `2‖A‖²_F`, one Rademacher probe `2Σ_{i≠j}A²_ij` (`A` the micro-batch's Gram
   matrix): with Gaussian probes the diagonal counts as well, so the same run
@@ -1057,13 +1057,13 @@ the batch touches) is zero for every probe draw and has `value_stderr = 0`.
   covers Rademacher and Gaussian probes; the check against the spread over
   seeds through `analyze()` uses the default Rademacher probes.
 
-**How it is checked** (`tests/unit/test_value_stderr.py`,
+**How it is checked** (`tests/unit/test_value_probe_stderr.py`,
 `tests/integration/test_ddp_loopback.py`): the variance an estimator reports
 equals the spread of its own regenerated probes evaluated on an explicit
 Jacobian; averaged over seeds it equals the exact variance, for Rademacher
 probes (`Σ_m 2Σ_{i≠j}(A_m)²_ij / n`) and for Gaussian ones
 (`Σ_m 2‖A_m‖²_F / n`); the same data under two batch names is probed with
-different streams, which the cross-pair formula relies on; through `analyze()`, the mean of `value_stderr²`
+different streams, which the cross-pair formula relies on; through `analyze()`, the mean of `value_probe_stderr²`
 over 256 seeds equals the sample variance of `value` within four standard
 errors of that comparison, for both estimators and two micro-batch sizes — the
 directly sampled rows in every configuration, the propagated ones where `χ_net`
@@ -1116,7 +1116,7 @@ df = read_results(["old_run.parquet", "new_run.parquet"]).to_pandas()
   all-reduce sums them, which is correct because `Tr(Θ)` is a sum over rows and
   the shards partition the rows. The variance each rank's estimator reports
   for its partial `χ_net` is summed the same way (the streams are independent),
-  and its square root is `value_stderr`. For `δL`, each rank computes its
+  and its square root is `value_probe_stderr`. For `δL`, each rank computes its
   partial gradient and all-reduce-sums.
 - All-reduce happens **once per checkpoint × eval-batch**, never in inner loops.
 - `micro_batch_size=1` is the always-safe fallback, and the least noisy

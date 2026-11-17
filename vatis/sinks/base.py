@@ -45,7 +45,7 @@ class ResultRow:
     - ``preconditioner_capped_fraction``: on the rows computed with a ``P`` that
       has a ceiling (``1/eps`` for ``adamw``), the fraction of the coordinates
       of ``P`` that sit at it.
-    - ``value_stderr``: the standard error of ``value`` under the draw of the
+    - ``value_probe_stderr``: the standard error of ``value`` under the draw of the
       Hutchinson probes, on the rows whose value is sampled (``chi_net``,
       ``chi_net_normalized``, ``chi_pos`` and their ``_P`` / ``_P_capped``
       counterparts); ``None`` on ``chi_loss`` / ``delta_loss`` rows, which are
@@ -80,7 +80,7 @@ class ResultRow:
     preconditioner_eps: float | None = None
     preconditioner_beta2: float | None = None
     preconditioner_capped_fraction: float | None = None
-    value_stderr: float | None = None
+    value_probe_stderr: float | None = None
     micro_batch_size: int | None = None
     hutchinson_distribution: str | None = None
 

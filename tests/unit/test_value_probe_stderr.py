@@ -1,11 +1,11 @@
-"""``value_stderr``: the standard error of the sampled values, checked four ways.
+"""``value_probe_stderr``: the standard error of the sampled values, checked four ways.
 
 **What is reported.** ``chi_net`` is a sum over micro-batches of a mean of
 ``n_hutchinson`` independent per-probe values (plus, for ``per_sequence_cv``, a
 term no probe enters). Its variance under the probe draw is therefore the sum
 over micro-batches of ``s^2 / n`` (``s^2`` the unbiased sample variance of that
 micro-batch's per-probe values), summed over the ranks of a DDP run, and
-``value_stderr`` is its square root. ``chi_net_normalized`` is ``chi_net`` over a
+``value_probe_stderr`` is its square root. ``chi_net_normalized`` is ``chi_net`` over a
 constant, ``chi_pos = delta_loss / (chi_loss * chi_net)`` has ``chi_net`` as its
 only sampled factor and inherits its relative error to first order, and a cross
 pair combines two independently probed batches through a geometric mean. The
@@ -25,7 +25,7 @@ pair combines two independently probed batches through a geometric mean. The
    variance of ``chi_net`` is known without sampling. The reported variance,
    averaged over seeds, must equal it, for both distributions.
 3. *Against the empirical spread*, through ``analyze()``: over many analyzer
-   seeds, the mean of ``value_stderr**2`` must equal the sample variance of
+   seeds, the mean of ``value_probe_stderr**2`` must equal the sample variance of
    ``value``, for every row type that carries a standard error — both
    estimators, two micro-batch sizes, an AdamW ``P`` with coordinates at its
    ceiling, the propagated ``chi_pos`` rows and the cross pair. The same for the
@@ -509,16 +509,16 @@ def _rows_by_key(rows: list[ResultRow]) -> dict[RowKey, ResultRow]:
 def _collect(
     n_seeds: int, **analyze_kwargs: Any
 ) -> tuple[dict[RowKey, torch.Tensor], dict[RowKey, torch.Tensor]]:
-    """``value`` and ``value_stderr`` of every row that has one, over ``n_seeds`` runs."""
+    """``value`` and ``value_probe_stderr`` of every row that has one, over ``n_seeds`` runs."""
     values: dict[RowKey, list[float]] = {}
     stderrs: dict[RowKey, list[float]] = {}
     for seed in range(n_seeds):
         results = analyze(revisions=["step10"], sink=None, seed=seed, **analyze_kwargs)
         for key, row in _rows_by_key(results[0].rows).items():
-            if row.value_stderr is None:
+            if row.value_probe_stderr is None:
                 continue
             values.setdefault(key, []).append(row.value)
-            stderrs.setdefault(key, []).append(row.value_stderr)
+            stderrs.setdefault(key, []).append(row.value_probe_stderr)
     assert all(len(v) == n_seeds for v in values.values())
     return (
         {k: torch.tensor(v, dtype=FP64) for k, v in values.items()},
@@ -598,7 +598,7 @@ _STDERR_CONFIGS = [
 def test_reported_stderr_matches_the_spread_over_seeds(
     method: str, micro: int, n_h: int, propagated: bool
 ) -> None:
-    """Through ``analyze()``: mean ``value_stderr**2`` over seeds = variance of ``value``.
+    """Through ``analyze()``: mean ``value_probe_stderr**2`` over seeds = variance of ``value``.
 
     Two batches of 5 and 7 samples (so ``micro = 4`` cuts them 4 + 1 and 4 + 3)
     and their cross pair, 256 analyzer seeds, an AdamW ``P`` with a fifth of its
@@ -734,9 +734,9 @@ def test_rank_variances_add_like_the_rank_estimates(
         )
         for obs in totals:
             rows = [rank_rows[("a", "a", obs)] for rank_rows in per_rank]
-            assert all(r.value_stderr is not None and r.n_ranks == world_size for r in rows)
+            assert all(r.value_probe_stderr is not None and r.n_ranks == world_size for r in rows)
             totals[obs].append(sum(r.value for r in rows))
-            variances[obs].append(sum(r.value_stderr**2 for r in rows))  # type: ignore[operator]
+            variances[obs].append(sum(r.value_probe_stderr**2 for r in rows))  # type: ignore[operator]
     for obs in totals:
         x = torch.tensor(totals[obs], dtype=FP64)
         s = torch.tensor(variances[obs], dtype=FP64).sqrt()
@@ -775,16 +775,16 @@ def test_the_rows_without_a_probe_carry_no_stderr(method: str) -> None:
     rows = _one_run(chi_net_method=method)
     for (a, b, obs), row in rows.items():
         if obs in NOT_SAMPLED:
-            assert row.value_stderr is None, (a, b, obs, row.value_stderr)
+            assert row.value_probe_stderr is None, (a, b, obs, row.value_probe_stderr)
         else:
-            assert row.value_stderr is not None and row.value_stderr > 0.0, (a, b, obs)
+            assert row.value_probe_stderr is not None and row.value_probe_stderr > 0.0, (a, b, obs)
     assert {obs for _a, _b, obs in rows} == {*NOT_SAMPLED, *DIRECT, *PROPAGATED}
 
 
 @pytest.mark.parametrize("method", ["hutchinson", "per_sequence_cv"])
 def test_a_single_probe_gives_no_stderr_on_any_row(method: str) -> None:
     rows = _one_run(chi_net_method=method, n_hutchinson=1)
-    assert rows and all(row.value_stderr is None for row in rows.values())
+    assert rows and all(row.value_probe_stderr is None for row in rows.values())
 
 
 @pytest.mark.parametrize("method", ["hutchinson", "per_sequence_cv"])
@@ -800,7 +800,7 @@ def test_propagated_rows_are_the_stated_functions_of_the_sampled_ones(method: st
     rows = _one_run(chi_net_method=method)
 
     def stderr(a: str, b: str, obs: str) -> float:
-        value = rows[(a, b, obs)].value_stderr
+        value = rows[(a, b, obs)].value_probe_stderr
         assert value is not None
         return value
 
@@ -850,9 +850,9 @@ def test_two_batches_of_a_cross_pair_draw_different_probes() -> None:
         assert relative > 1e-4, (
             f"{obs}: {first[obs].value!r} for both names of one batch -- the two batches "
             "of a cross pair are drawing the same probes, so their errors are not "
-            "independent and the cross-pair value_stderr is too small"
+            "independent and the cross-pair value_probe_stderr is too small"
         )
-        assert first[obs].value_stderr != second[obs].value_stderr, obs
+        assert first[obs].value_probe_stderr != second[obs].value_probe_stderr, obs
 
 
 def test_a_capped_part_that_is_exactly_zero_has_stderr_zero() -> None:
@@ -869,8 +869,8 @@ def test_a_capped_part_that_is_exactly_zero_has_stderr_zero() -> None:
     rows = _one_run(preconditioner=Preconditioner.from_diagonal(diag, ceiling=100.0))
     for pair in (("a", "a"), ("b", "b"), ("a", "b")):
         row = rows[(*pair, "chi_net_P_capped")]
-        assert row.value == 0.0 and row.value_stderr == 0.0, (pair, row)
-        assert rows[(*pair, "chi_net_P")].value_stderr > 0.0  # type: ignore[operator]
+        assert row.value == 0.0 and row.value_probe_stderr == 0.0, (pair, row)
+        assert rows[(*pair, "chi_net_P")].value_probe_stderr > 0.0  # type: ignore[operator]
 
 
 def test_geometric_mean_stderr_edge_cases() -> None:
