@@ -114,9 +114,7 @@ per-phase peak `torch.cuda` memory + GPU engine activity sampled via
   dataset (keep them on-distribution). `--n-per-batch`, `--seq-len`,
   `--max-prompt-frac` tune sample selection.
 - **Larger model:** keep `cross_grad_storage=auto` (offload) and `hutchinson`.
-  **Smaller model:** `auto` keeps everything on-GPU, and `per_sequence_cv`
-  becomes affordable (it has not shown a lower-variance `chi_net`; see the
-  top-level README).
+  **Smaller model:** `auto` keeps everything on-GPU.
 - `--no-cross-pairs` skips the cross observables; `--cross-grad-storage gpu|cpu`
   overrides the auto memory decision.
 - The example uses the standard cross-entropy SFT loss — vatis v1 supports the

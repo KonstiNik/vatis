@@ -347,13 +347,15 @@ estimators run with the same seeds and therefore the same probes) the two
 estimators return practically the same value for every seed — they differ by
 less than 0.2% of one standard deviation at every `n_hutchinson` from 1 to 64 —
 so their spread is the same. The single-seed Pythia-160m table
-(`examples/benchmark/single_gpu/results_pythia-160m.md`) agrees: `chi_net`
+(`examples/benchmark/single_gpu/results_pythia-160m.md`; a synthetic random-token
+batch, the whole batch as one micro-batch) agrees: `chi_net`
 matches to the five digits it prints at `B` = 4, 8 and 16. `χ_pos` is of order
 1e-7 in both, so the loss direction carries almost none of the trace and the
 control-variate correction is negligible there. On the untrained toy fixture a
 comment in `tests/unit/test_chi_net.py` records that the control variate removes
-well under 1% of the standard deviation. Nothing has been measured at
-`micro_batch_size = 1` on a real model, or in the high-`χ_pos` regime where the
+well under 1% of the standard deviation. There is no committed
+comparison of the two estimators' variance at `micro_batch_size = 1` on a model
+larger than 1.25M parameters, and none in the high-`χ_pos` regime where the
 correction is expected to matter.
 
 Cost: per micro-batch of `M` sequences, `per_sequence_cv` runs one forward and
@@ -363,8 +365,8 @@ about equal at 32 probes, `per_sequence_cv` is slower at 8 probes and faster at
 128, and its peak memory is higher (4.5–6.2 GB against 3.4–4.4 GB).
 
 It is not selected by default (see "Default estimator"). Through `analyze()` and
-the CLI it returns the same rows as `hutchinson`; the per-sample alignment
-matrix is only available from a direct
+the CLI it returns the same set of observables as `hutchinson`; the per-sample
+alignment matrix is only available from a direct
 `PerSequenceControlVariateEstimator(compute_alignment_matrix=True)` call.
 
 #### Method 3: `OpacusEstimator` (opt-in fast path)
