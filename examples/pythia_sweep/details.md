@@ -100,11 +100,14 @@ inputs, where every batch is statistically equivalent to every other.
 normalized cross-batch gradient correlation
 `cos(g_A, g_B) = δL(A,B) / sqrt(δL(A,A) · δL(B,B))` — plus a printed summary.
 The raw cross `delta_loss` plot is visually misleading: it shows a
-step 1 → step 512 decline followed by a "rebound" at step 1000, but the rebound
-is amplified by gradient magnitudes growing at the same time. In normalized
-terms the rebound is real but much smaller: the raw cross `delta_loss` at step
-1000 is back to 81% of its step-1 value (2.62 against 3.25), the cosine only to
-14% of its step-1 value (0.043 against 0.311). The dominant feature is the early decline (`+0.31 → +0.012`, ~26×): **most
+step 1 → step 512 decline followed by a "rebound" at step 1000. The rebound
+itself, from step 512 to step 1000, is about the same size in both views (3.9×
+raw, 3.6× in the cosine; the product of the two gradient norms grows only 1.07×
+between those steps). What the raw plot exaggerates is the level: the raw cross
+`delta_loss` at step 1000 is back to 81% of its step-1 value (2.62 against
+3.25), the cosine only to 14% (0.043 against 0.311), because the product of the
+gradient norms grew from 10.5 at step 1 to 56.6 at step 512. The dominant
+feature is the early decline (`+0.31 → +0.012`, ~26×): **most
 of the prose-vs-code gradient decorrelation is over by step 512**, well before
 the absolute cross `delta_loss` even starts looking interesting.
 

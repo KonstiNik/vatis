@@ -40,9 +40,12 @@ the cross `delta_loss` with the size of the two gradients divided out.
   step 1000, is still positive at step 2000, and from step 4000 on stays
   slightly below zero.
 - **The raw cross `delta_loss` is not monotonic** ([delta_loss.png](delta_loss.png)):
-  +3.25 at step 1, +0.95 at step 64, +2.62 at step 1000, below zero from about
-  step 4000, −18 at step 143000. Its step-1000 rebound looks much larger than
-  in the cosine, because the gradients themselves grow at the same time.
+  +3.25 at step 1, +0.95 at step 64, its minimum +0.67 at step 512, +2.62 at
+  step 1000, below zero from about step 4000, −18 at step 143000. The rebound
+  from step 512 to step 1000 is about the same size as in the cosine (3.9×
+  against 3.6×). What differs is the level: at step 1000 the raw value is back
+  to 81% of its step-1 value, the cosine to 14%, because the size of the two
+  gradients grew between step 1 and step 512.
 - **The first 64 steps are warm-up, not learning:** `chi_loss_normalized` stays
   at 1.0 through step 64 on both batches ([chi_loss.png](chi_loss.png)).
 - **`chi_net_normalized` dips before it grows** ([chi_net.png](chi_net.png)):
@@ -75,8 +78,11 @@ figure this example and the Llama example draw:
 - `run_summary.json` (the loss of each batch at each checkpoint, the mean
   next-token cross-entropy vatis differentiates) comes from a separate run of
   the same `run.py` on 17 November 2026 on an RTX 3090 Ti, after `run.py`
-  learned to record the loss. That run's `results.parquet` and four plots were
-  identical to the committed ones, which were kept. The run times quoted above
+  learned to record the loss. That run's `results.parquet` had the same values
+  in every row (only the `wallclock_s` column, which differs on every run,
+  did not match) and its four plots were byte-identical; the committed files
+  were kept. The `note` field at the top of `run_summary.json` was added by
+  hand to record where the file comes from; `run.py` does not write it. The run times quoted above
   were measured before the loss was added, which costs one more forward pass
   and one more (cached) load per checkpoint; the new total was not timed.
 - Settings: `chi_net_method="per_sequence_cv"`, `n_hutchinson=32`, batch

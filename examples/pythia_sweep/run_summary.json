@@ -1,5 +1,5 @@
 {
-  "note": "Written by a separate run of the same command on the date and device below, after results.parquet was committed. That run's results.parquet was bit-identical to the committed one in every value, so the committed file was kept; only this summary (the loss of each batch at each checkpoint) is new.",
+  "note": "Added by hand, not written by run.py: this file comes from a separate run of the same command on the date and device below, after results.parquet was committed. That run's results.parquet had the same values as the committed one in every row and column except wallclock_s (which differs on every run), so the committed file was kept; only this summary (the loss of each batch at each checkpoint) is new.",
   "model": "EleutherAI/pythia-14m",
   "revisions": [
     "step1",
