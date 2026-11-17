@@ -18,6 +18,7 @@ from vatis.models.local_bundle import (
     OptimizerStateView,
     adamw_preconditioner_from_state,
     load_local_bundle,
+    optimizer_update_from_state,
     plain_lm_forward,
     resolve_model_factory,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "adamw_preconditioner_from_state",
     "load_hf_model",
     "load_local_bundle",
+    "optimizer_update_from_state",
     "plain_lm_forward",
     "resolve_model_factory",
 ]
