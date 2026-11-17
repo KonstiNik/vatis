@@ -21,8 +21,8 @@ text, how the run is sized, the early-phase findings in full — are in
 ## How to run
 
 ```bash
-.venv/bin/python examples/pythia_sweep/run.py       # compute → results.parquet + four plots
-.venv/bin/python examples/pythia_sweep/evaluate.py  # analyze → cos_similarity.png + a printed table
+python examples/pythia_sweep/run.py       # compute → results.parquet + four plots
+python examples/pythia_sweep/evaluate.py  # analyze → cos_similarity.png + a printed table
 ```
 
 `evaluate.py` reads only `results.parquet` and imports no vatis code.

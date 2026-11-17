@@ -21,11 +21,11 @@ probe design in full are in [details.md](details.md).
 ## How to run
 
 ```bash
-.venv/bin/python examples/spectral_tail/run.py                                  # pythia-14m
-.venv/bin/python examples/spectral_tail/run.py --model EleutherAI/pythia-70m    # one other size
-.venv/bin/python examples/spectral_tail/run.py --all                            # all five sizes in turn
-.venv/bin/python examples/spectral_tail/evaluate.py                             # figures, x axis = training step
-.venv/bin/python examples/spectral_tail/evaluate.py --compute                   # x axis = estimated compute (6ND FLOPs)
+python examples/spectral_tail/run.py                                  # pythia-14m
+python examples/spectral_tail/run.py --model EleutherAI/pythia-70m    # one other size
+python examples/spectral_tail/run.py --all                            # all five sizes in turn
+python examples/spectral_tail/evaluate.py                             # figures, x axis = training step
+python examples/spectral_tail/evaluate.py --compute                   # x axis = estimated compute (6ND FLOPs)
 ```
 
 ## What it shows

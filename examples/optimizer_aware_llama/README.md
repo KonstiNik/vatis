@@ -33,10 +33,10 @@ bash runs/example_bundle_run.sh 300 32
 #   -> $WP0_EXAMPLE_ROOT/eval_batches    3 held-out measurement batches (.npy)
 
 # in vatis, separate process:
-.venv/bin/python examples/optimizer_aware_llama/run.py \
+python examples/optimizer_aware_llama/run.py \
     --bundle "$WP0_EXAMPLE_ROOT/bundle" \
     --eval-batches "$WP0_EXAMPLE_ROOT/eval_batches" --device cuda
-.venv/bin/python examples/optimizer_aware_llama/evaluate.py --dir examples/optimizer_aware_llama
+python examples/optimizer_aware_llama/evaluate.py --dir examples/optimizer_aware_llama
 ```
 
 If the `eval_batch_*.npy` files are missing, `run.py` measures on random tokens
