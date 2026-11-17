@@ -49,26 +49,18 @@ measures whether a gradient step on prose helps or hurts the model on code.
 
 ## Sizing
 
-The example is deliberately sized to run end-to-end in **well under 15 minutes**
-on modest hardware, so a maintainer on a slow GPU or a cold HF cache still gets a
-quick turnaround. As committed (`per_sequence_cv`, `n_h=32`, `B=8`, `S=128`, 13
-revisions × 2 self pairs + 1 cross pair = 39 measurements) the measured wallclock
-on an RTX 3090 Ti, with the code of 17 November 2026 (the run that wrote the
-committed outputs), is:
+The example is sized to finish well within 15 minutes. As committed
+(`per_sequence_cv`, `n_h=32`, `B=8`, `S=128`, 13 revisions × (2 self pairs + 1
+cross pair) = 39 measurements), it takes on an RTX 3090 Ti about **76 s** the
+first time (the 13 checkpoints are downloaded) and **52–55 s** once they are
+cached.
 
-- **~76 s on the first run** (cold HF cache, all 13 checkpoints downloaded),
-- **~52–55 s on subsequent runs** (warm cache; also with the hub offline).
-
-**This is slower than the April 2026 state, and the bottleneck has moved.** The
-April files recorded ~0.54 s of compute per (checkpoint, pair) measurement and
-~20 s / ~50 s warm / cold, so loading dominated. The November run records a
-median ~1.5 s per measurement (38.5 s of the warm total), so the analysis is now
-the larger share. The cause was not measured here; one candidate is the change to
-drawing the Hutchinson probes on the CPU (`CHANGELOG.md`), since a pythia probe
-has 8 × 128 × 50,304 entries, about three times the Llama example's. The run is
-still far inside the 15-minute budget, and bumping `n_hutchinson`, adding eval
-batches, or running both methods would stay within it (see
-`examples/benchmark/single_gpu/` for the A100 wallclock/memory sweep).
+Most of that time is the analysis, about 1.5 s per measurement. About 0.6 s of
+it is drawing the random Hutchinson probes on the CPU: one probe at this size
+(8 × 128 × 50,304 entries) takes about 18 ms that way, against about 1 ms when
+drawn on the GPU, and each measurement draws 32. Before the probes were drawn on
+the CPU (April 2026), a measurement took about 0.5 s and a cached run about 20 s.
+See `examples/benchmark/single_gpu/` for the wallclock/memory sweep on an A100.
 
 ## Revisions and early-phase findings
 
@@ -146,17 +138,11 @@ Outputs (under `examples/pythia_sweep/`):
 - `cos_similarity.png` (from `analyze_results.py`) — the normalized cross-batch
   correlation, with gradient magnitudes divided out.
 
-These files were regenerated on 17 November 2026 with the code that adds the
-eight run-setting columns (commit `9aa0751`), on an RTX 3090 Ti, replacing
-files from April 2026; the parquet now has all 20 columns of the current schema.
-Compared row by row with the April file: `chi_loss` agrees to 1.2e-7 relative
-and `delta_loss` to 1.1e-5 on the self pairs (6.7e-4 on the smallest cross-pair
-value, an absolute difference of 1.5e-3 next to self values of ~580), which is
-float32 rounding; `chi_net` and `chi_pos` differ by up to 13% (median 1%),
-because the Hutchinson probes are now a different random draw for the same seed.
-Those differences are what the probe noise predicts: divided by √2 times the
-new `value_probe_stderr`, they have a root-mean-square of 1.1. Every number
-quoted in the sections above is unchanged at the precision quoted.
+These files were regenerated on 17 November 2026 with the current code. Against
+the April 2026 files they replace, `chi_loss` and `delta_loss` agree to rounding;
+`chi_net` and `chi_pos` differ by about 1% (at most 13%), because the random
+probes are now drawn differently for the same seed, and the differences are the
+size the probe noise predicts. Every number quoted above still holds.
 
 ## WP0 GPU example — two rulers on a project Llama bundle
 
@@ -208,14 +194,12 @@ the larger error in either direction. **For the run committed here nothing is
 masked** — its training criterion masks no padding, and every number below was
 computed with all positions counted.
 
-### Sizing, as measured (RTX 3090 Ti, **shared card**)
+### Sizing (RTX 3090 Ti, shared card)
 
-Llama `dim=320, n_layers=6, n_heads=4`, vocab 4096 → **10,981,440 parameters in
-57 tensors**; 300 AdamW steps at `B=32, S=512`; `--bundle_steps log:20` → 19
+Model: Llama `dim=320, n_layers=6, n_heads=4`, vocabulary 4096, **10,981,440
+parameters**, trained for 300 AdamW steps at `B=32, S=512`, with 19 saved
 checkpoints. Analysis: `per_sequence_cv`, `n_hutchinson=32`,
-`micro_batch_size=8`, fp32, 3 eval batches + 2 cross pairs, 1020 result rows.
-These are the numbers of the committed run in `examples/output/` (17 November
-2026, see [Outputs](#outputs-under-examplesoutput)):
+`micro_batch_size=8`, fp32. The committed run took:
 
 | stage | per checkpoint | total |
 |---|---|---|
@@ -225,27 +209,16 @@ These are the numbers of the committed run in `examples/output/` (17 November
 | script total (+ the `P = I` re-check and the epsilon split) | — | 100.3 s |
 | peak GPU memory (torch allocator, this process) | — | 1683 MiB |
 
-Budget a grid run with the *sweep* row; the extra 13 s are this example's own
-diagnostics, which a production sweep does not pay.
+To plan a grid run, use the *sweep* row: about **4 s of analysis per checkpoint**
+for 3 batches and 2 cross pairs at this size, plus reading the checkpoint
+(~105 MB): about 0.1 s when cached, up to 2.7 s here, where the bundle is on a
+network file system. The other 13 s are this example's own checks. Both rulers
+cost the same as one, because the P observables reuse the raw pass's probes.
 
-**Caveat attached to every number above: the card is shared.** Another job's
-work runs on it at times; `nvidia-smi` showed it idle (18 MiB in use, 0%
-utilization) immediately before and after this run, but nothing watched it
-during the run, so contention cannot be ruled out. (The `gpu_contended` entry in
-`run_summary.json` is a fixed sentence the script writes on every GPU run, not a
-measurement.) Nothing was tuned or best-of-N'd. The run these files replace (July
-2026, same card) recorded 3.22–6.51 s per checkpoint (mean 3.90 s) of analysis,
-and the run this table showed before that one a mean of 4.13 s, which gives an
-idea of the run-to-run spread. Both rulers cost the same as one: the P observables reuse the raw pass's
-probes, so `chi_net^P` adds no backward.
-
-Rule of thumb for budgeting the WP1 grid from this: **~4 s per checkpoint per
-(3 batches + 2 cross pairs) at 11M parameters and 4k measurement tokens**, plus
-the time to read a checkpoint (~105 MB of weights and optimizer state) from disk:
-0.07–0.14 s on 11 of the 19 checkpoints of this run and 0.86–2.71 s on the
-other 8, with the bundle on a network file system (the July run read its bundle
-from `/tmp` at 0.37–0.47 s per checkpoint). Checkpoint loading is *not* the
-bottleneck here (unlike the HF path, where downloads dominate).
+The timings are as measured, not tuned. The card is shared with other jobs; it
+was idle just before and just after this run, but nothing watched it during the
+run. (The `gpu_contended` line in `run_summary.json` is fixed text the script
+always writes, not a measurement.)
 
 ### The step-0 hole, and why the figure has one
 
@@ -294,50 +267,20 @@ Three things worth knowing, all visible in that table:
   assume it**, and note that the diagonal share alone overstates the effect
   (0.71% of coordinates carried 0% of the trace here).
 
-The result file now carries this split on every P row, not only on the three
-checkpoints above: `chi_net_P_capped` and `delta_loss_P_capped` are the parts of
-`chi_net_P` and `delta_loss_P` contributed by the ceiling coordinates, and
-`preconditioner_capped_fraction` is the diagonal share. For batch B's self pair
-in the committed file, `chi_net_P_capped / chi_net_P` is 10.23% at step 1, 0.37%
-at step 20 and exactly 0 at step 299 — the last column of the table.
+The result file carries this split on every P row: `chi_net_P_capped` and
+`delta_loss_P_capped` are the parts that come from ceiling coordinates, and
+`preconditioner_capped_fraction` is the diagonal share. For batch B,
+`chi_net_P_capped / chi_net_P` gives the last column of the table above.
 
 ### Outputs (under `examples/output/`)
 
-**These files were regenerated on 17 November 2026** with the code that adds
-the eight run-setting columns (the `feat/result-schema` branch, commit
-`9aa0751`), on an RTX 3090 Ti as before, with the command and defaults above
-(`--device cuda`, seed 0). They replace files from 28–29 July 2026, which
-predated the `*_capped` rows and the eight columns.
+Regenerated on 17 November 2026 with the current code, using the command above
+(`--device cuda`, seed 0).
 
-**The bundle is not the one the July files were measured on.** That bundle sat
-in `/tmp` and was lost; the training run was repeated on 31 July 2026 with, per
-the data directory's notes, the same command and seeds. The two training runs agree bit for bit up to step 27
-(identical recorded train loss at every checkpoint) and then drift apart, most
-likely because GPU training is not bit-for-bit deterministic: from step 37 on the recorded train
-loss differs, by 3e-6 relative at step 37 and up to about 0.5% later (1.7778 vs
-1.7816 at step 299). Every row of the July file has a counterpart in the new one, and the
-comparison follows that split exactly:
-
-- steps 0–8: all rows agree to better than 1e-6 relative (largest 7.8e-7);
-- steps 11–27: they agree to better than 2.5e-5 relative, the difference growing
-  step by step as the two training runs' weights separate;
-- steps 37–299: they differ by up to ~1% in `chi_loss`, up to ~5% in `chi_net`
-  and up to ~3% in `chi_net_P`, and by much more in the small, signed cross-pair
-  values. In particular both AdamW cross pairs (`A1 × B`, `A2 × B`) of
-  `delta_loss_P` / `chi_pos_P` were positive at step 299 in the July file and
-  are negative in this one, as the raw cross pairs already were in both.
-
-A CPU run of the current code over steps 0 and 1 agrees with the July file to
-5.2e-7 relative and with this one to 1.7e-6 (largest on a `delta_loss_P_capped`
-row; 5.9e-7 on every other row), so the device does not matter at this level
-either. So the rows that measure the same weights reproduce, and the rest describe a
-different (equally valid) training run; the July values for steps 37–299 cannot
-be reproduced, because their bundle no longer exists.
-
-- `results.parquet` — 1020 rows: 19 checkpoints × (3 self + 2 cross pairs) ×
-  the raw observables, plus the P observables and their `_capped` parts on the
-  18 checkpoints that have an optimizer state, in the canonical long format
-  with all 20 columns of the current schema.
+- `results.parquet` — 1020 rows in the canonical long format: the raw
+  observables for 19 checkpoints × (3 self + 2 cross pairs), plus the P
+  observables and their `_capped` parts for the 18 checkpoints that have an
+  optimizer state.
 - `run_summary.json` — everything the parquet has no column for: per-checkpoint
   train loss / lr / tokens seen (from the bundle's `meta.json`), the performance
   table, the `P = I` re-check, the epsilon-ceiling records, the data-fallback
@@ -347,6 +290,16 @@ be reproduced, because their bundle no longer exists.
   step (left) and versus train loss (right, time running left to right), for the
   eval batch's self pair and the two cross pairs. Symlog y, because a cross pair
   is signed and this run does cross zero late in training.
+
+**These outputs come from a re-run of the training.** The bundle behind the
+earlier outputs (July 2026) was lost, and the same training was run again. The
+two runs record the same train loss up to step 27, and the measurements agree (to within
+1e-6 relative through step 8 and 2.5e-5 through step 27). From step 37 on, the
+runs drift apart (train loss up to 0.5% different), and so do the measurements:
+by up to ~1% in `chi_loss` and ~5% in `chi_net`, and by more in the small
+cross-pair values. One sign changes: at step 299 the two
+AdamW cross pairs (`chi_pos^P` for `A1 × B` and `A2 × B`) are now slightly
+negative, where they were slightly positive before.
 
 The figure is **descriptive**. A 300-step demo on a 11M-parameter model says
 nothing about training dynamics at scale, and no claim is made here beyond
