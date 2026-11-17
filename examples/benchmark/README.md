@@ -8,7 +8,7 @@ benchmarks, each in its own subdirectory with its committed results:
 |---|---|---|---|
 | [`single_gpu/`](single_gpu/results_pythia-160m.md) | wallclock + peak memory vs `(method, n_hutchinson, batch_size)` | pythia-160m | 1× A100 (MIG 3g.20gb slice) |
 | [`ddp_scaling/`](ddp_scaling/DDP_SCALING_RESULTS.md) | strong / weak DDP scaling efficiency across ranks | pythia-1.4b | 1–4× A100 (40 GB) |
-| [`accuracy/`](accuracy/accuracy_pythia-14m.png) | χ_net estimator variance vs `n_hutchinson` (both methods) | pythia-14m | 1× A100 |
+| [`accuracy/`](accuracy/accuracy_pythia-14m.png) | χ_net estimator variance vs `n_hutchinson` (both methods) | pythia-14m | 1× A100 (June 2026); re-run on 1× RTX 3090 Ti (November 2026) |
 
 Each subdirectory holds its sweep script, an sbatch job, the committed result
 (`*.md` / `*.json`), and a plot (`*.png`).
@@ -63,8 +63,18 @@ subdirectory (CPU-only; needs `vatis[examples]` for matplotlib).
 - **accuracy** — the χ_net estimators are unbiased, so accuracy is governed by
   variance, which falls like ~1/√n_hutchinson. `per_sequence_cv`'s control
   variate gives lower variance than plain `hutchinson` at the same
-  `n_hutchinson`, most visibly in the high-`χ_pos` regime.
+  `n_hutchinson`, most visibly in the high-`χ_pos` regime. (In the committed
+  sweep — pythia-14m at step3000, `χ_pos` ≈ 7e-8 — the two methods' relative
+  spreads agree to three significant digits at every `n_hutchinson`, in the
+  June file as in the November one, so that sweep does not show the reduction.)
 
+> The `accuracy/` sweep was re-run on 17 November 2026 with the current code on
+> an RTX 3090 Ti, with the settings recorded in its JSON (100 seeds, `n_h` 1–64,
+> reference at `n_h = 4096`); its values are a new probe draw, and the
+> conclusions (unbiased means, spread falling roughly like 1/√n) are unchanged.
+> Its sbatch file says `--ref-n-h 2048`, but both the June and the November JSON
+> use 4096.
+>
 > The `single_gpu/` and `ddp_scaling/` results were measured in June 2026 with
 > the code of that time and have not been re-run since (no A100s here). Today
 > `chi_net` and `chi_pos` for the same seed are a different Hutchinson draw (the
