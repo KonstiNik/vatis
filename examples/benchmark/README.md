@@ -1,4 +1,4 @@
-# vatis benchmarks (A100)
+# vatis benchmarks
 
 Performance and accuracy benchmarks for vatis, measured on NVIDIA A100 GPUs —
 the production-class hardware vatis is meant to run on. Three independent
@@ -84,4 +84,5 @@ subdirectory (CPU-only; needs `vatis[examples]` for matplotlib).
 >
 > Numbers are hardware-specific and meant as orientation, not guarantees. For a
 > consumer-GPU smoke check and the end-to-end deployment-example findings, see
-> [`../BENCHMARK.md`](../BENCHMARK.md).
+> the [Pythia example](../pythia_sweep/README.md) and the
+> [index of all examples](../README.md).

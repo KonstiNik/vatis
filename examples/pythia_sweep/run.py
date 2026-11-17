@@ -28,7 +28,7 @@ across checkpoints answers a real LNA question: do the prose and code
 loss directions become more or less aligned as Pythia trains?
 
 Sized to fit comfortably under the 15-minute budget on the reference
-hardware (RTX 3090 Ti, see ``examples/BENCHMARK.md`` for the budget
+hardware (RTX 3090 Ti, see ``examples/pythia_sweep/details.md`` for the budget
 arithmetic). On that hardware the script wallclock is ~20 s with a
 warm HF cache and ~50 s on the first run (the four early-phase
 checkpoints add ~30 s of cold downloads). Slower hardware or a cold

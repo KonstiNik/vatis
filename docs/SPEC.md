@@ -939,8 +939,9 @@ vatis/
 ```
 examples/
 ├── _helpers.py                    # shared: tokenize_into_lm_batch, step_from_revision
-├── BENCHMARK.md                   # deployment-example findings & sizing
+├── README.md                      # index of the examples
 ├── pythia_sweep/                  # canonical example: 13 pythia-14m revisions × prose + code
+│   ├── README.md, details.md      # what it shows; sizing and findings in full
 │   ├── run.py                     # phase 1: the sweep, writes results.parquet + plots
 │   ├── evaluate.py                # post-processing of results.parquet — derived observables
 │   └── results.parquet, *.png     # the committed outputs of both
