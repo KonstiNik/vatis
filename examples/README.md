@@ -19,7 +19,7 @@ READMEs can still be read.
 |---|---|---|---|
 | [`pythia_sweep/`](pythia_sweep/README.md) | How do the observables of Pythia-14m change over training, and do prose and code gradients help or hurt each other? | the public `EleutherAI/pythia-14m` checkpoints (downloaded); GPU optional | 52–55 s cached, 76 s first run (RTX 3090 Ti) |
 | [`optimizer_aware_llama/`](optimizer_aware_llama/README.md) | What do `chi_pos` and its AdamW-preconditioned version look like over a real training run? | a checkpoint bundle of an 11M-parameter Llama (not in this repository) and the training repository's model code; a GPU (falls back to the CPU, slowly) | about 100 s (RTX 3090 Ti) |
-| [`adamw_vs_sgd_reconstruction/`](adamw_vs_sgd_reconstruction/README.md) | Which update rule reproduces the step an AdamW run took? | a checkpoint bundle with consecutive fp32 checkpoints (not in this repository); GPU optional | 11 s (RTX 3090 Ti), 115 s (CPU) |
+| [`adamw_vs_sgd_reconstruction/`](adamw_vs_sgd_reconstruction/README.md) | Which update rule reproduces the step an AdamW run took? | a checkpoint bundle with consecutive fp32 checkpoints (not in this repository) and the training repository's model code (or your own model factory); GPU optional | 11 s (RTX 3090 Ti), 115 s (CPU) |
 | [`olmo_sft_analysis/`](olmo_sft_analysis/README.md) | What do the observables look like on a 7B SFT checkpoint and real chat data, and what does that cost? | `Olmo-3-7B-Think-SFT` and its data (downloaded); one GPU with about 93 GiB; SLURM | about 210 s (1× H100) |
 
 ## Benchmarks
