@@ -306,7 +306,7 @@ estimation needs either (a) deterministic basis vectors over the full output
 dim — exact but `O(S·V)` backwards, infeasible for LMs — or (b) random probes
 (Hutchinson) — `O(n)` backwards with controllable variance.
 
-#### Method 1: `HutchinsonEstimator` (default for large `B`)
+#### Method 1: `HutchinsonEstimator` (default)
 
 Plain-torch Hutchinson at micro-batch level. For each micro-batch (sequences
 `[b₁, ..., b_M]`), draw `n_h` independent Rademacher vectors `v ∈ R^(M·S·V)`,
@@ -319,9 +319,8 @@ g, = torch.autograd.grad(projected, model.parameters())
 chi_net_accumulator += g.pow(2).sum()  # accumulates Σ_b ‖J_bᵀ v‖²
 ```
 
-Cost: `n_h` backwards per micro-batch. Variance is `~B×` higher per draw than the
-per-sequence path. **When to use:** large `B` (≥ 32), or when other methods don't
-apply. This is the always-works fallback.
+Cost: `n_h` forwards and `n_h` backwards per micro-batch. **When to use:** always
+applicable; it is the default at every batch size.
 
 #### Method 2: `PerSequenceControlVariateEstimator` (opt-in)
 
@@ -341,11 +340,32 @@ exactly, has zero variance; subtracting its noisy Hutchinson counterpart and
 adding back the exact value is meant to reduce the total variance when the loss
 direction overlaps the top eigenmodes of `M_b` (the high-`χ_pos` regime).
 
-In the measurements made so far it has not lowered the variance: in the committed accuracy sweep (`examples/benchmark/accuracy/accuracy_pythia-14m.json`: Pythia-14m, `B = 8`, 100 seeds per setting) the two estimators have the same spread at every `n_hutchinson` from 1 to 64, and the comparisons on the small test models agree. `χ_pos` is tiny in that sweep; the high-`χ_pos` regime, where the control variate is expected to help, has not been measured.
+What the committed data show: in the accuracy sweep
+(`examples/benchmark/accuracy/accuracy_pythia-14m.json`: Pythia-14m, `B = 8`,
+sequence length 64, `micro_batch_size = 8`, 100 seeds per setting, both
+estimators run with the same seeds and therefore the same probes) the two
+estimators return practically the same value for every seed — they differ by
+less than 0.2% of one standard deviation at every `n_hutchinson` from 1 to 64 —
+so their spread is the same. The single-seed Pythia-160m table
+(`examples/benchmark/single_gpu/results_pythia-160m.md`) agrees: `chi_net`
+matches to the five digits it prints at `B` = 4, 8 and 16. `χ_pos` is of order
+1e-7 in both, so the loss direction carries almost none of the trace and the
+control-variate correction is negligible there. On the untrained toy fixture a
+comment in `tests/unit/test_chi_net.py` records that the control variate removes
+well under 1% of the standard deviation. Nothing has been measured at
+`micro_batch_size = 1` on a real model, or in the high-`χ_pos` regime where the
+correction is expected to matter.
 
-Cost per `(ckpt, batch)`: `n_h + B` backwards. Linear in `B`, so unattractive
-for `B > ~64`. **When to use:** when the per-sample alignment matrix is wanted.
-It is not selected by default (see "Default estimator").
+Cost: per micro-batch of `M` sequences, `per_sequence_cv` runs one forward and
+`n_h + M` backwards; `hutchinson` runs `n_h` forwards and `n_h` backwards. In
+the committed Pythia-160m table (`B` = 4, 8, 16) the wall-clock of the two is
+about equal at 32 probes, `per_sequence_cv` is slower at 8 probes and faster at
+128, and its peak memory is higher (4.5–6.2 GB against 3.4–4.4 GB).
+
+It is not selected by default (see "Default estimator"). Through `analyze()` and
+the CLI it returns the same rows as `hutchinson`; the per-sample alignment
+matrix is only available from a direct
+`PerSequenceControlVariateEstimator(compute_alignment_matrix=True)` call.
 
 #### Method 3: `OpacusEstimator` (opt-in fast path)
 
@@ -366,9 +386,9 @@ def select_chi_net_method(B_total: int, requested: str | None) -> str:
     return "hutchinson"
 ```
 
-Through 0.2.x a batch of at most 32 sequences selected `per_sequence_cv`. It
-costs `B` extra backwards and has not shown a lower variance (see Method 2), so
-the default is `hutchinson` at every batch size.
+Through 0.2.x a batch of at most 32 sequences selected `per_sequence_cv`. It has
+not shown a lower variance and needs more peak memory (see Method 2), so the
+default is `hutchinson` at every batch size.
 
 #### `micro_batch_size` is a noise setting, not only a memory setting
 
@@ -435,8 +455,8 @@ number of valid (non-pad, non-ignored) tokens.
   **preconditioned observables** (`chi_pos_P`) for diagonal `P` (`identity`, `explicit`,
   `adamw` sources) alongside the raw one.
   Tokenized data already in model-ready form. DDP across user-specified
-  `num_gpus`. Two `χ_net` estimators (`hutchinson`, `per_sequence_cv`) with
-  auto-selection. Parquet result sink (canonical) plus optional W&B and
+  `num_gpus`. Two `χ_net` estimators (`hutchinson`, the default, and the
+  opt-in `per_sequence_cv`). Parquet result sink (canonical) plus optional W&B and
   TensorBoard. CLI via `python -m vatis run …` that wraps `torchrun`.
 - **Out:** Tokenization (examples tokenize inline; vatis core provides no
   tokenizer). Checkpoint discovery / sweep scheduling. FSDP. Tensor / pipeline

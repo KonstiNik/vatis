@@ -164,7 +164,9 @@ Without the argument there are no P rows and no extra cost. One thing does
 differ from earlier releases either way: for a given `seed`, `chi_net` and
 `chi_pos` with the default Rademacher probes come out as a different draw,
 because the Hutchinson probes are now drawn differently (see the
-[changelog](CHANGELOG.md)). `chi_loss` and `delta_loss` are unchanged.
+[changelog](CHANGELOG.md)). A run with at most 32 sequences and no explicit
+`chi_net_method` also uses a different estimator now (see "Choosing the χ_net
+estimator"). `chi_loss` and `delta_loss` are unchanged.
 
 Three things to know before using it:
 
@@ -215,10 +217,32 @@ seeded all ranks identically. `chi_loss` and `delta_loss` depend on neither.
 
 ## Choosing the χ_net estimator
 
-The default is `hutchinson` at every batch size. `per_sequence_cv` adds one
-backward per sequence and a control variate; select it with
-`chi_net_method="per_sequence_cv"`. In the measurements made so far it has not lowered the variance: in the committed accuracy sweep (`examples/benchmark/accuracy/accuracy_pythia-14m.json`: Pythia-14m, `B = 8`, 100 seeds per setting) the two estimators have the same spread at every `n_hutchinson` from 1 to 64, and the comparisons on the small test models agree. `chi_pos` is tiny in that sweep; the high-`chi_pos` regime, where the control variate is expected to help, has not been measured.
-Through 0.2.x `per_sequence_cv` was selected automatically for B ≤ 32.
+The default is `hutchinson` at every batch size. `per_sequence_cv` adds a
+control variate built from one extra backward per sequence; select it with
+`chi_net_method="per_sequence_cv"`. Through 0.2.x it was selected automatically
+for B ≤ 32.
+
+What the committed data show: in the accuracy sweep
+(`examples/benchmark/accuracy/accuracy_pythia-14m.json`: Pythia-14m, `B = 8`,
+sequence length 64, `micro_batch_size = 8`, 100 seeds per setting, both
+estimators run with the same seeds and therefore the same probes) the two
+estimators return practically the same value for every seed — they differ by
+less than 0.2% of one standard deviation at every `n_hutchinson` from 1 to 64 —
+so their spread is the same. The single-seed Pythia-160m table
+(`examples/benchmark/single_gpu/results_pythia-160m.md`) agrees: `chi_net`
+matches to the five digits it prints at `B` = 4, 8 and 16. `chi_pos` is of order
+1e-7 in both, so the loss direction carries almost none of the trace and the
+control-variate correction is negligible there. On the untrained toy fixture a
+comment in `tests/unit/test_chi_net.py` records that the control variate removes
+well under 1% of the standard deviation. Nothing has been measured at
+`micro_batch_size = 1` on a real model, or in the high-`chi_pos` regime where
+the correction is expected to matter.
+
+Cost: per micro-batch of `M` sequences, `per_sequence_cv` runs one forward and
+`n_h + M` backwards; `hutchinson` runs `n_h` forwards and `n_h` backwards. In
+the committed Pythia-160m table (`B` = 4, 8, 16) the wall-clock of the two is
+about equal at 32 probes, `per_sequence_cv` is slower at 8 probes and faster at
+128, and its peak memory is higher (4.5–6.2 GB against 3.4–4.4 GB).
 
 ## `micro_batch_size` is not only a memory setting
 
