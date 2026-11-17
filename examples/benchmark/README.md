@@ -1,8 +1,8 @@
 # vatis benchmarks
 
-Performance and accuracy benchmarks for vatis, measured on NVIDIA A100 GPUs —
-the production-class hardware vatis is meant to run on. Three independent
-benchmarks, each in its own subdirectory with its committed results:
+Performance and accuracy benchmarks for vatis. The first three were measured
+on NVIDIA A100 GPUs — the production-class hardware vatis is meant to run on —
+each in its own subdirectory with its committed results:
 
 | benchmark | question it answers | model | hardware |
 |---|---|---|---|
