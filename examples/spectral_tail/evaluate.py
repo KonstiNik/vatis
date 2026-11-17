@@ -12,10 +12,12 @@ from all available models on the same axes.
 
 Usage::
 
-    .venv/bin/python examples/spectral_tail/evaluate.py
+    python examples/spectral_tail/evaluate.py             # x axis = training step
+    python examples/spectral_tail/evaluate.py --compute   # x axis = estimated compute (6ND FLOPs)
 
 Reads from ``examples/spectral_tail/results_*.parquet``.
-Writes plots to ``examples/spectral_tail/``.
+Writes plots to ``examples/spectral_tail/figures/`` (``--compute`` adds a
+``_compute`` suffix to every file name).
 """
 
 from __future__ import annotations
