@@ -1,0 +1,714 @@
+"""The update-response rows through the bundle path: train, write a bundle, analyze it.
+
+``test_update_response_vs_torch.py`` pins the rule itself in fp64. This file
+pins everything between a bundle on disk and a row in the result: which state is
+read, which learning rate, which batch is taken for the update batch, what the
+analyzer does with ``theta_{t+1}``, and what is refused.
+
+The reference is never the loader. :func:`tests.fixtures.update_response_toys.write_bundle`
+trains the tiny transformer with a real ``torch.optim`` optimizer in fp32, writes
+checkpoints in the bundle schema, and keeps the run in memory — the weights
+before and after every step. A row is held against ``g . (theta_{t+1} - theta_t)``
+of *that* record, with ``g`` from plain autograd.
+
+Tolerances: the bundle path is fp32 (weights, optimizer state, and the
+analyzer's gradient vector), so agreement with the fp32 run is limited by fp32
+round-off in a dot product over ~20k coordinates, measured at ``1e-8 .. 5e-7``
+relative on these bundles. The assertions use ``1e-5``: twenty times the worst
+case seen, and three orders below the smallest modelling error they are there to
+catch.
+"""
+
+from __future__ import annotations
+
+import warnings
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+import pyarrow.parquet as pq
+import pytest
+import torch
+import torch.nn as nn
+
+from tests.fixtures.update_response_toys import (
+    TrainingRecord,
+    decay_groups,
+    edit_json,
+    held_out_batch,
+    write_bundle,
+)
+from tests.utils.bundle_fixture import DEFAULT_MODEL_FACTORY, lm_loss
+from vatis.analyzer import (
+    ALL_OBSERVABLES,
+    P_OBSERVABLES,
+    REALIZED_CHANGE_OBSERVABLES,
+    UPDATE_RESPONSE_OBSERVABLES,
+    Analyzer,
+    analyze,
+)
+from vatis.core.update_response import AdamHyper, OptimizerUpdate
+from vatis.models.hf import ModelBundle, causal_lm_loss, causal_lm_valid_mask
+from vatis.models.local_bundle import (
+    BundleSchemaError,
+    LocalBundleSource,
+    load_local_bundle,
+    plain_lm_forward,
+)
+from vatis.sinks.base import ResultRow
+
+N_STEPS = 9
+# 0..3 consecutive (so 0, 1, 2 have a stored successor), 6 isolated, 8 and 9 again
+# consecutive with 9 the final weights.
+BUNDLE_STEPS = (0, 1, 2, 3, 6, 8, 9)
+WITH_SUCCESSOR = (0, 1, 2, 8)
+RTOL = 1e-5
+
+OptimizerFactory = Callable[[nn.Module], torch.optim.Optimizer]
+
+
+def _adamw(model: nn.Module) -> torch.optim.Optimizer:
+    return torch.optim.AdamW(model.parameters(), lr=3e-3, betas=(0.9, 0.95), weight_decay=0.1)
+
+
+def _write(
+    tmp_path: Path, make_optimizer: OptimizerFactory = _adamw, **kwargs: Any
+) -> tuple[Path, TrainingRecord]:
+    run_dir = tmp_path / "run"
+    kwargs.setdefault("n_steps", N_STEPS)
+    kwargs.setdefault("bundle_steps", BUNDLE_STEPS)
+    record = write_bundle(run_dir, make_optimizer, **kwargs)
+    return run_dir, record
+
+
+def _source(run_dir: Path, **kwargs: Any) -> LocalBundleSource:
+    return load_local_bundle(run_dir, DEFAULT_MODEL_FACTORY, **kwargs)
+
+
+def _run(
+    source: LocalBundleSource,
+    *,
+    update_response: Any = "default",
+    preconditioner: Any = None,
+    eval_batches: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> dict[int, list[ResultRow]]:
+    """Analyze the bundle; rows per step."""
+    if update_response == "default":
+        update_response = source.update_response()
+    if eval_batches is None:
+        eval_batches = {"train": source.batch_a_spec(), "val": held_out_batch()}
+    kwargs.setdefault("micro_batch_size", 2)
+    analyzer = Analyzer(
+        eval_batches=eval_batches,
+        update_response=update_response,
+        preconditioner=preconditioner,
+        chi_net_method="hutchinson",
+        n_hutchinson=2,
+        dtype="fp32",
+        **kwargs,
+    )
+    results = analyzer.run(source.model_specs())
+    return {step: result.rows for step, result in zip(source.steps, results, strict=True)}
+
+
+def _value(rows: list[ResultRow], batch_b: str, observable: str, batch_a: str = "train") -> float:
+    found = [
+        r.value
+        for r in rows
+        if (r.batch_a, r.batch_b, r.observable) == (batch_a, batch_b, observable)
+    ]
+    assert len(found) == 1, f"{len(found)} rows for ({batch_a}, {batch_b}, {observable})"
+    return found[0]
+
+
+def _has(rows: list[ResultRow], observable: str) -> bool:
+    return any(r.observable == observable for r in rows)
+
+
+def _reference(record: TrainingRecord, step: int, batch: str) -> float:
+    """``g . (theta_{t+1} - theta_t)`` from the recorded run and plain autograd."""
+    recorded = record.steps[step]
+    if batch == "train":
+        grad = recorded.grad_update
+    else:
+        _loss, grad = record.loss_and_grad(recorded.params_before, held_out_batch())
+    return float(grad @ recorded.delta)
+
+
+def _loss_fp64(record: TrainingRecord, params: list[torch.Tensor], batch: dict[str, Any]) -> float:
+    model = record.model_at(params)
+    with torch.no_grad():
+        return float(lm_loss(model(batch["input_ids"]).to(torch.float64), batch))
+
+
+def _assert_matches_the_run(
+    record: TrainingRecord,
+    rows_by_step: dict[int, list[ResultRow]],
+    *,
+    descriptor: str = "adamw_update",
+) -> None:
+    for step, rows in rows_by_step.items():
+        for batch in ("train", "val"):
+            reference = _reference(record, step, batch)
+            total = _value(rows, batch, "update_response")
+            assert total == pytest.approx(reference, rel=RTOL), (
+                f"step {step}, batch {batch}: update_response = {total!r}, the run did "
+                f"g . dtheta = {reference!r}"
+            )
+            parts = sum(
+                _value(rows, batch, f"update_response_{part}") for part in ("grad", "hist", "wd")
+            )
+            assert total == pytest.approx(parts, rel=1e-12, abs=1e-18)
+        for row in rows:
+            if row.observable in UPDATE_RESPONSE_OBSERVABLES:
+                assert row.preconditioner == descriptor
+
+
+# ------------------------------------------------------------------ the rows
+
+
+@pytest.fixture(scope="module")
+def adamw_run(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, TrainingRecord]:
+    return _write(tmp_path_factory.mktemp("adamw"))
+
+
+def test_update_response_is_the_first_order_change_of_the_step_the_run_took(
+    adamw_run: tuple[Path, TrainingRecord],
+) -> None:
+    run_dir, record = adamw_run
+    rows_by_step = _run(_source(run_dir))
+    assert tuple(rows_by_step) == BUNDLE_STEPS
+    _assert_matches_the_run(record, rows_by_step)
+    # The history part is absent at the first update and present afterwards; the
+    # decay part is there from the start.
+    assert _value(rows_by_step[0], "val", "update_response_hist") == 0.0
+    assert _value(rows_by_step[1], "val", "update_response_hist") != 0.0
+    assert _value(rows_by_step[0], "val", "update_response_wd") != 0.0
+
+
+def test_rows_are_keyed_by_update_batch_and_evaluated_batch(
+    adamw_run: tuple[Path, TrainingRecord],
+) -> None:
+    run_dir, _record = adamw_run
+    rows_by_step = _run(_source(run_dir))
+    for step, rows in rows_by_step.items():
+        new = [
+            r
+            for r in rows
+            if r.observable in UPDATE_RESPONSE_OBSERVABLES + REALIZED_CHANGE_OBSERVABLES
+        ]
+        expected = set(UPDATE_RESPONSE_OBSERVABLES)
+        if step in WITH_SUCCESSOR:
+            expected |= set(REALIZED_CHANGE_OBSERVABLES)
+        for batch in ("train", "val"):
+            got = {r.observable for r in new if (r.batch_a, r.batch_b) == ("train", batch)}
+            assert got == expected, f"step {step}, pair (train, {batch})"
+        assert {(r.batch_a, r.batch_b) for r in new} == {("train", "train"), ("train", "val")}
+        for row in new:
+            assert row.n_hutchinson is None and row.hutchinson_seed is None
+            assert row.wallclock_s is None
+            assert row.preconditioner == (
+                "adamw_update" if row.observable in UPDATE_RESPONSE_OBSERVABLES else "none"
+            )
+            assert (
+                row.n_valid_a == 4 * 15
+                and row.n_valid_b == (4 if row.batch_b == "train" else 8) * 15
+            )
+        # One row per (pair, observable): the long format pivots without duplicates.
+        keys = [(r.batch_a, r.batch_b, r.observable) for r in rows]
+        assert len(keys) == len(set(keys))
+
+
+def test_existing_rows_are_unchanged_bit_for_bit(adamw_run: tuple[Path, TrainingRecord]) -> None:
+    run_dir, _record = adamw_run
+    source = _source(run_dir)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # the step-0 P skip
+        without = _run(source, update_response=None, preconditioner=source.preconditioner())
+        with_response = _run(source, preconditioner=source.preconditioner())
+    for step in BUNDLE_STEPS:
+        old = [r for r in without[step]]
+        kept = [
+            r
+            for r in with_response[step]
+            if r.observable not in UPDATE_RESPONSE_OBSERVABLES + REALIZED_CHANGE_OBSERVABLES
+        ]
+        assert len(old) == len(kept) > 0
+        for a, b in zip(old, kept, strict=True):
+            assert (a.batch_a, a.batch_b, a.observable, a.preconditioner) == (
+                b.batch_a,
+                b.batch_b,
+                b.observable,
+                b.preconditioner,
+            )
+            assert a.value == b.value
+            assert a.hutchinson_seed == b.hutchinson_seed
+
+
+def test_step_zero_has_response_rows_although_it_has_no_p_rows(
+    adamw_run: tuple[Path, TrainingRecord],
+) -> None:
+    run_dir, _record = adamw_run
+    source = _source(run_dir, steps=[0, 1])
+    with pytest.warns(UserWarning, match="SKIPPED"):
+        rows_by_step = _run(source, preconditioner=source.preconditioner())
+    assert not any(_has(rows_by_step[0], name) for name in P_OBSERVABLES)
+    assert all(_has(rows_by_step[0], name) for name in UPDATE_RESPONSE_OBSERVABLES)
+    assert all(_has(rows_by_step[1], name) for name in P_OBSERVABLES)
+
+
+# ----------------------------------------------------------- the realized change
+
+
+def test_realized_change_and_residual_where_the_bundle_holds_the_next_step(
+    adamw_run: tuple[Path, TrainingRecord],
+) -> None:
+    run_dir, record = adamw_run
+    rows_by_step = _run(_source(run_dir))
+    batches = {"val": held_out_batch()}
+    for step in BUNDLE_STEPS:
+        rows = rows_by_step[step]
+        if step not in WITH_SUCCESSOR:
+            assert not any(_has(rows, name) for name in REALIZED_CHANGE_OBSERVABLES)
+            continue
+        recorded = record.steps[step]
+        for batch in ("train", "val"):
+            from_weights = _value(rows, batch, "update_response_weights")
+            assert from_weights == pytest.approx(_reference(record, step, batch), rel=RTOL)
+            # ... and the rebuilt update agrees with the stored one.
+            assert _value(rows, batch, "update_response") == pytest.approx(from_weights, rel=RTOL)
+            change = _value(rows, batch, "loss_change")
+            residual = _value(rows, batch, "loss_change_residual")
+            assert residual == change - from_weights
+        reference_change = _loss_fp64(record, recorded.params_after, batches["val"]) - _loss_fp64(
+            record, recorded.params_before, batches["val"]
+        )
+        assert _value(rows, "val", "loss_change") == pytest.approx(
+            reference_change, rel=1e-4, abs=1e-7
+        )
+        # A descent step on this toy: the loss falls, by less than first order says.
+        assert _value(rows, "val", "loss_change") < 0.0
+        assert (
+            0.0
+            < _value(rows, "val", "loss_change_residual")
+            < abs(_value(rows, "val", "update_response_weights"))
+        )
+
+
+def test_the_successor_is_found_on_disk_even_when_it_is_not_selected(
+    adamw_run: tuple[Path, TrainingRecord],
+) -> None:
+    run_dir, record = adamw_run
+    rows_by_step = _run(_source(run_dir, steps=[1, 6]))
+    assert set(rows_by_step) == {1, 6}
+    assert _value(rows_by_step[1], "val", "update_response_weights") == pytest.approx(
+        _reference(record, 1, "val"), rel=RTOL
+    )
+    assert not _has(rows_by_step[6], "loss_change")
+
+
+def test_realized_false_switches_the_realized_rows_off(
+    adamw_run: tuple[Path, TrainingRecord],
+) -> None:
+    run_dir, _record = adamw_run
+    source = _source(run_dir, steps=[1])
+    rows = _run(source, update_response=source.update_response(realized=False))[1]
+    assert not any(_has(rows, name) for name in REALIZED_CHANGE_OBSERVABLES)
+    assert all(_has(rows, name) for name in UPDATE_RESPONSE_OBSERVABLES)
+
+
+@pytest.mark.parametrize("weight_dtype", ["bf16"])
+def test_rounded_weight_files_give_no_realized_rows(tmp_path: Path, weight_dtype: str) -> None:
+    """bf16 weight files: the difference of two of them is rounding, so it is not reported."""
+    run_dir, record = _write(tmp_path, weight_dtype=weight_dtype)
+    source = _source(run_dir)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        rows_by_step = _run(source)
+    skipped = [str(w.message) for w in caught if "SKIPPED" in str(w.message)]
+    assert len(skipped) == len(WITH_SUCCESSOR)
+    assert all("BF16" in message and "fp32 weight files" in message for message in skipped)
+    for step, rows in rows_by_step.items():
+        assert not any(_has(rows, name) for name in REALIZED_CHANGE_OBSERVABLES)
+        assert all(_has(rows, name) for name in UPDATE_RESPONSE_OBSERVABLES), step
+
+    # Why: what such a difference would have been. Element by element, the
+    # stored weight change of one step carries the rounding of both files (14%
+    # of the step on this toy, whose learning rate is large; most of the step
+    # on a real bundle early in training, see docs/SPEC.md) ...
+    step = record.steps[1]
+    stored = torch.cat(
+        [
+            (after.to(torch.bfloat16).double() - before.to(torch.bfloat16).double()).reshape(-1)
+            for after, before in zip(step.params_after, step.params_before, strict=True)
+        ]
+    )
+    assert float((stored - step.delta).norm() / step.delta.norm()) > 0.05
+    # ... while the rows that ARE reported only use the rounded weights as the
+    # point where the gradient is taken, which costs percent, not everything.
+    for batch in ("train", "val"):
+        assert _value(rows_by_step[1], batch, "update_response") == pytest.approx(
+            _reference(record, 1, batch), rel=0.1
+        )
+
+
+def test_one_rounded_endpoint_is_enough_to_refuse(tmp_path: Path) -> None:
+    from safetensors.torch import load_file, save_file
+
+    run_dir, _record = _write(tmp_path)
+    path = run_dir / "checkpoints" / "step_00000002" / "model.safetensors"
+    save_file({k: v.to(torch.bfloat16) for k, v in load_file(str(path)).items()}, str(path))
+    source = _source(run_dir, steps=[0, 1, 2])
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        rows_by_step = _run(source)
+    assert _has(rows_by_step[0], "loss_change")  # 0 -> 1: both fp32
+    assert not _has(rows_by_step[1], "loss_change")  # 1 -> 2: successor rounded
+    assert not _has(rows_by_step[2], "loss_change")  # 2 -> 3: this one rounded
+    assert sum("SKIPPED" in str(w.message) for w in caught) == 2
+
+
+# --------------------------------------------------------------- the update batch
+
+
+def test_the_update_batch_is_found_by_its_tensors_not_by_its_name(
+    adamw_run: tuple[Path, TrainingRecord],
+) -> None:
+    run_dir, record = adamw_run
+    source = _source(run_dir, steps=[2])
+    rows = _run(
+        source,
+        eval_batches={"held_out": held_out_batch(), "whatever": source.batch_a_spec()},
+    )[2]
+    assert _value(rows, "held_out", "update_response", batch_a="whatever") == pytest.approx(
+        _reference(record, 2, "val"), rel=RTOL
+    )
+    assert _value(rows, "whatever", "update_response", batch_a="whatever") == pytest.approx(
+        _reference(record, 2, "train"), rel=RTOL
+    )
+
+
+def test_missing_update_batch_is_refused(adamw_run: tuple[Path, TrainingRecord]) -> None:
+    run_dir, _record = adamw_run
+    source = _source(run_dir, steps=[2])
+    with pytest.raises(ValueError, match="none of the eval batches .* is the batch this step"):
+        _run(source, eval_batches={"val": held_out_batch()})
+    # The update batch of ANOTHER step is not this step's update batch.
+    other = source.checkpoint_for(2).batch_a
+    source3 = _source(run_dir, steps=[3])
+    with pytest.raises(ValueError, match="none of the eval batches"):
+        _run(source3, eval_batches={"train": other, "val": held_out_batch()})
+
+
+# ------------------------------------------------- what the state cannot show
+
+
+def test_clipping_recorded_with_its_algorithm_is_applied(tmp_path: Path) -> None:
+    run_dir, record = _write(tmp_path, clip_grad_norm=0.5)
+    clipped = [float(s.grad_seen.norm() / s.grad_update.norm()) < 0.999 for s in record.steps]
+    assert any(clipped), "the fixture's clip never engaged"
+    rows_by_step = _run(_source(run_dir))
+    _assert_matches_the_run(record, rows_by_step)
+
+
+def test_clipping_must_be_stated_never_assumed(tmp_path: Path) -> None:
+    run_dir, record = _write(tmp_path, clip_grad_norm=0.5)
+    metadata = run_dir / "metadata.json"
+
+    # Recorded value, no algorithm: not guessed.
+    edit_json(metadata, gradient_clip_algorithm=...)
+    with pytest.raises(BundleSchemaError, match="does not say HOW"):
+        _source(run_dir).update_response()
+    stated = _source(run_dir)
+    _assert_matches_the_run(
+        record, _run(stated, update_response=stated.update_response(clip_grad_norm=0.5))
+    )
+    with pytest.raises(ValueError, match="contradicts the recorded"):
+        _source(run_dir).update_response(clip_grad_norm=1.0)
+    with pytest.raises(ValueError, match="says the run did not clip"):
+        _source(run_dir).update_response(clip_grad_norm=None)
+
+    # Clipping by value is not implemented.
+    edit_json(metadata, gradient_clip_algorithm="value")
+    with pytest.raises(BundleSchemaError, match="by value"):
+        _source(run_dir).update_response()
+    with pytest.raises(ValueError, match="'value'"):
+        _source(run_dir).update_response(clip_grad_norm=0.5)
+
+    # Nothing recorded at all: refused, until the caller says which it was.
+    edit_json(metadata, gradient_clip_algorithm=..., gradient_clip_val=...)
+    with pytest.raises(BundleSchemaError, match="does not say\\s+whether the gradient was clipped"):
+        _source(run_dir).update_response()
+    stated = _source(run_dir)
+    _assert_matches_the_run(
+        record, _run(stated, update_response=stated.update_response(clip_grad_norm=0.5))
+    )
+
+    # Recorded as "not clipped": a stated clip contradicts it.
+    edit_json(metadata, gradient_clip_val=None)
+    with pytest.raises(ValueError, match="says the run clipped"):
+        _source(run_dir).update_response(clip_grad_norm=0.5)
+
+    for bad in ("norm", True, -1.0, float("inf")):
+        with pytest.raises(ValueError):
+            _source(run_dir).update_response(clip_grad_norm=bad)  # type: ignore[arg-type]
+    for bad_value in ("1.0", -1.0, True):
+        edit_json(metadata, gradient_clip_val=bad_value)
+        with pytest.raises(BundleSchemaError, match="gradient_clip_val"):
+            _source(run_dir).update_response()
+    edit_json(metadata, gradient_clip_val=0.5, gradient_clip_algorithm="adaptive")
+    with pytest.raises(BundleSchemaError, match="gradient_clip_algorithm"):
+        _source(run_dir).update_response()
+
+
+def test_a_clip_the_bundle_denies_shows_up_against_the_stored_weights(tmp_path: Path) -> None:
+    """Metadata that wrongly says "not clipped": the rebuilt update is wrong, and the
+    stored weight difference — which needs no formula — says so."""
+    run_dir, record = _write(tmp_path, clip_grad_norm=0.5)
+    edit_json(run_dir / "metadata.json", gradient_clip_algorithm=..., gradient_clip_val=None)
+    rows = _run(_source(run_dir, steps=[1]))[1]
+    from_weights = _value(rows, "val", "update_response_weights")
+    assert from_weights == pytest.approx(_reference(record, 1, "val"), rel=RTOL)
+    assert abs(_value(rows, "val", "update_response") / from_weights - 1.0) > 1e-2
+
+
+def test_zero_clip_value_means_not_clipped(tmp_path: Path) -> None:
+    run_dir, record = _write(tmp_path, metadata_extra={"gradient_clip_val": 0})
+    _assert_matches_the_run(record, _run(_source(run_dir, steps=[0, 1, 6])))
+
+
+def test_scheduled_learning_rate_through_the_bundle(tmp_path: Path) -> None:
+    run_dir, record = _write(
+        tmp_path,
+        make_scheduler=lambda opt: torch.optim.lr_scheduler.LinearLR(
+            opt, start_factor=0.05, end_factor=1.0, total_iters=6
+        ),
+    )
+    assert len({record.steps[s].lr for s in BUNDLE_STEPS}) >= 5
+    _assert_matches_the_run(record, _run(_source(run_dir)))
+
+    # meta.json and the saved state must name the same rate.
+    edit_json(run_dir / "checkpoints" / "step_00000002" / "meta.json", lr=3e-3)
+    with pytest.raises(BundleSchemaError, match="meta.json records lr"):
+        _run(_source(run_dir, steps=[2]))
+    # Without a recorded rate there is nothing to cross-check; the saved one is used.
+    edit_json(run_dir / "checkpoints" / "step_00000002" / "meta.json", lr=...)
+    _assert_matches_the_run(record, _run(_source(run_dir, steps=[2])))
+
+
+def test_step_mismatch_is_refused_or_warned(tmp_path: Path) -> None:
+    run_dir, record = _write(tmp_path, bundle_steps=(0, 1, 2, 3))
+    checkpoints = run_dir / "checkpoints"
+    (checkpoints / "step_00000003").rename(checkpoints / "step_00000005")
+    edit_json(checkpoints / "step_00000005" / "meta.json", step=5)
+    with pytest.raises(BundleSchemaError, match="has applied 3 update"):
+        _run(_source(run_dir, steps=[5]))
+    source = _source(run_dir, steps=[5])
+    with pytest.warns(UserWarning, match="used as it is"):
+        rows = _run(source, update_response=source.update_response(on_step_mismatch="warn"))[5]
+    assert _value(rows, "val", "update_response") == pytest.approx(
+        _reference(record, 3, "val"), rel=RTOL
+    )
+    with pytest.raises(ValueError, match="on_step_mismatch"):
+        source.update_response(on_step_mismatch="ignore")
+
+
+# ------------------------------------------------------------ other update rules
+
+
+def test_no_decay_groups_with_their_own_learning_rate(tmp_path: Path) -> None:
+    """Per-group weight decay AND learning rate: exact here, though the P source refuses."""
+    run_dir, record = _write(
+        tmp_path,
+        lambda model: torch.optim.AdamW(
+            decay_groups(model, weight_decay=0.5, lr_no_decay=1e-3), lr=3e-3, betas=(0.9, 0.95)
+        ),
+    )
+    # param_names.json follows the optimizer's order (group after group), which
+    # here is not named_parameters() order.
+    assert record.names != [n for n in sorted(record.names)]
+    source = _source(run_dir)
+    _assert_matches_the_run(record, _run(source))
+    with pytest.raises(ValueError, match="different learning rates"):
+        _run(source, preconditioner=source.preconditioner())
+
+
+def test_sgd_with_momentum_through_the_bundle(tmp_path: Path) -> None:
+    run_dir, record = _write(
+        tmp_path,
+        lambda model: torch.optim.SGD(model.parameters(), lr=0.05, momentum=0.9, weight_decay=0.01),
+        optimizer_name="sgd",
+    )
+    source = _source(run_dir)
+    rows_by_step = _run(
+        source, preconditioner=source.preconditioner(), cross_pairs=[("train", "val")]
+    )
+    _assert_matches_the_run(record, rows_by_step, descriptor="sgd_update")
+    assert _value(rows_by_step[0], "val", "update_response_hist") == 0.0
+    assert _value(rows_by_step[3], "val", "update_response_hist") != 0.0
+    # SGD's gradient part is -lr * delta_loss (dampening 0), next to the cross row.
+    for step in (0, 3):
+        rows = rows_by_step[step]
+        assert _value(rows, "val", "update_response_grad") == pytest.approx(
+            -0.05 * _value(rows, "val", "delta_loss"), rel=1e-9
+        )
+
+
+def test_adam_with_coupled_decay_through_the_bundle(tmp_path: Path) -> None:
+    run_dir, record = _write(
+        tmp_path,
+        lambda model: torch.optim.Adam(
+            model.parameters(), lr=3e-3, betas=(0.9, 0.95), weight_decay=0.1
+        ),
+        optimizer_name="adam",
+    )
+    _assert_matches_the_run(
+        record, _run(_source(run_dir, steps=[0, 1, 6])), descriptor="adam_update"
+    )
+
+
+def test_pad_masked_training_loss(tmp_path: Path) -> None:
+    """A run whose loss ignored a target id: the update batch is scored the same way."""
+    run_dir, record = _write(tmp_path, ignore_token=7)
+    source = _source(run_dir, steps=[0, 2, 6])
+    assert source.loss_ignore_index == 7
+    rows_by_step = _run(source)
+    counted = []
+    for step, rows in rows_by_step.items():
+        reference = float(record.steps[step].grad_update @ record.steps[step].delta)
+        assert _value(rows, "train", "update_response") == pytest.approx(reference, rel=RTOL)
+        counted.append(next(r for r in rows if r.observable == "update_response").n_valid_a)
+    # The convention really removed targets (a batch without token 7 keeps all 60).
+    assert min(counted) < 60
+
+
+def test_other_optimizers_are_refused_through_the_bundle(tmp_path: Path) -> None:
+    run_dir, _record = _write(
+        tmp_path,
+        lambda model: torch.optim.RAdam(model.parameters(), lr=1e-3),
+        optimizer_name=None,
+    )
+    with pytest.raises(BundleSchemaError, match="Adam, AdamW\\s+and SGD"):
+        _run(_source(run_dir, steps=[1]))
+
+
+# ------------------------------------------------------------- analyzer plumbing
+
+
+def test_response_observables_need_an_update_response() -> None:
+    with pytest.raises(ValueError, match="no update_response was given"):
+        Analyzer(eval_batches={"a": held_out_batch()}, observables=["update_response"])
+    with pytest.raises(TypeError, match="update_response"):
+        Analyzer(eval_batches={"a": held_out_batch()}, update_response="adamw")  # type: ignore[arg-type]
+
+
+def test_observables_can_be_selected(adamw_run: tuple[Path, TrainingRecord]) -> None:
+    run_dir, _record = adamw_run
+    source = _source(run_dir, steps=[1])
+    rows = _run(source, observables=["delta_loss", "update_response", "loss_change"])[1]
+    assert {r.observable for r in rows} == {"delta_loss", "update_response", "loss_change"}
+
+
+def test_default_observables_without_an_update_response_are_unchanged(
+    adamw_run: tuple[Path, TrainingRecord],
+) -> None:
+    run_dir, _record = adamw_run
+    rows = _run(_source(run_dir, steps=[1]), update_response=None)[1]
+    assert {r.observable for r in rows} == set(ALL_OBSERVABLES)
+
+
+def test_factory_returning_none_skips_the_rows(adamw_run: tuple[Path, TrainingRecord]) -> None:
+    run_dir, _record = adamw_run
+    source = _source(run_dir, steps=[0, 1])
+    build = source.update_response()
+    rows_by_step = _run(
+        source,
+        update_response=lambda ckpt_id: None if ckpt_id.endswith("step0") else build(ckpt_id),
+    )
+    assert not _has(rows_by_step[0], "update_response")
+    assert _has(rows_by_step[1], "update_response")
+    with pytest.raises(TypeError, match="expected an OptimizerUpdate or None"):
+        _run(source, update_response=lambda ckpt_id: "adamw")
+
+
+def test_rows_reach_the_parquet_sink(
+    adamw_run: tuple[Path, TrainingRecord], tmp_path: Path
+) -> None:
+    run_dir, record = adamw_run
+    source = _source(run_dir, steps=[1, 2])
+    out = tmp_path / "results.parquet"
+    _run(source, sink=str(out))
+    table = pq.read_table(out).to_pylist()
+    picked = {
+        (row["revision"], row["batch_b"]): row["value"]
+        for row in table
+        if row["observable"] == "update_response"
+    }
+    assert set(picked) == {
+        ("step1", "train"),
+        ("step1", "val"),
+        ("step2", "train"),
+        ("step2", "val"),
+    }
+    assert picked[("step2", "val")] == pytest.approx(_reference(record, 2, "val"), rel=RTOL)
+    descriptors = {row["observable"]: row["preconditioner"] for row in table}
+    assert descriptors["update_response_hist"] == "adamw_update"
+    assert descriptors["loss_change"] == "none"
+    assert descriptors["delta_loss"] == "none"
+
+
+def test_micro_batch_size_does_not_change_the_rows(adamw_run: tuple[Path, TrainingRecord]) -> None:
+    run_dir, _record = adamw_run
+    by_micro = {
+        micro: _run(_source(run_dir, steps=[1]), micro_batch_size=micro)[1] for micro in (1, 4)
+    }
+    for observable in UPDATE_RESPONSE_OBSERVABLES + REALIZED_CHANGE_OBSERVABLES:
+        a = _value(by_micro[1], "val", observable)
+        b = _value(by_micro[4], "val", observable)
+        assert a == pytest.approx(b, rel=1e-4, abs=1e-8), observable
+
+
+def test_an_explicit_rule_works_on_any_model_bundle() -> None:
+    """No bundle: a hand-built rule and a ``ModelBundle`` through ``analyze()``."""
+    from tests.fixtures.update_response_toys import make_model
+
+    torch.manual_seed(0)
+    model = make_model(dtype=torch.float32).eval()
+    params = list(model.parameters())
+    batch = held_out_batch(seed=905, n_rows=4)
+    other = held_out_batch(seed=906, n_rows=4)
+    lr = 1e-2
+    rule = OptimizerUpdate(
+        family="adam",
+        hypers=[AdamHyper(lr=lr, beta1=0.9, beta2=0.99, eps=1e-8)] * len(params),
+        step=0,
+        first_moment=None,
+        second_moment=None,
+        descriptor="adamw_update",
+        update_batch=batch,
+    )
+    results = analyze(
+        model=ModelBundle(
+            model=model,
+            params=params,
+            forward_fn=plain_lm_forward,
+            loss_fn=causal_lm_loss,
+            valid_mask_fn=causal_lm_valid_mask,
+            identifier="toy",
+        ),
+        eval_batches={"A": batch, "B": other},
+        update_response=lambda ckpt_id: rule,
+        chi_net_method="hutchinson",
+        n_hutchinson=2,
+        dtype="fp32",
+    )
+    rows = results[0].rows
+    # First Adam step from an empty state: -lr * g / (|g| + eps), i.e. -lr * ||g||_1
+    # on the update batch itself (up to eps).
+    loss = lm_loss(model(batch["input_ids"]), batch)
+    grads = torch.autograd.grad(loss, params)
+    l1 = float(sum(g.double().abs().sum() for g in grads))
+    assert _value(rows, "A", "update_response", batch_a="A") == pytest.approx(-lr * l1, rel=1e-4)
+    assert _value(rows, "A", "update_response_hist", batch_a="A") == 0.0
+    assert not _has(rows, "loss_change")
