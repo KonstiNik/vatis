@@ -42,6 +42,7 @@ misread:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import sys
@@ -247,7 +248,12 @@ def plot(
         ncols=2,  # column-major fill puts the raw curves in one column, P in the other
     )
     fig.text(
-        0.012, 0.012, caption(summary, scale_name), fontsize=7.5, color=TEXT_MUTED, va="bottom"
+        0.012,
+        0.012,
+        caption(summary, scale_name, largest_peak_mb(directory, summary)),
+        fontsize=7.5,
+        color=TEXT_MUTED,
+        va="bottom",
     )
 
     path = directory / "chi_pos_raw_vs_adamw.png"
@@ -256,7 +262,25 @@ def plot(
     return path
 
 
-def caption(summary: dict[str, Any], scale_name: str = "log") -> str:
+def largest_peak_mb(directory: Path, summary: dict[str, Any]) -> float | None:
+    """The largest per-checkpoint peak GPU memory, from ``performance.csv``.
+
+    ``run_summary.json``'s ``performance.peak_gpu_mb`` is the allocator's peak of
+    the last checkpoint only (the counter is reset per checkpoint), so it is not
+    the run's maximum. Falls back to the per-checkpoint records of the summary
+    when the CSV is missing; ``None`` for a CPU run.
+    """
+    path = directory / "performance.csv"
+    if path.is_file():
+        with path.open(newline="") as handle:
+            peaks = [float(r["peak_gpu_mb"]) for r in csv.DictReader(handle) if r["peak_gpu_mb"]]
+    else:
+        records = summary["performance"]["per_checkpoint"]
+        peaks = [r["peak_gpu_mb"] for r in records if r.get("peak_gpu_mb") is not None]
+    return max(peaks) if peaks else None
+
+
+def caption(summary: dict[str, Any], scale_name: str = "log", peak_mb: float | None = None) -> str:
     """The figure's caption — the caveats belong here, not in a side channel."""
     lines: list[str] = []
     if summary.get("scientifically_empty"):
@@ -283,7 +307,11 @@ def caption(summary: dict[str, Any], scale_name: str = "log") -> str:
     )
     perf = summary["performance"]
     device = summary["config"]["device"]
-    hardware = f"{perf['peak_gpu_mb']:.0f} MiB peak GPU, untuned" if perf.get("peak_gpu_mb") else ""
+    hardware = (
+        f"largest per-checkpoint peak GPU memory {peak_mb:.0f} MiB (performance.csv), untuned"
+        if peak_mb
+        else ""
+    )
     lines.append(
         f"Analysis sweep: {len(perf['per_checkpoint'])} checkpoints in "
         f"{perf['total_wall_s']:.1f} s on {device}" + (f", {hardware}" if hardware else "")

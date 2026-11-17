@@ -91,6 +91,7 @@ from llama_bundle import (  # noqa: E402
 from llama_checks import (  # noqa: E402
     RAW_TO_P,
     CheckpointTiming,
+    _chi_net_p,
     all_rows,
     ceiling_split_steps,
     dead_vocab_rows,
@@ -116,6 +117,7 @@ __all__ = [
     "RAW_TO_P",
     "CheckpointTiming",
     "WrappedLlama",
+    "_chi_net_p",
     "dead_vocab_rows",
     "llama_factory",
     "lm_batch_from_tokens",

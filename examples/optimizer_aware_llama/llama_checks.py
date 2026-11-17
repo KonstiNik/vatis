@@ -370,7 +370,12 @@ def performance_table(
     re-check and the epsilon-ceiling split, several extra estimator passes)
     which a production sweep would not pay.
     """
-    peak_total = "-" if peak_gpu_mb is None else f"{peak_gpu_mb:.0f}"
+    # peak_gpu_mb is the allocator's peak since the last reset, i.e. of the last
+    # checkpoint (timed_model_specs resets it per checkpoint); the table reports
+    # the per-checkpoint peaks, their mean and their largest value instead.
+    peaks = [t.peak_gpu_mb for t in timings if t.peak_gpu_mb is not None]
+    peak_mean = f"{sum(peaks) / len(peaks):.0f}" if peaks else "-"
+    peak_max = f"{max(peaks):.0f}" if peaks else "-"
     lines = [
         f"{'checkpoint':>16} {'step':>6} {'load_s':>8} {'analysis_s':>11} {'peak_gpu_mb':>12}",
     ]
@@ -385,7 +390,7 @@ def performance_table(
         loads = [t.load_s for t in timings]
         lines.append(
             f"{'mean':>16} {'':>6} {sum(loads) / len(loads):>8.2f} "
-            f"{sum(analysis) / len(analysis):>11.2f} {peak_total:>12}"
+            f"{sum(analysis) / len(analysis):>11.2f} {peak_mean:>12}"
         )
         lines.append(f"{'total':>16} {'':>6} {sum(loads):>8.2f} {sum(analysis):>11.2f} {'':>12}")
     lines.append("")
@@ -402,7 +407,10 @@ def performance_table(
             "doing at the time, not tuned or best-of-N."
         )
     else:
-        lines.append(f"  peak GPU memory      : {peak_total} MiB (torch allocator, this process)")
+        lines.append(
+            f"  peak GPU memory      : {peak_max} MiB, the largest per-checkpoint peak "
+            "(torch allocator, this process)"
+        )
         lines.append(
             "  caveat               : the GPU may be shared (the allocator only sees this "
             "process); wall times are as-measured, not tuned or best-of-N."
@@ -475,7 +483,7 @@ def run_summary(
             "torch": torch.__version__,
             "python": platform.python_version(),
             "gpu": torch.cuda.get_device_name(args.device) if args.device.type == "cuda" else None,
-            "gpu_contended": "yes -- another process shares this card; timings are "
+            "gpu_contended": "not checked -- the card may be shared; timings are "
             "as-measured, untuned"
             if args.device.type == "cuda"
             else None,

@@ -200,8 +200,18 @@ The default estimator:
   `pythia_sweep/run.py` also writes `run_summary.json` with the mean
   cross-entropy of each batch at each checkpoint; its `evaluate.py` has
   `--help`. The Llama `run.py` reads as load → batches → vatis → results, its
-  support code moved unchanged into `llama_bundle.py` (which now defines
+  support code moved into `llama_bundle.py` (which now defines
   `llama_factory`; outside code imports it from there) and `llama_checks.py`.
+  Two changes beyond the move: `identity_recheck` takes the analyzer instead
+  of building it, and the performance table — stored in `run_summary.json`
+  under `performance.table` — is reworded ("raw and preconditioned" for "both
+  rulers"; its peak-memory line and "mean" row now give the largest and the
+  mean per-checkpoint peak instead of the last checkpoint's). `gpu_contended`
+  in `run_summary.json` now reads "not checked -- the card may be shared"
+  instead of claiming a co-tenant. A fresh run's summary therefore differs from
+  the committed one in these strings as well as in the timings; the computed
+  values do not. The caption of `chi_pos_raw_vs_adamw.png` gives the largest
+  per-checkpoint peak from `performance.csv`.
   The reconstruction example shows the gradient / momentum / weight-decay
   split of the AdamW step (`update_parts.png`), has a narrower `table.md`, and
   its `run.py` shows the three calls a user needs. The spectral-tail probe
