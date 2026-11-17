@@ -10,9 +10,8 @@ We want to estimate ``Tr(M_full) = sum_b Tr(M_b) = chi_net``, where
 Standard Hutchinson with a Rademacher probe ``v`` of the same shape as the
 model output gives ``E[||J^T v||^2] = Tr(M_full)``.
 
-This estimator improves variance by exploiting that we can compute, for free
-along with one extra backward per sample, the per-sample loss-direction
-contribution exactly:
+This estimator adds a control variate: with one extra backward per sample, the
+per-sample loss-direction contribution is known exactly:
 
     Per-sample backward of ``L_total`` restricted to sample b yields
         g_b = J_b^T u_b   where u_b is the b-th block of grad_f L_total
@@ -40,10 +39,11 @@ known per-sample loss directions, both at zero extra backward cost.
 Cost
 ====
 
-Per (ckpt, batch): ``B + n_h`` model backwards (B for the per-sample passes,
-n_h for the Hutchinson passes). Compare to plain Hutchinson with effective
-``~ B * n_h`` to reach the same per-sample variance — this is why per-seq-CV
-wins for small B.
+Per micro-batch of ``M`` sequences: one forward and ``M + n_h`` backwards (M for
+the per-sample passes, n_h for the Hutchinson passes); plain Hutchinson runs
+``n_h`` forwards and ``n_h`` backwards. The control variate was expected to cut
+the variance at equal ``n_h``; the committed measurements do not show that (see
+``docs/SPEC.md``, Method 2).
 
 Bonus observable
 ================

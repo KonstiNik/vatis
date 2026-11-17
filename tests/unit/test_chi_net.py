@@ -485,7 +485,7 @@ def test_delta_loss_cross_matches_exact_ntk_jacobian_product() -> None:
     )
 
 
-def test_per_seq_cv_lower_variance_than_hutchinson_at_same_n() -> None:
+def test_per_seq_cv_not_noisier_than_hutchinson_at_same_n() -> None:
     """Per-sample CV must not be noisier per probe than plain Hutchinson.
 
     We don't compute the variance directly — instead we run both at the same

@@ -6,8 +6,7 @@ vectors of the same shape as the model output, then accumulate
 is an unbiased estimate of ``Tr(M_b) = ||J_b||_F^2`` per micro-batch, summed
 over the (sub-)batch.
 
-This is the always-works fallback. It is the default for large batches
-(``B >= 32``) where the per-sequence path becomes too expensive.
+It applies to every model and is the default at every batch size.
 
 Preconditioned observables
 ==========================
