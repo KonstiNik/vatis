@@ -53,16 +53,22 @@ The example is deliberately sized to run end-to-end in **well under 15 minutes**
 on modest hardware, so a maintainer on a slow GPU or a cold HF cache still gets a
 quick turnaround. As committed (`per_sequence_cv`, `n_h=32`, `B=8`, `S=128`, 13
 revisions × 2 self pairs + 1 cross pair = 39 measurements) the measured wallclock
-is:
+on an RTX 3090 Ti, with the code of 17 November 2026 (the run that wrote the
+committed outputs), is:
 
-- **~50 s on the first run** (cold HF cache — the 4 log-spaced early-phase
-  checkpoints are fresh ~3–4 s downloads),
-- **~20 s on subsequent runs** (warm cache).
+- **~76 s on the first run** (cold HF cache, all 13 checkpoints downloaded),
+- **~52–55 s on subsequent runs** (warm cache; also with the hub offline).
 
-The bottleneck is checkpoint loading, not analysis — the per-call compute is a
-fraction of a second at these parameters (see `examples/benchmark/single_gpu/`
-for the wallclock/memory sweep). Bumping `n_hutchinson`, adding eval batches, or
-running both methods would all stay comfortably within budget.
+**This is slower than the April 2026 state, and the bottleneck has moved.** The
+April files recorded ~0.54 s of compute per (checkpoint, pair) measurement and
+~20 s / ~50 s warm / cold, so loading dominated. The November run records a
+median ~1.5 s per measurement (38.5 s of the warm total), so the analysis is now
+the larger share. The cause was not measured here; one candidate is the change to
+drawing the Hutchinson probes on the CPU (`CHANGELOG.md`), since a pythia probe
+has 8 × 128 × 50,304 entries, about three times the Llama example's. The run is
+still far inside the 15-minute budget, and bumping `n_hutchinson`, adding eval
+batches, or running both methods would stay within it (see
+`examples/benchmark/single_gpu/` for the A100 wallclock/memory sweep).
 
 ## Revisions and early-phase findings
 
@@ -125,7 +131,7 @@ decorrelation is over by step512**, well before the absolute cross delta_loss
 even starts looking interesting.
 
 The analysis script is intentionally separate from `pythia_sweep.py`: compute is
-expensive (~50 s cold), analysis is cheap (sub-second), and the analysis script
+expensive (~1 min on an RTX 3090 Ti), analysis is cheap (sub-second), and the analysis script
 imports only `pyarrow` (not vatis) — making the parquet schema the contract, the
 right pattern for any downstream consumer.
 
@@ -139,6 +145,18 @@ Outputs (under `examples/pythia_sweep/`):
   (symlog, since the cross values cross zero).
 - `cos_similarity.png` (from `analyze_results.py`) — the normalized cross-batch
   correlation, with gradient magnitudes divided out.
+
+These files were regenerated on 17 November 2026 with the code that adds the
+eight run-setting columns (commit `9aa0751`), on an RTX 3090 Ti, replacing
+files from April 2026; the parquet now has all 20 columns of the current schema.
+Compared row by row with the April file: `chi_loss` agrees to 1.2e-7 relative
+and `delta_loss` to 1.1e-5 on the self pairs (6.7e-4 on the smallest cross-pair
+value, an absolute difference of 1.5e-3 next to self values of ~580), which is
+float32 rounding; `chi_net` and `chi_pos` differ by up to 13% (median 1%),
+because the Hutchinson probes are now a different random draw for the same seed.
+Those differences are what the probe noise predicts: divided by √2 times the
+new `value_probe_stderr`, they have a root-mean-square of 1.1. Every number
+quoted in the sections above is unchanged at the precision quoted.
 
 ## WP0 GPU example — two rulers on a project Llama bundle
 

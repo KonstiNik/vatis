@@ -180,7 +180,7 @@ Reference point from the v1.1 deployment example. All numbers use fp32 forward, 
 | hutchinson        |  32 | 16 |  0.38 |    1529 |                                       |
 | per_sequence_cv   |  32 | 16 |  0.64 |    3280 | per-sample grad cache visible here    |
 
-For the deployment example as committed (`per_sequence_cv`, n=32, B=8, S=128, 13 revisions × 2 self pairs + 1 cross pair = 39 measurements), end-to-end wallclock including model loading is **~20 s with a warm HF cache** and **~50 s on first run** (the 4 log-spaced early checkpoints add ~30 s of cold downloads). The dominant cost is checkpoint loading, not analysis.
+For the deployment example as committed (`per_sequence_cv`, n=32, B=8, S=128, 13 revisions × 2 self pairs + 1 cross pair = 39 measurements), end-to-end wallclock including model loading was **~20 s with a warm HF cache** and **~50 s on first run** in April 2026, when checkpoint loading dominated. Re-measured on 17 November 2026 (same card model, shared): **~52–55 s warm** and **~76 s cold**, with a median ~1.5 s of compute per (checkpoint, pair) against ~0.54 s in April, so the analysis now dominates; the cause is not yet measured (see `examples/BENCHMARK.md` → Sizing).
 
 **Reading guidance:** use the 3090 Ti table only as a smoke check. If your toy or 1B-class model runs at ~10× the wallclock of the rows above, your micro-batch is probably wrong. Use the 8B/A100 estimates above as the production target.
 
@@ -445,7 +445,7 @@ The deployment example (`examples/pythia_sweep.py` + `examples/analyze_results.p
 
 **Phase 2: analysis** (`analyze_results.py`). Reads `results.parquet`, computes derived observables (e.g. normalized cross-batch gradient correlation `cos(g_A, g_B) = δL(A, B) / sqrt(δL(A, A) · δL(B, B))`), produces additional plots and printed tables. This script has **zero vatis imports** — only `pyarrow` and `matplotlib`. The parquet schema is the contract between vatis and any downstream consumer; making the analysis script consume only the parquet enforces that contract by example.
 
-The split matters because compute is expensive (~20 s warm / ~50 s cold for the example sweep) and analysis is cheap (sub-second). Iterating on derived quantities, plot styles, or normalizations should not require re-running the analyzer. Any user code that touches a vatis output should look like `analyze_results.py`: `pyarrow` in, plot/table out.
+The split matters because compute is expensive (~1 min for the example sweep) and analysis is cheap (sub-second). Iterating on derived quantities, plot styles, or normalizations should not require re-running the analyzer. Any user code that touches a vatis output should look like `analyze_results.py`: `pyarrow` in, plot/table out.
 
 A few patterns the example also demonstrates:
 

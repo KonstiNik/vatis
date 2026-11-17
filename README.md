@@ -109,7 +109,7 @@ models whose two full gradients won't co-reside on the GPU: it offloads the
 cached gradients to host RAM and runs the dot on the CPU, while small models
 stay fully on-device.
 
-Runnable end-to-end (downloads pythia-14m, ~20 s warm):
+Runnable end-to-end (downloads pythia-14m; ~1 min on an RTX 3090 Ti):
 
 ```bash
 python examples/pythia_sweep.py        # compute  → results.parquet + plots
