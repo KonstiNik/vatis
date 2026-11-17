@@ -2,7 +2,8 @@
 
 A research note with a negative result. The hypothesis: if two eval batches
 share structure only in the "tail" of the NTK spectrum (deeper, later-learned
-features), the cross `chi_pos(A, B)` should be near zero early in training,
+features), the cross `chi_pos(A, B)` — computed from the gradients of the
+two batches — should be near zero early in training,
 bump up when training reaches that spectral band, and subside afterwards. The
 probes are Python and C++ code implementing the same matrix operations, with
 English prose and an unrelated C++ program as controls, across five Pythia
@@ -15,8 +16,9 @@ probe design in full are in [details.md](details.md).
 - Internet access and disk space: the five models at 13 checkpoints each are
   about 34 GB of downloads. Set `HF_HOME` (shell or the repo-root `.env`) to
   choose where they go.
-- A GPU is used when one is present; otherwise the script runs on the CPU. No
-  run time is recorded.
+- A GPU is used when one is present; otherwise the script runs on the CPU.
+  The result files record the analysis time of each measurement (column
+  `wallclock_s`), not the download time or the time of a whole run.
 
 ## How to run
 
@@ -35,13 +37,16 @@ python examples/spectral_tail/evaluate.py --compute                   # x axis =
 Findings of 2026-04-16:
 
 - **At 14m–410m scale the predicted spectral-tail bump is not observed.** All
-  cross `chi_pos` trajectories decline monotonically after early training, with
-  some scale-dependent late-training structure (secondary rises at 70m and
-  410m) that is not clearly separated from the negative control.
-- **The signal is above the negative control, but modestly.** In the
-  late-training window `python × cpp` (same algorithm) runs 2–4× above
-  `python × cpp_str` (different algorithm) — not the transient bump the
-  hypothesis predicts, but a hint of partial algorithm specificity.
+  cross `chi_pos` trajectories decline after early training, apart from some
+  scale-dependent late-training structure (secondary rises at 70m and 410m)
+  that is not clearly separated from the controls.
+- **The signal is above its control, but modestly.** In the late-training
+  window the signal `python × cpp` (same algorithm) runs 2–4× above the
+  cross-language control `python × cpp_str` (different algorithm) — not the
+  transient bump the hypothesis predicts, but a hint of partial algorithm
+  specificity. (The pair list in [details.md](details.md) calls
+  `python × cpp_str` the secondary control; the negative control proper is
+  `cpp × cpp_str`.)
 - **The early decline is set by compute, not by scale.** Plotted over
   estimated compute (6ND FLOPs) instead of training steps, the initial
   `chi_pos` decline of all five sizes falls onto one curve (`evaluate.py
