@@ -1218,3 +1218,53 @@ def test_step_rows_for_sgd_and_on_request_only(tmp_path: Path) -> None:
     assert {r.observable for r in picked} == {"delta_loss", "update_clip_factor"}
     with pytest.raises(ValueError, match="no update_response was given"):
         Analyzer(eval_batches={"a": held_out_batch()}, observables=["update_lr"])
+
+
+# -------------------------------------------------------------------- on a GPU
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("cross_grad_storage", ["gpu", "cpu"])
+def test_rows_on_a_gpu_match_the_cpu_rows(tmp_path: Path, cross_grad_storage: str) -> None:
+    """The device-dependent paths of the new rows, against the same analysis on the CPU.
+
+    On a CUDA source the weights, the successor model and (by default) the
+    gradients live on the GPU while the saved optimizer state stays on the CPU,
+    so the fp64 reductions move state chunks to the gradients' device; with
+    ``cross_grad_storage="cpu"`` the gradients are offloaded to the host and the
+    weights of both models are moved to them instead. Both arrangements have to
+    give the CPU rows: the formula rows, the step rows (the clip engages, so the
+    factor is formed from the gradient norm on the device) and the realized rows
+    (fp64 loss on GPU logits, weight difference of two GPU models).
+    """
+    run_dir, record = _write(tmp_path, clip_grad_norm=0.5, bundle_steps=(0, 1, 2, 3))
+    on_cpu = _run(_source(run_dir, steps=[0, 2]))
+    gpu_source = _source(run_dir, steps=[0, 2], device="cuda")
+    on_gpu = _run(gpu_source, cross_grad_storage=cross_grad_storage)
+    names = UPDATE_RESPONSE_OBSERVABLES + UPDATE_STEP_OBSERVABLES + REALIZED_CHANGE_OBSERVABLES
+    compared = 0
+    for step in (0, 2):
+        cpu_rows = {
+            (r.batch_a, r.batch_b, r.observable): r.value
+            for r in on_cpu[step]
+            if r.observable in names
+        }
+        gpu_rows = {
+            (r.batch_a, r.batch_b, r.observable): r.value
+            for r in on_gpu[step]
+            if r.observable in names
+        }
+        assert set(gpu_rows) == set(cpu_rows) and len(cpu_rows) == 2 * 7 + 2
+        for key, expected in cpu_rows.items():
+            # The residual is a difference of two numbers of the first-order
+            # term's size; its tolerance is set by that size.
+            scale = abs(cpu_rows[(key[0], key[1], "loss_change_first_order_weights")])
+            tolerance = RTOL * (scale if key[2] == "loss_change_residual" else abs(expected))
+            assert abs(gpu_rows[key] - expected) <= tolerance, (step, key, gpu_rows[key], expected)
+            compared += 1
+        # ... and against the run itself, not only against the CPU analysis.
+        assert gpu_rows[("train", "val", "loss_change_first_order")] == pytest.approx(
+            _reference(record, step, "val"), rel=RTOL
+        )
+        assert gpu_rows[("train", "train", "update_clip_factor")] < 1.0
+    assert compared == 32
