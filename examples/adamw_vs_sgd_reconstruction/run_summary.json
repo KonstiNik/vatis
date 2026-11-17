@@ -90,5 +90,5 @@
   "micro_batch_size": 8,
   "n_hutchinson": 1,
   "torch": "2.10.0+cu128",
-  "wall_s": 34.455965721048415
+  "wall_s": 11.11745186697226
 }

@@ -1371,6 +1371,41 @@ def test_the_rows_of_the_step_taken_follow_the_column_rule_through_the_parquet_f
     assert not_raw == {"adamw", "adamw_update"}
 
 
+def test_the_result_file_shipped_with_the_reconstruction_example_follows_the_rule() -> None:
+    """``examples/adamw_vs_sgd_reconstruction/results.parquet``, as committed.
+
+    The file is the output of the example script on a real AdamW run. It must
+    have every column of the current format (read plainly, nothing filled in by
+    the reader) and hold on its rows what the rule above says.
+    """
+    from vatis.sinks import RESULT_COLUMNS
+
+    path = Path(__file__).resolve().parents[2] / "examples" / "adamw_vs_sgd_reconstruction"
+    table = pq.read_table(path / "results.parquet")
+    assert table.column_names == list(RESULT_COLUMNS)
+    rows = table.to_pylist()
+    mine = [r for r in rows if r["observable"] in STEP_TAKEN_ROWS]
+    assert {r["observable"] for r in mine} == {
+        name for name in STEP_TAKEN_ROWS if name not in ("update_lr_min", "update_lr_max")
+    }
+    settings = ("chi_net_method", "n_ranks", "micro_batch_size", "hutchinson_distribution")
+    for name in (*settings, "n_hutchinson"):
+        values = {r[name] for r in rows}
+        assert len(values) == 1 and None not in values, (name, values)
+    for r in mine:
+        assert r["hutchinson_seed"] is None and r["wallclock_s"] is None, r
+        assert r["preconditioner_eps"] is None and r["preconditioner_beta2"] is None, r
+        assert r["preconditioner_capped_fraction"] is None, r
+        assert r["value_probe_stderr"] is None, r
+        tagged = r["observable"] in UPDATE_RESPONSE_OBSERVABLES + UPDATE_STEP_OBSERVABLES
+        assert r["preconditioner"] == ("adamw_update" if tagged else "none"), r
+    by_descriptor = {id(r) for r in rows if r["preconditioner"] == "adamw"}
+    by_eps = {id(r) for r in rows if r["preconditioner_eps"] is not None}
+    by_name = {id(r) for r in rows if r["observable"] in ADAMW_P_ROWS}
+    assert by_name == by_descriptor == by_eps and by_name
+    assert not by_name & {id(r) for r in mine}
+
+
 def test_a_pair_measured_with_two_estimators_names_both_on_these_rows_too(
     adamw_run: tuple[Path, TrainingRecord], monkeypatch: pytest.MonkeyPatch
 ) -> None:
