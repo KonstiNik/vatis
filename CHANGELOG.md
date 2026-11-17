@@ -43,6 +43,29 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `golden` test tier (`pytest -m golden`): trains a tiny transformer, writes a
   bundle, runs the raw and preconditioned observables end to end.
 - New hard dependency: `safetensors` (to read bundle weights).
+- `analyze()` accepts `ignore_index` (default `-100`) and passes it to
+  `Analyzer`, which already did.
+- `vatis.data.shift_hf_labels(labels)`: converts HuggingFace / TRL-style labels
+  (aligned with `input_ids`, shifted by the model) to the pre-shifted labels
+  vatis expects, with the same one-position shift `transformers`' causal-LM loss
+  applies. The label convention is now documented in `docs/SPEC.md` ("Batch
+  format and the label convention") and the README.
+- Checkpoint bundles: two optional `metadata.json` fields, `mask_pad_in_loss`
+  (bool) and `loss_ignore_index` (int or null), record whether the training loss
+  ignored a target id. Exposed as `BundleMetadata.loss_ignore_index` and
+  `LocalBundleSource.loss_ignore_index`.
+
+### Changed (breaking)
+The labels are the single source of truth for what enters the loss
+(`docs/SPEC.md`: "Batch format and the label convention", "Loss handling",
+"Native checkpoint bundles"). For code that ran before:
+- **A `valid_mask_fn` stricter than the labels now restricts the loss**, so `delta_loss` and `chi_pos` (and `chi_net` under `per_sequence_cv`) change for such a mask. *To do:* nothing if the restricted loss is what the mask meant; the result now equals the same restriction written into the labels.
+- **A loss that cannot be verified under a stricter mask raises** a `ValueError` (it still depends on a rejected position, or no gradient reaches the logits it was handed). *To do:* make `loss_fn` read its targets from the batch, honour `ignore_index`, and compute the loss from its `logits` argument.
+- **The analyzer's `ignore_index` must be the value `loss_fn` ignores.** With a different value and a stricter mask the run is refused with a message naming the value (it used to work when the mask happened to equal that loss's own ignore mark). *To do:* pass `ignore_index=<that value>` to `Analyzer(...)` or `analyze(...)` (which now accepts it).
+- **A direct `PerSequenceControlVariateEstimator.compute` call raises** a `ValueError` when `loss_fn` counts positions its `valid_mask_fn` rejects (it used to return a biased `chi_net`). *To do:* write the mask into the labels the loss reads, as `Analyzer` does.
+- **Unshifted (HuggingFace / TRL-style) labels are refused** by the shipped `causal_lm_loss` when they are provably unshifted (they used to be scored one position off). *To do:* `batch["labels"] = vatis.data.shift_hf_labels(batch["labels"])`.
+- **The update-batch rows of a bundle that records pad masking change**: `batch_a` ignores the targets equal to the recorded `loss_ignore_index` (they used to be counted), and `examples/two_rulers_llama.py` scores its held-out batches the same way. *To do:* re-run analyses of such bundles; bundles without the two fields are read exactly as before.
+- **Contradictory or impossible pad metadata is refused** with `BundleSchemaError` when the bundle is opened, also for uses that never touch the update batch (`mask_pad_in_loss: true` without an index, an index without it, a wrong JSON type, a negative index or one not below the model config's `vocab_size`). *To do:* correct the two fields in `metadata.json`; "Repairing contradictory pad fields" in the SPEC says how, including how the recorded `train_loss` settles which entry is wrong.
 
 ### Changed
 - **Hutchinson probes are drawn on the CPU** and copied to the device, so a seed
@@ -71,11 +94,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   With a `valid_mask_fn` *wider* than the labels (one that accepts positions
   whose label is `ignore_index`), `delta_loss` was rescaled and depended on
   `micro_batch_size`, and `chi_net` included the Jacobian rows of ignored
-  positions. That direction is fixed. The intersection does not reach the loss
-  itself, so a `valid_mask_fn` *stricter* than the labels is not fixed (see
-  Known limitations). The shipped loaders were not affected (their mask already
+  positions. That direction is fixed by the intersection. A mask alone cannot
+  reach the loss itself; the *stricter* direction is fixed separately (next
+  entry but one). The shipped loaders were not affected (their mask already
   equals `labels != ignore_index`).
 - The analyzer restores the `requires_grad` flags it changes on the model's parameters.
+- A `valid_mask_fn` **stricter** than the labels (it rejects a position whose
+  label is valid) now restricts the loss as well. It used to restrict `n_valid`,
+  `chi_loss` and the `chi_net` probes only: `delta_loss` and `chi_pos` were those
+  of the unrestricted loss and changed with `micro_batch_size`, and
+  `per_sequence_cv` biased `chi_net` through its control variate. The analyzer
+  now writes the mask into the labels the loss is evaluated on, which gives
+  exactly what the same restriction written into the labels gives. The shipped
+  loaders were not affected (their mask equals `labels != ignore_index`); every
+  observable is bit-identical for them.
 
 ### Known limitations
 - `delta_loss_P` is **not** the first-order loss change of the AdamW step:
@@ -89,20 +121,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the model, the data and the number of ranks. The estimate stays unbiased;
   `chi_loss` and `delta_loss` are not affected. Fixed in a follow-up pull
   request.
-- **A `valid_mask_fn` stricter than the labels does not reach the loss.** It
-  restricts the counts, the gradient weights and the probes only, so for such a
-  mask `delta_loss` is wrong and depends on `micro_batch_size`, and
-  `per_sequence_cv`'s `chi_net` is biased. Exclude positions through the labels
-  (`ignore_index`). Fixed in a follow-up pull request.
-- **Unshifted labels are not detected.** vatis expects pre-shifted labels; a
-  batch whose `labels` equal its `input_ids` (the HuggingFace / TRL convention)
-  is scored one position off without an error. Fixed in a follow-up pull
-  request.
-- **A bundle's recorded pad convention is not applied to the update batch**
-  (`mask_pad_in_loss` / `loss_ignore_index` in `metadata.json` are not read):
-  update-batch rows of a run whose loss ignored pad targets describe a
-  different loss than the one that was descended. Fixed in a follow-up pull
-  request.
+- The unshifted-label guard of `causal_lm_loss` is not exhaustive: a single
+  labelled token at the very end of a sequence, or a label equal to the token
+  after it, looks the same in both conventions and is scored as given; a custom
+  `loss_fn` is not guarded.
 
 ## [0.2.1] — 2026-10-19
 

@@ -79,7 +79,7 @@ from vatis.distributed.ddp import (
     is_main_rank,
 )
 from vatis.distributed.sharding import shard_batch
-from vatis.models.hf import ModelBundle, ValidMaskFn, load_hf_model
+from vatis.models.hf import LossFn, ModelBundle, ValidMaskFn, load_hf_model
 from vatis.sinks.base import ResultRow, ResultSink
 from vatis.sinks.parquet import ParquetSink
 
@@ -221,8 +221,11 @@ class Analyzer:
             overridden by ``cuda:LOCAL_RANK``.
         dtype: forward dtype for HF models loaded by name. Ignored when the
             user passes a fully built ModelBundle.
-        ignore_index: ignore-index for the chi_loss closed form. Defaults to
-            HF's -100.
+        ignore_index: the label value that marks an ignored position. It **must
+            be the value** ``loss_fn`` **ignores**: the analyzer uses it to decide
+            which positions count (also in the ``chi_loss`` closed form), and
+            writes it into the labels ``loss_fn`` sees where a ``valid_mask_fn``
+            rejects a position. Defaults to HF's -100.
     """
 
     def __init__(
@@ -568,6 +571,10 @@ class Analyzer:
         # ``valid_mask_fn`` intersected with ``labels != ignore_index``. See
         # ``_intersected_valid_mask_fn`` for why all three paths need it.
         valid_mask_fn = _intersected_valid_mask_fn(bundle.valid_mask_fn, self.ignore_index)
+        # THE loss, likewise: ``bundle.loss_fn`` evaluated on labels that carry
+        # that mask, so the loss is restricted to the positions the mask accepts.
+        # Used by the ``delta_loss`` backward below and handed to the estimator.
+        loss_fn = _label_folded_loss_fn(bundle.loss_fn, valid_mask_fn, self.ignore_index)
 
         # ----- chi_loss (per-rank partial, raw sum) -----
         # We accumulate the UN-normalized squared sum
@@ -610,7 +617,8 @@ class Analyzer:
             for _start, _stop, micro in iter_micro_batches(local_batch, self.micro_batch_size):
                 logits = bundle.forward_fn(bundle.model, micro)
                 # Compute the micro-batch's contribution to L_local using the
-                # SAME loss_fn the user provided. We then re-scale by the ratio
+                # SAME loss_fn the user provided, on labels that carry the mask
+                # (``_label_folded_loss_fn``). We then re-scale by the ratio
                 # of micro / total valid tokens (the loss_fn already divides by
                 # the micro's n_valid, so we multiply back to get an unscaled
                 # sum and divide by total).
@@ -622,7 +630,7 @@ class Analyzer:
                 if n_valid_micro == 0:
                     del logits
                     continue
-                loss_micro = bundle.loss_fn(logits, micro)
+                loss_micro = loss_fn(logits, micro)
                 weight = float(n_valid_micro) / float(n_total_for_loss)
                 # gradient of (weight * loss_micro) w.r.t. theta
                 grads = torch.autograd.grad(
@@ -656,7 +664,7 @@ class Analyzer:
             bundle.model,
             local_batch,
             bundle.forward_fn,
-            loss_fn=bundle.loss_fn,
+            loss_fn=loss_fn,
             valid_mask_fn=valid_mask_fn,
             params=bundle.params,
             micro_batch_size=self.micro_batch_size,
@@ -1186,6 +1194,18 @@ def _intersected_valid_mask_fn(
       denominator (``n_valid``, and hence ``chi_loss``) uses, or ``delta_loss``
       comes out rescaled *and* dependent on ``micro_batch_size``.
 
+    The two ways the masks can disagree are handled in two places:
+
+    - ``valid_mask_fn`` **wider** than the labels (it accepts a position whose
+      label is ``ignore_index``): the intersection here removes the position
+      from the counts and the probes, and ``loss_fn`` never counted it.
+    - ``valid_mask_fn`` **stricter** than the labels (it rejects a position
+      whose label is valid): this mask restricts the counts and the probes, but
+      it cannot restrict ``loss_fn``, which only sees the batch. That half is
+      :func:`_label_folded_loss_fn`: the same mask is written into the labels
+      the loss is evaluated on, so the labels are the single source of truth for
+      what enters the loss.
+
     Returning one closure and threading it through every accumulator is what
     makes "padding is handled at one place" (``CLAUDE.md`` §Conventions) true
     rather than aspirational. The mask itself is still computed by
@@ -1203,6 +1223,186 @@ def _intersected_valid_mask_fn(
         return valid_token_mask(targets, ignore_index=ignore_index, attention_mask=vmask)
 
     return fn
+
+
+def _label_folded_loss_fn(
+    loss_fn: LossFn,
+    effective_mask_fn: EffectiveMaskFn,
+    ignore_index: int,
+) -> LossFn:
+    """Build THE loss every backward uses: ``loss_fn`` on labels that carry the mask.
+
+    The counterpart of :func:`_intersected_valid_mask_fn` for the loss. A
+    ``loss_fn(logits, batch)`` decides what it counts from the batch's labels
+    alone, so a mask that rejects a position whose label is valid would restrict
+    ``n_valid``, ``chi_loss`` and the ``chi_net`` probes while the gradient stayed
+    that of the unrestricted loss. The closure returned here evaluates
+    ``loss_fn`` on a batch whose labels are ``ignore_index`` wherever the
+    effective mask rejects the position (:func:`_fold_mask_into_labels`) — the
+    procedure HuggingFace ``Trainer`` / TRL use, where every mask is written into
+    the labels before the loss and the loss is a mean over the non-ignored
+    targets. A stricter mask then gives exactly what the same restriction written
+    into the labels gives, at every ``micro_batch_size``.
+
+    When the mask rejects no valid label — the shipped loaders on any batch that
+    carries labels, where ``valid_mask_fn`` *is* ``labels != ignore_index`` — the
+    batch is handed to ``loss_fn`` untouched, the same object, so nothing changes
+    bit for bit. (A label-less dict with a padded ``attention_mask`` does gain a
+    ``labels`` entry; it holds the very targets ``causal_lm_loss`` would have
+    derived itself, so the values are unchanged there as well.)
+
+    When labels were rewritten, the closure also checks that ``loss_fn`` honoured
+    them: the gradient of the loss w.r.t. the logits must vanish at every
+    rejected position. A ``loss_fn`` that reads its targets from somewhere else,
+    or does not ignore ``ignore_index``, would otherwise be silently unmasked;
+    that is refused with a ``ValueError``. So is a loss that does not depend on
+    the logits it was handed at all (a ``loss_fn`` that runs its own forward):
+    there the check has nothing to look at, and "could not verify" must not pass
+    for "verified". The check costs one backward through the loss head (not
+    through the model) and runs only in this case.
+
+    ``ignore_index`` has to be the value ``loss_fn`` itself ignores; the analyzer
+    does not guess a loss's ignore value. A batch whose rejected labels carry
+    another sentinel (a value that is no class index and not ``ignore_index``) is
+    refused before the loss is called, naming the value to pass as
+    ``ignore_index``; any exception the loss raises on rewritten labels is
+    re-raised with that explanation and the original chained.
+    """
+
+    def fn(logits: torch.Tensor, batch: Any) -> torch.Tensor:
+        mask = effective_mask_fn(batch, logits)
+        folded = _fold_mask_into_labels(batch, mask, ignore_index)
+        if folded is batch:
+            return loss_fn(logits, batch)
+
+        # Labels are about to reach ``loss_fn`` with ``ignore_index`` written into
+        # them. That only works if ``ignore_index`` is the value ``loss_fn``
+        # ignores -- the analyzer cannot know the loss's own ignore value and
+        # does not guess it. Two layers, in this order:
+        #
+        # 1. Before the loss is called: a label the mask rejects that cannot be a
+        #    class index and is not ``ignore_index`` is another sentinel, i.e. the
+        #    batch (and so its loss) uses a different ignore value. Refusing here
+        #    matters on CUDA, where the loss would die in a device-side assert
+        #    that cannot be caught and turned into a message.
+        # 2. If the loss raises anyway, say what vatis did to its labels and keep
+        #    the original exception chained.
+        rejected_labels = _extract_targets(batch)[~mask]
+        rejected_labels = rejected_labels[rejected_labels != ignore_index]
+        n_classes = logits.shape[-1]
+        foreign = rejected_labels[(rejected_labels < 0) | (rejected_labels >= n_classes)]
+        if foreign.numel():
+            values = sorted({int(v) for v in torch.unique(foreign).tolist()})
+            if len(values) == 1:
+                diagnosis = (
+                    f"every such label is {values[0]}, so that is presumably the value "
+                    f"loss_fn ignores: pass ignore_index={values[0]} to Analyzer(...) / "
+                    "analyze(...)"
+                )
+            else:
+                diagnosis = (
+                    f"they are {values[:8]}; the labels must use one ignore value, and it "
+                    "must be passed as ignore_index to Analyzer(...) / analyze(...)"
+                )
+            raise ValueError(
+                "valid_mask_fn rejects positions whose label is neither a class index "
+                f"(the model has {n_classes} classes) nor the analyzer's "
+                f"ignore_index={ignore_index}: {diagnosis}. The analyzer's ignore_index must "
+                "be the value loss_fn ignores. vatis would otherwise write "
+                f"ignore_index={ignore_index} over those labels before calling loss_fn, and a "
+                "loss that ignores a different value fails on it (IndexError on the CPU, an "
+                "uncatchable device-side assert on CUDA)."
+            )
+        try:
+            loss = loss_fn(logits, folded)
+        except torch.cuda.OutOfMemoryError:
+            raise
+        except Exception as exc:
+            hint = ""
+            if rejected_labels.numel() and bool((rejected_labels == rejected_labels[0]).all()):
+                constant = int(rejected_labels[0].item())
+                hint = (
+                    f" Every label the mask rejects is {constant}; if that is the value "
+                    f"loss_fn ignores, pass ignore_index={constant}."
+                )
+            raise RuntimeError(
+                f"loss_fn raised {type(exc).__name__} on a batch whose labels vatis had "
+                "rewritten: valid_mask_fn rejects positions whose label is valid, so vatis "
+                f"wrote its ignore_index={ignore_index} into the labels at those positions "
+                "before calling loss_fn. A loss_fn that ignores a different value cannot "
+                "handle that. The analyzer's ignore_index must be the value loss_fn ignores: "
+                f"pass that value as ignore_index to Analyzer(...) / analyze(...).{hint} (If "
+                "the failure has another cause, it is the chained exception.)"
+            ) from exc
+
+        grad_logits = None
+        if loss.requires_grad:
+            (grad_logits,) = torch.autograd.grad(loss, logits, retain_graph=True, allow_unused=True)
+        if grad_logits is None:
+            # The loss is not a function of the logits it was handed (a loss_fn
+            # that runs its own forward, or returns a detached value), so there
+            # is nothing to inspect. Not being able to verify is not the same as
+            # verified: refuse.
+            raise ValueError(
+                "valid_mask_fn rejects positions whose label is valid, so vatis "
+                f"wrote ignore_index={ignore_index} into the labels at those "
+                "positions before calling loss_fn -- but the loss returned does not "
+                "depend on the logits vatis passed in (no gradient reaches them), so "
+                "vatis cannot verify that loss_fn honours the mask. loss_fn must "
+                "compute the loss from its `logits` argument. Refusing to continue: "
+                "an unverified loss could be the unrestricted one, and delta_loss and "
+                "chi_pos would then describe a loss over positions that n_valid, "
+                "chi_loss and chi_net exclude."
+            )
+        n_leaking = int(torch.count_nonzero(grad_logits[~mask]).item())
+        if n_leaking:
+            raise ValueError(
+                "valid_mask_fn rejects positions whose label is valid, so vatis "
+                f"wrote ignore_index={ignore_index} into the labels at those "
+                "positions before calling loss_fn -- but the loss still depends on "
+                f"the logits there ({n_leaking} non-zero gradient entries at "
+                "rejected positions). loss_fn must read its targets from the "
+                "batch field vatis masks ('labels', else 'targets', for a dict "
+                "batch; element 1 of a tuple/list batch) and must ignore "
+                f"ignore_index={ignore_index}. Refusing to continue: delta_loss and "
+                "chi_pos would describe a loss over positions that n_valid, "
+                "chi_loss and chi_net exclude."
+            )
+        return loss
+
+    return fn
+
+
+def _fold_mask_into_labels(batch: Any, mask: torch.Tensor, ignore_index: int) -> Any:
+    """Return ``batch`` with ``ignore_index`` at every label ``mask`` rejects.
+
+    ``mask`` is the effective mask of :func:`_intersected_valid_mask_fn`. The
+    labels are the tensor :func:`_extract_targets` reads, and the result has the
+    same form as the input: ``labels`` (else ``targets``) of a dict batch,
+    element 1 of a tuple/list batch. A dict batch that carries only
+    ``input_ids`` gains a ``labels`` entry holding its (masked) next-token
+    targets. Any other batch form has no labels to write into and is refused by
+    ``_extract_targets`` — never passed on unmasked.
+
+    If the mask rejects no position whose label is valid, ``batch`` itself is
+    returned (the same object, no copy): the labels already say everything the
+    mask says. Nothing is modified in place either way.
+    """
+    targets = _extract_targets(batch)
+    keep = mask.to(dtype=torch.bool)
+    if not bool(((targets != ignore_index) & ~keep).any()):
+        return batch
+    folded = targets.masked_fill(~keep, ignore_index)
+    if isinstance(batch, dict):
+        key = "labels"
+        if not isinstance(batch.get("labels"), torch.Tensor) and isinstance(
+            batch.get("targets"), torch.Tensor
+        ):
+            key = "targets"
+        return {**batch, key: folded}
+    # ``_extract_targets`` accepted it, so this is a tuple/list whose element 1
+    # is the target tensor.
+    return type(batch)(folded if i == 1 else item for i, item in enumerate(batch))
 
 
 def _extract_targets(batch: Any) -> torch.Tensor:
@@ -1268,6 +1468,7 @@ def analyze(
     seed: int = 0,
     device: torch.device | str = "cpu",
     dtype: str = "bf16",
+    ignore_index: int = DEFAULT_IGNORE_INDEX,
     num_gpus: int = 1,  # accepted for parity; the analyzer ignores it inside the worker
     distributed: str = "ddp",  # accepted for parity
 ) -> list[CheckpointResult]:
@@ -1278,6 +1479,9 @@ def analyze(
     ``num_gpus > 1`` will run on a single process; the DDP code paths only
     activate when the process group is already initialized (i.e. when
     launched under torchrun).
+
+    Arguments are those of :class:`Analyzer`; in particular ``ignore_index`` must
+    be the value ``loss_fn`` ignores.
     """
     del num_gpus, distributed  # informational only at this layer
 
@@ -1295,6 +1499,7 @@ def analyze(
         seed=seed,
         device=device,
         dtype=dtype,
+        ignore_index=ignore_index,
     )
 
     revs: list[str | None]

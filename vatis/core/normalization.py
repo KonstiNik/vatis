@@ -23,9 +23,12 @@ def valid_token_mask(
     position in ``attention_mask`` (if provided) is non-zero.
 
     Args:
-        targets: integer-typed tensor of target token ids. For an LM with
-            HF-style shifted labels this is shape ``(B, S)``; for an MLP-style
-            classifier it is shape ``(B,)``. The shape is preserved.
+        targets: integer-typed tensor of target token ids. For an LM this is
+            shape ``(B, S)`` and holds vatis's pre-shifted labels
+            (``targets[:, i]`` is the target of ``logits[:, i]`` — not the
+            HuggingFace / TRL form, where labels are aligned with
+            ``input_ids``); for an MLP-style classifier it is shape ``(B,)``.
+            The shape is preserved.
         ignore_index: target value used to mark masked positions.
         attention_mask: optional 0/1 mask, must broadcast to ``targets.shape``.
 

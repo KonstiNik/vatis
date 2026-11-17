@@ -178,9 +178,17 @@ going — a pipeline demo, never a measurement.
 `8 × 512` tokens taken from the **tail of the held-out split**, frozen across
 checkpoints, with `cross_pairs = [(A1, B), (A2, B)]`. The batches carry the
 training stack's own padding (~41–55% of positions are `[EOS]` padding at
-`seq_len = 512`) and vatis masks none of it, because that stack's criterion
-masks none of it either — measuring a different objective than the one that was
-trained would be the larger error.
+`seq_len = 512`).
+
+**Padding is scored the way the run trained on it.** The script applies the pad
+convention the bundle records (`mask_pad_in_loss` / `loss_ignore_index` in
+`metadata.json`, see `docs/SPEC.md` → Native checkpoint bundles) to the held-out
+batches, exactly as the loader applies it to the update batch: if the training
+loss ignored the pad targets, so do these rows; if it did not, every position
+counts. Measuring a different objective than the one that was trained would be
+the larger error in either direction. **For the run committed here nothing is
+masked** — its training criterion masks no padding, and every number below was
+computed with all positions counted.
 
 ### Sizing, as measured (RTX 3090 Ti, **shared card**)
 
