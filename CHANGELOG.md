@@ -62,6 +62,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   as bf16 / fp16. The learning rate and the clip factor of each step are
   written as rows too (`update_lr` — or `update_lr_min` / `update_lr_max` when
   parameter groups have different rates — and `update_clip_factor`).
+  On all of these rows the run-setting columns are filled as on every other
+  row, and `preconditioner_eps` / `_beta2` / `_capped_fraction` and
+  `value_probe_stderr` are null (an `adamw_update` row is not a row of an AdamW
+  `P`, and nothing in it is sampled).
   No extra backward; no result-file column was added (the rows are new
   `observable` values, tagged `"adamw_update"` / `"adam_update"` /
   `"sgd_update"` or `"none"` in the `preconditioner` column).

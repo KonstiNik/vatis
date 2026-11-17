@@ -1347,6 +1347,7 @@ class Analyzer:
                 if need_loss and need_weights:
                     values[name]["loss_change_residual"] = change - from_weights
 
+        n_ranks = get_world_size()
         rows: list[ResultRow] = []
         for name, by_observable in values.items():
             for observable in self.observables:
@@ -1362,13 +1363,34 @@ class Analyzer:
                         n_valid_b=n_valid[name],
                         observable=observable,
                         value=float(by_observable[observable]),
-                        n_hutchinson=None,
+                        # The settings of the run go on these rows as on every
+                        # other row, so that any subset of a file says which run
+                        # it came from; for the pair's two batches as a cross
+                        # pair records them.
+                        n_hutchinson=self.n_hutchinson,
                         hutchinson_seed=None,
                         wallclock_s=None,
                         preconditioner=(
                             update.descriptor
                             if observable in UPDATE_RESPONSE_OBSERVABLES + UPDATE_STEP_OBSERVABLES
                             else RAW_DESCRIPTOR
+                        ),
+                        chi_net_method=_pair_label(
+                            self._chi_net_method_cache.get(update_name),
+                            self._chi_net_method_cache.get(name),
+                        ),
+                        n_ranks=n_ranks,
+                        # Not rows of a preconditioner P, whatever the descriptor
+                        # says about the update rule: the three P columns stay
+                        # null. Nothing here is sampled either.
+                        preconditioner_eps=None,
+                        preconditioner_beta2=None,
+                        preconditioner_capped_fraction=None,
+                        value_probe_stderr=None,
+                        micro_batch_size=self.micro_batch_size,
+                        hutchinson_distribution=_pair_label(
+                            self._hutchinson_distribution_cache.get(update_name),
+                            self._hutchinson_distribution_cache.get(name),
                         ),
                     )
                 )

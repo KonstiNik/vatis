@@ -1343,7 +1343,8 @@ preconditioner emits exactly the rows it always did.
 
 The rows of the step that was taken extend it the same way and add no column:
 seven more `observable` values on the pair `(batch_a, batch_b)` = (update batch,
-evaluated batch), with `n_hutchinson`, `hutchinson_seed` and `wallclock_s` null,
+evaluated batch), with `hutchinson_seed` and `wallclock_s` null (no probe
+stream and no timing belongs to them),
 plus the step's learning rate and clip factor (`update_lr` — or `update_lr_min`
 and `update_lr_max` — and `update_clip_factor`) on the update batch's own pair.
 The rows rebuilt from the optimizer state (`loss_change_first_order` and its
@@ -1363,13 +1364,15 @@ import pandas as pd
 df = pd.read_parquet("results.parquet")
 key = ["checkpoint_id", "batch_a", "batch_b"]
 wide = df.pivot(index=key, columns="observable", values="value")
-wide["preconditioner"] = df[df.preconditioner != "none"].groupby(key).preconditioner.first()
+wide["preconditioner"] = df[df.observable.str.endswith("_P")].groupby(key).preconditioner.first()
 # columns: chi_loss, chi_net, delta_loss, chi_pos, ..., chi_net_P, delta_loss_P, chi_pos_P, ...
 err = df.pivot(index=key, columns="observable", values="value_probe_stderr")   # same shape, the standard errors
 ```
 
 Do not select the preconditioned values by filtering on `preconditioner`: that
-drops `chi_loss`, which they share with the raw ones. A checkpoint without P
+drops `chi_loss`, which they share with the raw ones — and `preconditioner !=
+"none"` also holds for the rows tagged with an update rule (`"adamw_update"`,
+...), which is why the line above picks the `P` descriptor from the `_P` rows. A checkpoint without P
 rows (an AdamW step-0 checkpoint) shows up as empty cells in the `_P` columns.
 There is no `chi_net_P_normalized` row: it is `chi_net_P / √(n_valid_a ·
 n_valid_b)` from the same row's own columns, and `chi_pos_P` — like `chi_pos` —
@@ -1430,6 +1433,39 @@ size and the distribution are settings of the whole run and therefore the same
 for both (only the estimator can differ between the batches of a pair, see
 above). The three `preconditioner_*` columns are on the `_P` / `_P_capped` rows
 only, and `value_probe_stderr` on the sampled rows only.
+
+**The rows of the step that was taken** (`loss_change_first_order` and its
+`_grad` / `_hist` / `_wd` / `_weights`, `loss_change`, `loss_change_residual`,
+and the step rows `update_lr`, `update_lr_min`, `update_lr_max`,
+`update_clip_factor`) follow the same rule, column by column:
+
+| column | on these rows |
+| --- | --- |
+| `chi_net_method`, `n_ranks`, `micro_batch_size`, `hutchinson_distribution`, `n_hutchinson` | the settings of the run, as on every other row. A row on the pair (update batch, `B`) records them the way a cross pair does — for its two batches, `"<a>+<b>"` should their estimators differ; a step row, which sits on the update batch's own pair, records that batch's |
+| `preconditioner_eps`, `preconditioner_beta2`, `preconditioner_capped_fraction` | **null** |
+| `value_probe_stderr` | **null** — nothing in these rows is sampled |
+| `hutchinson_seed`, `wallclock_s` | null |
+
+- No probe enters these rows, and the run settings are written on them all the
+  same, for the reason they are written on `chi_loss` and `delta_loss` rows: a
+  subset of a file must still say which run it came from. Two of them do bear
+  on the values: `micro_batch_size` and `n_ranks` fix how the fp32 gradients
+  and the two losses of `loss_change` were assembled.
+- **A row tagged `adamw_update` is not a row of an AdamW `P`.** The
+  `preconditioner` column of the formula rows and the step rows names the
+  *update rule* the step was rebuilt with (`"adamw_update"`, `"adam_update"`,
+  `"sgd_update"`); the `P` inside that rule is the step's own `P_{t+1}`, per
+  parameter group, and is not the `P` of the `_P` rows. Its `ε` and `β2` are
+  therefore **not** written into `preconditioner_eps` / `preconditioner_beta2`
+  — they may differ between parameter groups, and a reader filtering on those
+  columns would otherwise take these rows for P rows. The three
+  `preconditioner_*` columns are null on every row of the step that was taken.
+- **Selecting the rows of a `P`.** By observable name (`_P`, `_P_capped`), by
+  the exact descriptor (`preconditioner == "adamw"`), or by a non-null
+  `preconditioner_eps`: on a file that holds both kinds of rows the three give
+  the same rows, and none of them is a row of the step that was taken.
+  `preconditioner != "none"` alone does **not** select P rows any more: it is
+  also true for rows tagged with an update rule.
 
 The bias-correction step `t` of an AdamW `P` and the number of sequences in a
 batch are not recorded in the file.

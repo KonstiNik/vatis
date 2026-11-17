@@ -213,7 +213,8 @@ def test_rows_are_keyed_by_update_batch_and_evaluated_batch(
             )
         assert {(r.batch_a, r.batch_b) for r in new} == {("train", "train"), ("train", "val")}
         for row in new:
-            assert row.n_hutchinson is None and row.hutchinson_seed is None
+            # The run's setting, as on every row; no probe stream, no timing.
+            assert row.n_hutchinson == 2 and row.hutchinson_seed is None
             assert row.wallclock_s is None
             assert row.preconditioner == (
                 "adamw_update"
@@ -1154,7 +1155,7 @@ def test_the_learning_rate_row_is_the_rate_the_step_applied(tmp_path: Path) -> N
         # Only on the update batch's own pair, tagged like the formula rows.
         (row,) = [r for r in rows if r.observable == "update_lr"]
         assert (row.batch_a, row.batch_b, row.preconditioner) == ("train", "train", "adamw_update")
-        assert row.n_hutchinson is None and row.wallclock_s is None
+        assert row.hutchinson_seed is None and row.wallclock_s is None
     assert len(seen) >= 5, "the schedule did not move the rate"
 
 
@@ -1268,3 +1269,149 @@ def test_rows_on_a_gpu_match_the_cpu_rows(tmp_path: Path, cross_grad_storage: st
         )
         assert gpu_rows[("train", "train", "update_clip_factor")] < 1.0
     assert compared == 32
+
+
+# ------------------------------------------ the provenance columns on these rows
+
+STEP_TAKEN_ROWS = (
+    UPDATE_RESPONSE_OBSERVABLES + UPDATE_STEP_OBSERVABLES + REALIZED_CHANGE_OBSERVABLES
+)
+SAMPLED_ROWS = (
+    "chi_net",
+    "chi_net_normalized",
+    "chi_pos",
+    "chi_net_P",
+    "chi_pos_P",
+    "chi_net_P_capped",
+)
+ADAMW_P_ROWS = ("delta_loss_P", "chi_net_P", "chi_pos_P", "delta_loss_P_capped", "chi_net_P_capped")
+
+
+@pytest.mark.parametrize(
+    ("method", "distribution", "micro"),
+    [("hutchinson", "rademacher", 2), ("per_sequence_cv", "gaussian", 1)],
+)
+def test_the_rows_of_the_step_taken_follow_the_column_rule_through_the_parquet_file(
+    adamw_run: tuple[Path, TrainingRecord],
+    tmp_path: Path,
+    method: str,
+    distribution: str,
+    micro: int,
+) -> None:
+    """What the eight provenance columns hold on the ``loss_change*`` and step rows.
+
+    - the run settings (``chi_net_method``, ``n_ranks``, ``micro_batch_size``,
+      ``hutchinson_distribution``, and ``n_hutchinson``) are on them as on every
+      other row of the file;
+    - the three ``preconditioner_*`` columns are null: an ``adamw_update`` row
+      is not a row of an AdamW ``P``;
+    - ``value_probe_stderr`` is null: nothing in them is sampled.
+
+    Read back from the parquet file, next to the rows of an AdamW ``P`` of the
+    same run, so that the rule for the whole file can be checked row by row.
+    """
+    from vatis.sinks import read_results
+
+    run_dir, _record = adamw_run
+    source = _source(run_dir, steps=[1, 2])
+    out = tmp_path / "results.parquet"
+    analyzer = Analyzer(
+        eval_batches={"train": source.batch_a_spec(), "val": held_out_batch()},
+        update_response=source.update_response(),
+        preconditioner=source.preconditioner(),
+        cross_pairs=[("train", "val")],
+        chi_net_method=method,
+        hutchinson_distribution=distribution,
+        n_hutchinson=3,
+        micro_batch_size=micro,
+        sink=str(out),
+        dtype="fp32",
+    )
+    analyzer.run(source.model_specs())
+    rows = read_results(out).to_pylist()
+    mine = [r for r in rows if r["observable"] in STEP_TAKEN_ROWS]
+    assert {r["observable"] for r in mine} == {
+        name for name in STEP_TAKEN_ROWS if name not in ("update_lr_min", "update_lr_max")
+    }
+
+    # --- on the rows of the step taken -------------------------------------
+    for r in mine:
+        assert r["chi_net_method"] == method, r
+        assert r["n_ranks"] == 1 and r["micro_batch_size"] == micro, r
+        assert r["hutchinson_distribution"] == distribution, r
+        assert r["n_hutchinson"] == 3, r
+        assert r["hutchinson_seed"] is None and r["wallclock_s"] is None, r
+        assert r["preconditioner_eps"] is None, r
+        assert r["preconditioner_beta2"] is None, r
+        assert r["preconditioner_capped_fraction"] is None, r
+        assert r["value_probe_stderr"] is None, r
+        tagged = r["observable"] in UPDATE_RESPONSE_OBSERVABLES + UPDATE_STEP_OBSERVABLES
+        assert r["preconditioner"] == ("adamw_update" if tagged else "none"), r
+
+    # --- and the rule for the whole file still holds, row by row -----------
+    for r in rows:
+        assert r["chi_net_method"] == method and r["n_ranks"] == 1, r
+        assert r["micro_batch_size"] == micro and r["n_hutchinson"] == 3, r
+        assert r["hutchinson_distribution"] == distribution, r
+        is_p_row = r["observable"] in ADAMW_P_ROWS
+        assert (r["preconditioner_eps"] is not None) == is_p_row, r
+        assert (r["preconditioner_beta2"] is not None) == is_p_row, r
+        assert (r["preconditioner_capped_fraction"] is not None) == is_p_row, r
+        assert (r["value_probe_stderr"] is not None) == (r["observable"] in SAMPLED_ROWS), r
+
+    # --- no reader takes an update-rule row for a row of the AdamW P --------
+    by_name = {id(r) for r in rows if r["observable"] in ADAMW_P_ROWS}
+    by_descriptor = {id(r) for r in rows if r["preconditioner"] == "adamw"}
+    by_eps = {id(r) for r in rows if r["preconditioner_eps"] is not None}
+    assert by_name == by_descriptor == by_eps and by_name
+    assert not by_name & {id(r) for r in mine}
+    # ``preconditioner != "none"`` alone is NOT such a selection: it also holds
+    # for the rows tagged with an update rule.
+    not_raw = {r["preconditioner"] for r in rows if r["preconditioner"] != "none"}
+    assert not_raw == {"adamw", "adamw_update"}
+
+
+def test_a_pair_measured_with_two_estimators_names_both_on_these_rows_too(
+    adamw_run: tuple[Path, TrainingRecord], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The estimator is resolved per batch; the rows on (update batch, B) record
+    the two batches' estimators the way a cross pair does."""
+    import vatis.analyzer as analyzer_mod
+
+    monkeypatch.setattr(
+        analyzer_mod,
+        "select_chi_net_method",
+        lambda b_total, requested: "per_sequence_cv" if b_total <= 4 else "hutchinson",
+    )
+    run_dir, _record = adamw_run
+    source = _source(run_dir, steps=[1])
+    analyzer = Analyzer(
+        eval_batches={"train": source.batch_a_spec(), "val": held_out_batch()},
+        update_response=source.update_response(),
+        n_hutchinson=2,
+        micro_batch_size=2,
+        dtype="fp32",
+    )
+    rows = analyzer.run(source.model_specs())[0].rows
+    methods: dict[tuple[str, str], set[str | None]] = {}
+    for r in rows:
+        if r.observable in STEP_TAKEN_ROWS:
+            methods.setdefault((r.batch_a, r.batch_b), set()).add(r.chi_net_method)
+    assert methods == {
+        ("train", "train"): {"per_sequence_cv"},
+        ("train", "val"): {"per_sequence_cv+hutchinson"},
+    }
+
+
+def test_step_rows_record_the_world_size(
+    adamw_run: tuple[Path, TrainingRecord], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``n_ranks`` is the world size the run saw (emulated: rank 0 of 3, no all-reduce)."""
+    import vatis.analyzer as analyzer_mod
+
+    monkeypatch.setattr(analyzer_mod, "get_world_size", lambda: 3)
+    run_dir, _record = adamw_run
+    source = _source(run_dir, steps=[1])
+    rows = _run(source, update_response=source.update_response(realized=False))[1]
+    mine = [r for r in rows if r.observable in STEP_TAKEN_ROWS]
+    assert mine and {r.n_ranks for r in mine} == {3}

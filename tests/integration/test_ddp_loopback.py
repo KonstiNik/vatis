@@ -797,3 +797,53 @@ def test_ddp_stderr_is_the_root_of_the_summed_rank_variances(tmp_path: Path, met
     assert set(other) == set(ddp)
     for observable, row in ddp.items():
         assert other[observable]["value_probe_stderr"] == row["value_probe_stderr"], observable
+
+
+def test_ddp_rows_of_the_step_taken_follow_the_column_rule(tmp_path: Path) -> None:
+    """The provenance columns on the ``loss_change*`` and step rows, on the real path.
+
+    Two ranks, an AdamW ``P`` and an update rule in the same run, Gaussian probes
+    at micro-batch 2 on the uneven split. On every rank the rows of the step
+    taken carry the run settings like every other row (``n_ranks = 2``), none of
+    the three ``preconditioner_*`` columns and no ``value_probe_stderr``; the
+    rows of the AdamW ``P`` carry its ``eps``, and selecting them by observable
+    name, by the descriptor ``"adamw"`` or by a non-null ``preconditioner_eps``
+    gives the same rows — none of them a row tagged ``adamw_update``.
+    """
+    rank_rows = _run_ddp_rows(
+        tmp_path / "ddp_step_taken_columns.json",
+        seed=0,
+        batch_size=5,
+        n_h=4,
+        method="hutchinson",
+        preconditioner=True,
+        adamw=True,
+        micro_batch_size=2,
+        distribution="gaussian",
+        update_response=True,
+    )
+    mine_names = UPDATE_RESPONSE_OBSERVABLES + UPDATE_STEP_OBSERVABLES + REALIZED_CHANGE_OBSERVABLES
+    assert len(rank_rows) == 2
+    for rank, rows in enumerate(rank_rows):
+        mine = [r for r in rows if r["observable"] in mine_names]
+        assert {r["observable"] for r in mine} == set(mine_names) - {
+            "update_lr_min",
+            "update_lr_max",
+        }, rank
+        for r in mine:
+            assert r["n_ranks"] == 2 and r["chi_net_method"] == "hutchinson", (rank, r)
+            assert r["micro_batch_size"] == 2 and r["n_hutchinson"] == 4, (rank, r)
+            assert r["hutchinson_distribution"] == "gaussian", (rank, r)
+            assert r["hutchinson_seed"] is None and r["wallclock_s"] is None, (rank, r)
+            assert r["preconditioner_eps"] is None, (rank, r)
+            assert r["preconditioner_beta2"] is None, (rank, r)
+            assert r["preconditioner_capped_fraction"] is None, (rank, r)
+            assert r["value_probe_stderr"] is None, (rank, r)
+            tagged = r["observable"] in UPDATE_RESPONSE_OBSERVABLES + UPDATE_STEP_OBSERVABLES
+            assert r["preconditioner"] == ("adamw_update" if tagged else "none"), (rank, r)
+        by_name = [i for i, r in enumerate(rows) if r["observable"] in _P_ROWS]
+        by_descriptor = [i for i, r in enumerate(rows) if r["preconditioner"] == "adamw"]
+        by_eps = [i for i, r in enumerate(rows) if r["preconditioner_eps"] is not None]
+        assert by_name == by_descriptor == by_eps and by_name, rank
+        assert all(rows[i]["preconditioner_eps"] == ADAMW_EPS for i in by_name), rank
+        assert not any(rows[i]["observable"] in mine_names for i in by_name), rank
