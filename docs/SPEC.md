@@ -939,10 +939,11 @@ vatis/
 ```
 examples/
 ├── _helpers.py                    # shared: tokenize_into_lm_batch, step_from_revision
-├── pythia_sweep.py                # canonical example: 13 pythia-14m revisions × prose + code
-├── analyze_results.py             # post-processing of results.parquet — derived observables
 ├── BENCHMARK.md                   # deployment-example findings & sizing
-├── pythia_sweep/                  # outputs from pythia_sweep.py + analyze_results.py
+├── pythia_sweep/                  # canonical example: 13 pythia-14m revisions × prose + code
+│   ├── run.py                     # phase 1: the sweep, writes results.parquet + plots
+│   ├── evaluate.py                # post-processing of results.parquet — derived observables
+│   └── results.parquet, *.png     # the committed outputs of both
 └── benchmark/                     # A100 performance suite (see benchmark/README.md)
     ├── README.md                  # index for the three benchmarks below
     ├── submit.sh                  # sbatch wrapper that reads .env (HF_HOME, SBATCH_*)
@@ -953,11 +954,11 @@ examples/
     └── update_response/           # cost of the rows of the step taken (CPU + GPU, 11M Llama)
 ```
 
-`examples/adamw_vs_sgd_reconstruction.py` (+ `_evaluate.py`, and their committed
-output under `examples/adamw_vs_sgd_reconstruction/`) is a small worked use of
+`examples/adamw_vs_sgd_reconstruction/run.py` (+ `evaluate.py`, and their committed
+output in the same folder) is a small worked use of
 the `loss_change_first_order*` rows on a real AdamW bundle.
 
-The deployment example (`examples/pythia_sweep.py`) is the canonical "does vatis
+The deployment example (`examples/pythia_sweep/run.py`) is the canonical "does vatis
 work end-to-end on real weights" check. Running the example/benchmark scripts
 respects `HF_HOME` (set in your shell or the repo-root `.env`; see
 `run_config.py`).
@@ -1191,7 +1192,7 @@ for ckpt in source:                                    # or drive the loop yours
   (held-out batches only, reading the optimizer state). The fields describe the
   *update* batch only; an eval batch you pass yourself carries its own labels
   (to score a held-out batch under the run's objective, write `-100` where its
-  target equals `source.loss_ignore_index`, as `examples/two_rulers_llama.py`
+  target equals `source.loss_ignore_index`, as `examples/optimizer_aware_llama/run.py`
   does).
 
   **Repairing contradictory pad fields.** The refusal is about two entries of
@@ -1779,10 +1780,10 @@ than 0.5 — `|χ_pos| ≤ 1` is a Cauchy–Schwarz consequence of the definitio
 
 The deployment example demonstrates the canonical two-phase pattern:
 
-**Phase 1: compute** (`pythia_sweep.py`). Loads checkpoints, runs `analyze()`,
+**Phase 1: compute** (`pythia_sweep/run.py`). Loads checkpoints, runs `analyze()`,
 writes `results.parquet`. The expensive step — model loading dominates wallclock.
 
-**Phase 2: analysis** (`analyze_results.py`). Reads `results.parquet`, computes
+**Phase 2: analysis** (`pythia_sweep/evaluate.py`). Reads `results.parquet`, computes
 derived observables (e.g. `cos(g_A, g_B) = δL(A, B) / sqrt(δL(A,A)·δL(B,B))`),
 produces plots and tables. **Zero vatis imports** — only `pyarrow` and
 `matplotlib`. The parquet schema is the contract; making analysis consume only

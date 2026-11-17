@@ -112,8 +112,8 @@ stay fully on-device.
 Runnable end-to-end (downloads pythia-14m; ~1 min on an RTX 3090 Ti):
 
 ```bash
-python examples/pythia_sweep.py        # compute  → results.parquet + plots
-python examples/analyze_results.py     # analyze  → derived plots (zero vatis imports)
+python examples/pythia_sweep/run.py       # compute  → results.parquet + plots
+python examples/pythia_sweep/evaluate.py  # analyze  → derived plots (zero vatis imports)
 ```
 
 For a **production-scale** demonstration — the full LNP decomposition on a real
@@ -365,7 +365,7 @@ been measured, so do not read a number for your model off this table.
   format, distributed semantics, scope.
 - `examples/` — runnable sweeps plus the single-GPU / DDP-scaling / accuracy
   benchmarks under `examples/benchmark/`.
-  `examples/adamw_vs_sgd_reconstruction.py` uses the rows of the step that was
+  `examples/adamw_vs_sgd_reconstruction/` uses the rows of the step that was
   taken on a real bundle (a small check on one run, with its measured table);
   `examples/benchmark/update_response/` measures what those rows cost.
 - The LNP decomposition is derived in the paper:

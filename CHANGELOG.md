@@ -74,7 +74,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `"sgd_update"` or `"none"` in the `preconditioner` column).
 - `vatis.core.update_response` (`OptimizerUpdate`, `AdamHyper`, `SGDHyper`):
   the update rule on its own, usable with any `ModelBundle`.
-- `examples/adamw_vs_sgd_reconstruction.py` (+ `_evaluate.py`): for a few steps
+- `examples/adamw_vs_sgd_reconstruction/` (`run.py` + `evaluate.py`): for a few steps
   of an AdamW bundle, how well the optimizer's rule, the SGD rule applied to
   the same step and `−η · delta_loss_P` reconstruct the first-order loss change
   of the step that was taken, with the table and figure of one 11M-parameter
@@ -139,7 +139,7 @@ The labels are the single source of truth for what enters the loss
 - **The analyzer's `ignore_index` must be the value `loss_fn` ignores.** With a different value and a stricter mask the run is refused with a message naming the value (it used to work when the mask happened to equal that loss's own ignore mark). *To do:* pass `ignore_index=<that value>` to `Analyzer(...)` or `analyze(...)` (which now accepts it).
 - **A direct `PerSequenceControlVariateEstimator.compute` call raises** a `ValueError` when `loss_fn` counts positions its `valid_mask_fn` rejects (it used to return a biased `chi_net`). *To do:* write the mask into the labels the loss reads, as `Analyzer` does.
 - **Unshifted (HuggingFace / TRL-style) labels are refused** by the shipped `causal_lm_loss` when they are provably unshifted (they used to be scored one position off). *To do:* `batch["labels"] = vatis.data.shift_hf_labels(batch["labels"])`.
-- **The update-batch rows of a bundle that records pad masking change**: `batch_a` ignores the targets equal to the recorded `loss_ignore_index` (they used to be counted), and `examples/two_rulers_llama.py` scores its held-out batches the same way. *To do:* re-run analyses of such bundles; bundles without the two fields are read exactly as before.
+- **The update-batch rows of a bundle that records pad masking change**: `batch_a` ignores the targets equal to the recorded `loss_ignore_index` (they used to be counted), and `examples/optimizer_aware_llama/run.py` scores its held-out batches the same way. *To do:* re-run analyses of such bundles; bundles without the two fields are read exactly as before.
 - **Contradictory or impossible pad metadata is refused** with `BundleSchemaError` when the bundle is opened, also for uses that never touch the update batch (`mask_pad_in_loss: true` without an index, an index without it, a wrong JSON type, a negative index or one not below the model config's `vocab_size`). *To do:* correct the two fields in `metadata.json`; "Repairing contradictory pad fields" in the SPEC says how, including how the recorded `train_loss` settles which entry is wrong.
 
 The default estimator:
@@ -178,6 +178,13 @@ The default estimator:
 - `observables=None` is the new default and means "all raw observables, plus the
   P observables when a preconditioner is set". Passing an explicit list behaves
   as before.
+- **Each example under `examples/` is one folder**: its `run.py` (compute),
+  `evaluate.py` (figures and tables) and committed outputs side by side —
+  `pythia_sweep/` (was `pythia_sweep.py` + `analyze_results.py`),
+  `optimizer_aware_llama/` (was `two_rulers_llama.py` + `_evaluate.py` and
+  `output/`; the figure is now `chi_pos_raw_vs_adamw.png`),
+  `adamw_vs_sgd_reconstruction/` and `spectral_tail/`. Files were moved, not
+  changed, apart from the paths inside them.
 
 ### Fixed
 - **DDP ranks no longer replay one Hutchinson probe stream.** Every rank seeded

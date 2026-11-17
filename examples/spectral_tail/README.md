@@ -43,7 +43,7 @@ Doing (2) first is the more cautious path: if a simpler feature doesn't produce 
 
 ## Experiment setup
 
-Code: `examples/spectral_tail_experiment.py` (compute), `examples/spectral_tail_evaluate.py` (plots).
+Code: `examples/spectral_tail/run.py` (compute), `examples/spectral_tail/evaluate.py` (plots).
 Results: `examples/spectral_tail/results_pythia-{14m,31m,70m,160m,410m}.parquet`.
 These files and the figures are from April 2026 and were not re-run (that would
 mean downloading about 34 GB of checkpoints). They have the original 11 result
