@@ -46,14 +46,15 @@ checkpoints. Analysis: `per_sequence_cv`, `n_hutchinson=32`,
 | analysis (3 self pairs + 2 cross pairs, raw and preconditioned) | 3.61–4.35 s (mean 3.95) | 75.1 s |
 | **sweep** (load + raw and preconditioned observables + writing the rows) | — | **87.1 s** |
 | script total (+ the `P = I` re-check and the epsilon split) | — | 100.3 s |
-| peak GPU memory (torch allocator, this process) | — | 1683 MiB |
+| peak GPU memory (torch allocator, this process) | 1641–1687 MiB | 1683 MiB as `run_summary.json` records it; the largest per-checkpoint value in `performance.csv` is 1687 MiB |
 
 To plan a grid of runs, use the *sweep* row: about **4 s of analysis per
 checkpoint** for 3 batches and 2 cross pairs at this size, plus reading the
 checkpoint (~105 MB): about 0.1 s when cached, up to 2.7 s here, where the
 bundle is on a network file system. The other 13 s are this example's own
-checks. The raw and the preconditioned observables together cost the same as
-the raw ones alone, because the P values reuse the raw pass's probes.
+checks. The preconditioned observables need no extra backward pass: the P
+values reuse the raw pass's probes. This run did not time the raw observables
+alone, so their extra cost is not measured here.
 
 The timings are as measured, not tuned. The card is shared with other jobs; it
 was idle just before and just after this run, but nothing watched it during
@@ -77,9 +78,9 @@ Plotting a zero there would invent a measurement.
 ## The epsilon ceiling, measured for this run
 
 `P = 1/(sqrt(v_hat) + eps)` puts every coordinate the optimizer never touched
-at `1/eps = 1e8`, versus ~1e0–1e2 for a live coordinate. (The smallest entry of
-`P` recorded in `run_summary.json` is 0.66 at step 1 and 183 at step 299, so
-late in this run live coordinates sit above 1e2.) Nothing is clipped, floored
+at `1/eps = 1e8`. A live coordinate is far below that: the smallest entry of
+`P` (`p_min` in `run_summary.json`) is 0.66 at step 1 and grows with training
+to 183 at step 299. Nothing is clipped, floored
 or masked — the convention is a frozen project decision — so the honest move is
 to **measure the share and publish it**. `epsilon_cap_mask` gives the mask;
 running the estimator twice on the same checkpoint, batch and seed (once with
@@ -114,6 +115,13 @@ Three things worth knowing, all visible in that table:
   number, don't assume it**, and note that the diagonal share alone overstates
   the effect (0.71% of coordinates carried 0% of the trace here).
 
+The share is not monotonic in the step. From the `_capped` rows of
+`results.parquet` (batch B, `chi_net_P_capped / chi_net_P`): 10.2% at step 1,
+a peak of 13.9% at step 2, 13.4% at step 3, 11.1% at step 4, then falling to
+0.02% at step 15, back to 0.37% at step 20, at most 0.28% from step 27 to step
+90, and 0.00% from step 122 on. The table above shows three steps of this
+series.
+
 The result file carries this split on every P row: `chi_net_P_capped` and
 `delta_loss_P_capped` are the parts that come from ceiling coordinates, and
 `preconditioner_capped_fraction` is the diagonal share. For batch B,
@@ -143,8 +151,14 @@ earlier outputs (July 2026) was lost, and the same training was run again. The
 two runs record the same train loss up to step 27, and the measurements agree
 (to within 1e-6 relative through step 8 and 2.5e-5 through step 27). From step
 37 on, the runs drift apart (train loss up to 0.5% different), and so do the
-measurements: by up to ~1% in `chi_loss` and ~5% in `chi_net`, and by more in
-the small cross-pair values. One sign changes: at step 299 the two AdamW cross
+measurements. Largest relative difference from step 37 on, comparing the July
+file (`examples/output/results.parquet` before `e1aa6f4`) with the committed
+one: about 1% in `chi_loss`, 5% in `chi_net` and 3% in `chi_net_P`; on the self
+pairs about 40% in `delta_loss` and `chi_pos` and about 20% in `delta_loss_P`
+and `chi_pos_P`; on the cross pairs, whose values are small and close to zero,
+a difference of up to about 20 times the July value for the raw ones and about 6
+times for the P ones. So `delta_loss` and `chi_pos` differ between the runs far
+more than the training loss does. One sign changes: at step 299 the two AdamW cross
 pairs (`chi_pos^P` for `A1 × B` and `A2 × B`) are now slightly negative, where
 they were slightly positive before.
 
